@@ -312,6 +312,13 @@ export class StatusHistoryEntryDto {
   changedAt: string;
 }
 
+export enum DayPaymentStatus {
+  NOT_INVOICED = 'NOT_INVOICED',
+  UNPAID = 'UNPAID',
+  PARTIAL = 'PARTIAL',
+  PAID = 'PAID',
+}
+
 // Reception day list row: an appointment (with its visit, if checked in) or
 // a walk-in visit (appointment fields null, isWalkIn true).
 export class DayListEntryDto {
@@ -385,6 +392,21 @@ export class DayListEntryDto {
     example: '2026-11-05T16:50:00+02:00',
   })
   checkedInAt: string | null;
+
+  @ApiProperty({ format: 'uuid', nullable: true, type: String })
+  invoiceId: string | null;
+
+  @ApiProperty({ nullable: true, type: String, example: '320.00' })
+  invoiceTotal: string | null;
+
+  @ApiProperty({ nullable: true, type: String, example: '100.00' })
+  amountPaid: string | null;
+
+  @ApiProperty({ nullable: true, type: String, example: '220.00' })
+  balance: string | null;
+
+  @ApiProperty({ enum: DayPaymentStatus })
+  paymentStatus: DayPaymentStatus;
 }
 
 // What the public website gets back: nothing about the patient record.

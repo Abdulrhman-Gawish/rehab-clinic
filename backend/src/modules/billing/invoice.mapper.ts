@@ -7,6 +7,7 @@ import type {
 } from './dto/invoice.dto.js';
 import type { InvoiceDiscount } from './entities/invoice-discount.entity.js';
 import type { InvoiceItem } from './entities/invoice-item.entity.js';
+import type { Payment } from './entities/payment.entity.js';
 import type { Invoice } from './entities/invoice.entity.js';
 import { balanceOf } from './invoice-math.js';
 
@@ -63,6 +64,24 @@ export function toInvoiceDiscount(
     repeatedFromId: discount.repeatedFromId,
     appliedById: discount.appliedById,
     appliedAt: toIso(discount.appliedAt),
+  };
+}
+
+export function toInvoicePayment(
+  payment: Payment,
+  toIso: ToIso,
+): InvoicePaymentDto {
+  return {
+    id: payment.id,
+    receiptNumber: payment.receiptNumber,
+    type: payment.type,
+    status: payment.status,
+    amount: payment.amount,
+    method: payment.method,
+    reference: payment.reference,
+    refundOfId: payment.refundOfId,
+    receivedById: payment.receivedById,
+    receivedAt: toIso(payment.receivedAt),
   };
 }
 

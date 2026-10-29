@@ -29,11 +29,7 @@ import type { ApplyDiscountDto, LastDiscountDto } from './dto/discount.dto.js';
 import type { InvoiceDetailDto } from './dto/invoice.dto.js';
 import { InvoiceDiscount } from './entities/invoice-discount.entity.js';
 import type { Invoice } from './entities/invoice.entity.js';
-import {
-  assertEditable,
-  discountAmount,
-  type DiscountRule,
-} from './invoice-math.js';
+import { discountAmount, type DiscountRule } from './invoice-math.js';
 import { InvoicesService } from './invoices.service.js';
 
 interface DiscountRequest {
@@ -71,7 +67,7 @@ export class DiscountsService {
   ): Promise<InvoiceDetailDto> {
     await this.dataSource.transaction(async (manager) => {
       const invoice = await this.invoices.lockInvoice(invoiceId, manager);
-      assertEditable(invoice);
+      await this.invoices.assertInvoiceEditable(invoice, manager);
 
       const request = await this.resolveRequest(dto, invoice, manager);
       const amount = discountAmount(invoice.subtotal, request.rule);
@@ -121,7 +117,7 @@ export class DiscountsService {
   ): Promise<InvoiceDetailDto> {
     await this.dataSource.transaction(async (manager) => {
       const invoice = await this.invoices.lockInvoice(invoiceId, manager);
-      assertEditable(invoice);
+      await this.invoices.assertInvoiceEditable(invoice, manager);
       const discount = await this.invoices.activeDiscount(invoice.id, manager);
       if (!discount) throw new NotFoundException('The invoice has no discount');
 

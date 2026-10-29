@@ -42,6 +42,9 @@ export interface EnvironmentVariables extends DatabaseEnv {
   BACKDATE_MAX_DAYS: number;
 
   RECEPTIONIST_MAX_DISCOUNT_PERCENT: number;
+  BILLING_OVERDUE_DAYS: number;
+  CLINIC_NAME: string;
+  CLINIC_PHONE: string;
 }
 
 const databaseKeys = {
@@ -93,6 +96,11 @@ export const envSchema = Joi.object<EnvironmentVariables>({
 
   // Highest effective discount % a RECEPTIONIST may give (OWNER: no limit).
   RECEPTIONIST_MAX_DISCOUNT_PERCENT: Joi.number().min(0).max(100).default(100),
+  // Invoices with a balance issued more than N days ago need attention.
+  BILLING_OVERDUE_DAYS: Joi.number().integer().min(1).default(7),
+  // Printed on receipts.
+  CLINIC_NAME: Joi.string().trim().default('Rehab Clinic'),
+  CLINIC_PHONE: Joi.string().trim().allow('').default(''),
 });
 
 // Validates and converts raw env strings; unknown variables (PATH etc.) are

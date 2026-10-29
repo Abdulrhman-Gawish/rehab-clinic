@@ -36,7 +36,12 @@ import { ClinicService } from '../clinic-services/entities/clinic-service.entity
 import { Patient } from '../patients/entities/patient.entity.js';
 import { Visit } from '../visits/entities/visit.entity.js';
 import { VisitStatus } from '../visits/visit.enums.js';
-import { DocumentScope, InvoiceStatus } from './billing.enums.js';
+import {
+  DocumentScope,
+  InvoiceStatus,
+  PaymentStatus,
+  PaymentType,
+} from './billing.enums.js';
 import { DocumentCounterService } from './document-counter.service.js';
 import type {
   CreateInvoiceDto,
@@ -52,6 +57,7 @@ import type {
 import { InvoiceItem } from './entities/invoice-item.entity.js';
 import { Invoice, INVOICE_VISIT_UNIQUE } from './entities/invoice.entity.js';
 import { InvoiceDiscount } from './entities/invoice-discount.entity.js';
+import { Payment } from './entities/payment.entity.js';
 import {
   assertEditable,
   computeTotals,
@@ -60,6 +66,7 @@ import {
 import {
   toInvoiceDetail,
   toInvoiceDiscount,
+  toInvoicePayment,
   toInvoiceSummary,
 } from './invoice.mapper.js';
 import {
@@ -452,9 +459,62 @@ export class InvoicesService {
       : null;
   }
 
-  /** Payments arrive in Stage 6C. */
-  protected paymentsOf(_invoiceId: string): Promise<InvoicePaymentDto[]> {
-    return Promise.resolve([]);
+  private async paymentsOf(invoiceId: string): Promise<InvoicePaymentDto[]> {
+    const payments = await this.dataSource.getRepository(Payment).find({
+      where: { invoiceId },
+      order: { receivedAt: 'ASC', receiptNumber: 'ASC' },
+    });
+    return payments.map((payment) =>
+      toInvoicePayment(payment, (d) => this.time.toIso(d)),
+    );
+  }
+
+  /**
+   * Items and discount can change only while nothing has been paid: not
+   * cancelled, amount_paid = 0 and no valid payment at all (an invoice
+   * whose payments were fully refunded stays locked; it can be cancelled).
+   */
+  async assertInvoiceEditable(
+    invoice: Invoice,
+    manager: EntityManager,
+  ): Promise<void> {
+    assertEditable(invoice);
+    const paid = await manager.getRepository(Payment).existsBy({
+      invoiceId: invoice.id,
+      type: PaymentType.PAYMENT,
+      status: PaymentStatus.VALID,
+    });
+    if (paid) {
+      throw unprocessable(
+        ErrorCode.INVOICE_LOCKED,
+        'The invoice has payments; items and discount can no longer change',
+      );
+    }
+  }
+
+  /**
+   * amount_paid = valid payments - valid refunds (voided ones excluded),
+   * recomputed from the rows; status re-derived. Caller holds the lock.
+   */
+  async refreshAmountPaid(
+    manager: EntityManager,
+    invoice: Invoice,
+  ): Promise<Invoice> {
+    const row: { paid: string | null } | undefined = await manager
+      .getRepository(Payment)
+      .createQueryBuilder('payment')
+      .select(
+        `SUM(CASE WHEN payment.type = 'PAYMENT' THEN payment.amount ELSE -payment.amount END)`,
+        'paid',
+      )
+      .where('payment.invoiceId = :invoiceId', { invoiceId: invoice.id })
+      .andWhere('payment.status = :valid', { valid: PaymentStatus.VALID })
+      .getRawOne();
+    invoice.amountPaid = toMoney(row?.paid ?? ZERO);
+    if (invoice.status !== InvoiceStatus.CANCELLED) {
+      invoice.status = deriveInvoiceStatus(invoice.total, invoice.amountPaid);
+    }
+    return manager.getRepository(Invoice).save(invoice);
   }
 
   private async editItems(
@@ -470,7 +530,7 @@ export class InvoicesService {
   ): Promise<InvoiceDetailDto> {
     await this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockInvoice(id, manager);
-      assertEditable(invoice);
+      await this.assertInvoiceEditable(invoice, manager);
       const before = { subtotal: invoice.subtotal, total: invoice.total };
       const { action, values } = await change(invoice, manager);
       const updated = await this.recalculate(manager, invoice);

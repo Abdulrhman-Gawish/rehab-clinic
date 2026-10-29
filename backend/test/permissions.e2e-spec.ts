@@ -232,6 +232,29 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
     path: `/invoices/${id}/discount`,
     allowed: [OWNER, RECEPTIONIST],
   },
+  {
+    method: 'post',
+    path: `/invoices/${id}/payments`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/payments/${id}/void`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'post', path: `/payments/${id}/refund`, allowed: [OWNER] },
+  { method: 'get', path: '/payments', allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'get',
+    path: `/payments/${id}/receipt`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'get', path: '/billing/attention', allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'get',
+    path: '/billing/daily-summary',
+    allowed: [OWNER, RECEPTIONIST],
+  },
   // public: anyone
   { method: 'get', path: '/public/doctors', allowed: EVERYONE },
   { method: 'get', path: `/public/doctors/${id}`, allowed: EVERYONE },
