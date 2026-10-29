@@ -73,10 +73,96 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
     path: `/clinic-services/${id}/deactivate`,
     allowed: [OWNER],
   },
+  // schedules / time off: OWNER, RECEPTIONIST RW; DOCTOR R (own, else 404)
+  { method: 'get', path: `/doctors/${id}/schedules`, allowed: STAFF },
+  {
+    method: 'post',
+    path: `/doctors/${id}/schedules`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/doctors/${id}/schedules/${otherId}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/doctors/${id}/schedules/${otherId}/activate`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/doctors/${id}/schedules/${otherId}/deactivate`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'get', path: `/doctors/${id}/time-off`, allowed: STAFF },
+  {
+    method: 'post',
+    path: `/doctors/${id}/time-off`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/doctors/${id}/time-off/${otherId}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'delete',
+    path: `/doctors/${id}/time-off/${otherId}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  // availability (staff): all staff, DOCTOR own only
+  {
+    method: 'get',
+    path: `/appointments/availability?doctorId=${id}&serviceId=${otherId}&date=2026-11-05`,
+    allowed: STAFF,
+  },
+  // appointments: OWNER, RECEPTIONIST W; DOCTOR R own only (else 404)
+  { method: 'post', path: '/appointments', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: '/appointments', allowed: STAFF },
+  {
+    method: 'get',
+    path: '/appointments/day?date=2026-11-05',
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: '/appointments/by-reference/APT-AAAAAA',
+    allowed: STAFF,
+  },
+  { method: 'get', path: `/appointments/${id}`, allowed: STAFF },
+  { method: 'get', path: `/appointments/${id}/history`, allowed: STAFF },
+  {
+    method: 'patch',
+    path: `/appointments/${id}/confirm`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/appointments/${id}/cancel`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/appointments/${id}/no-show`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/appointments/${id}/reschedule`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'get', path: `/patients/${id}/appointments`, allowed: STAFF },
   // public: anyone
   { method: 'get', path: '/public/doctors', allowed: EVERYONE },
   { method: 'get', path: `/public/doctors/${id}`, allowed: EVERYONE },
   { method: 'get', path: '/public/services', allowed: EVERYONE },
+  {
+    method: 'get',
+    path: `/public/doctors/${id}/slots?serviceId=${otherId}&date=2026-11-05`,
+    allowed: EVERYONE,
+  },
+  { method: 'post', path: '/public/appointments', allowed: EVERYONE },
 ];
 
 const CASES = MATRIX.flatMap((route) =>

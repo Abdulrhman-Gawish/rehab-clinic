@@ -4,6 +4,7 @@ export const PgErrorCode = {
   UniqueViolation: '23505',
   ForeignKeyViolation: '23503',
   CheckViolation: '23514',
+  ExclusionViolation: '23P01',
   NotNullViolation: '23502',
   InvalidTextRepresentation: '22P02',
 } as const;
@@ -27,6 +28,18 @@ export function isUniqueViolation(
   const pg = getPgError(error);
   return (
     pg?.code === PgErrorCode.UniqueViolation &&
+    (constraint === undefined || pg.constraint === constraint)
+  );
+}
+
+// True when `error` is an exclusion-constraint violation (overlapping ranges).
+export function isExclusionViolation(
+  error: unknown,
+  constraint?: string,
+): boolean {
+  const pg = getPgError(error);
+  return (
+    pg?.code === PgErrorCode.ExclusionViolation &&
     (constraint === undefined || pg.constraint === constraint)
   );
 }

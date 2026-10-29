@@ -280,12 +280,10 @@ describe('Patients (e2e)', () => {
         .expect(200);
       expect(res.body.phone).toBe('+201111111111');
 
-      const log = await ctx.dataSource
-        .getRepository(AuditLog)
-        .findOneByOrFail({
-          action: 'PATIENT_UPDATED',
-          entityId: created.body.id,
-        });
+      const log = await ctx.dataSource.getRepository(AuditLog).findOneByOrFail({
+        action: 'PATIENT_UPDATED',
+        entityId: created.body.id,
+      });
       expect(log).toMatchObject({
         userId: receptionist.id,
         oldValues: { phone: '+201012345678', notes: null },
