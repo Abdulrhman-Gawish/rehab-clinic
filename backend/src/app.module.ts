@@ -13,6 +13,7 @@ import { TimeModule } from './common/time/time.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { AppointmentsModule } from './modules/appointments/appointments.module.js';
 import { AuditModule } from './modules/audit/audit.module.js';
+import { BillingModule } from './modules/billing/billing.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { ClinicServicesModule } from './modules/clinic-services/clinic-services.module.js';
 import { DoctorsModule } from './modules/doctors/doctors.module.js';
@@ -64,6 +65,7 @@ import { VisitsModule } from './modules/visits/visits.module.js';
     SchedulesModule,
     AppointmentsModule,
     VisitsModule,
+    BillingModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

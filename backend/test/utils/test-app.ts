@@ -35,5 +35,17 @@ export async function resetDatabase(dataSource: DataSource): Promise<void> {
   );
   if (tables.length === 0) return;
   const list = tables.map(({ tablename }) => `"${tablename}"`).join(', ');
-  await dataSource.query(`TRUNCATE ${list} RESTART IDENTITY CASCADE`);
+  // Async event listeners of the previous test (e.g. the automatic invoice)
+  // may still be in a transaction; TRUNCATE can deadlock with them, in
+  // which case Postgres aborts one side: just try again.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await dataSource.query(`TRUNCATE ${list} RESTART IDENTITY CASCADE`);
+      return;
+    } catch (error) {
+      const code = (error as { driverError?: { code?: string } }).driverError
+        ?.code;
+      if (code !== '40P01' || attempt >= 5) throw error;
+    }
+  }
 }

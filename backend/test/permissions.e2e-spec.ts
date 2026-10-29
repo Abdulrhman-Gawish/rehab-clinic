@@ -178,6 +178,45 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
   { method: 'get', path: `/visits/${id}`, allowed: STAFF },
   { method: 'get', path: `/visits/${id}/history`, allowed: STAFF },
   { method: 'get', path: `/patients/${id}/visits`, allowed: STAFF },
+  // billing (doctors have no access): OWNER, RECEPTIONIST
+  { method: 'post', path: '/invoices', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: '/invoices', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: `/invoices/${id}`, allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'post',
+    path: `/invoices/${id}/items`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/invoices/${id}/items/${otherId}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'delete',
+    path: `/invoices/${id}/items/${otherId}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/invoices/${id}/cancel`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: `/patients/${id}/invoices`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: `/patients/${id}/balance`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/visits/${id}/invoice`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
   // public: anyone
   { method: 'get', path: '/public/doctors', allowed: EVERYONE },
   { method: 'get', path: `/public/doctors/${id}`, allowed: EVERYONE },
