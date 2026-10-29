@@ -10,6 +10,10 @@ import {
   type Paginated,
 } from '../../common/dto/pagination.dto.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
+import {
+  normalizePersonName,
+  samePersonName,
+} from '../../common/utils/person-name.util.js';
 import { isUniqueViolation } from '../../common/utils/pg-errors.js';
 import {
   normalizeEgyptianMobile,
@@ -56,14 +60,6 @@ export interface FindOrCreatePatientResult {
   nameMismatch: boolean;
 }
 
-function normalizeName(name: string): string {
-  return name.trim().replace(/\s+/g, ' ');
-}
-
-function sameName(a: string, b: string): boolean {
-  return normalizeName(a).toLowerCase() === normalizeName(b).toLowerCase();
-}
-
 @Injectable()
 export class PatientsService {
   constructor(
@@ -101,7 +97,7 @@ export class PatientsService {
         const repository = manager.getRepository(Patient);
         const saved = await repository.save(
           repository.create({
-            name: normalizeName(dto.name),
+            name: normalizePersonName(dto.name),
             phone,
             dateOfBirth: dto.dateOfBirth ?? null,
             gender: dto.gender ?? null,
@@ -201,7 +197,8 @@ export class PatientsService {
         if (!patient) throw new NotFoundException('Patient not found');
 
         const before = { ...patient };
-        if (dto.name !== undefined) patient.name = normalizeName(dto.name);
+        if (dto.name !== undefined)
+          patient.name = normalizePersonName(dto.name);
         if (phone !== undefined) patient.phone = phone;
         if (dto.dateOfBirth !== undefined)
           patient.dateOfBirth = dto.dateOfBirth;
@@ -232,7 +229,7 @@ export class PatientsService {
     input: FindOrCreatePatientInput,
     manager: EntityManager,
   ): Promise<FindOrCreatePatientResult> {
-    const name = normalizeName(input.name);
+    const name = normalizePersonName(input.name);
     const phone = normalizeEgyptianMobile(input.phone);
 
     const inserted: { id: string }[] = await manager.query(
@@ -267,7 +264,7 @@ export class PatientsService {
     return {
       patient,
       created: false,
-      nameMismatch: !sameName(patient.name, name),
+      nameMismatch: !samePersonName(patient.name, name),
     };
   }
 

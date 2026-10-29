@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import { isValidZone } from '../common/time/clinic-time.util.js';
 
 export enum NodeEnv {
   Development = 'development',
@@ -32,6 +33,12 @@ export interface EnvironmentVariables extends DatabaseEnv {
   THROTTLE_ENABLED: boolean;
   THROTTLE_TTL_MS: number;
   THROTTLE_LIMIT: number;
+
+  CLINIC_TIMEZONE: string;
+  SLOT_INTERVAL_MINUTES: number;
+  BOOKING_MIN_LEAD_MINUTES: number;
+  BOOKING_MAX_DAYS_AHEAD: number;
+  BOOKING_MAX_ACTIVE_PER_PHONE: number;
 }
 
 const databaseKeys = {
@@ -67,6 +74,17 @@ export const envSchema = Joi.object<EnvironmentVariables>({
   THROTTLE_ENABLED: Joi.boolean().default(true),
   THROTTLE_TTL_MS: Joi.number().integer().positive().default(60_000),
   THROTTLE_LIMIT: Joi.number().integer().positive().default(120),
+
+  // IANA zone of the clinic. Egypt observes DST: never assume a fixed offset.
+  CLINIC_TIMEZONE: Joi.string()
+    .default('Africa/Cairo')
+    .custom((value: string, helpers) =>
+      isValidZone(value) ? value : helpers.error('any.invalid'),
+    ),
+  SLOT_INTERVAL_MINUTES: Joi.number().integer().min(5).max(120).default(15),
+  BOOKING_MIN_LEAD_MINUTES: Joi.number().integer().min(0).default(60),
+  BOOKING_MAX_DAYS_AHEAD: Joi.number().integer().min(1).max(365).default(30),
+  BOOKING_MAX_ACTIVE_PER_PHONE: Joi.number().integer().min(1).default(3),
 });
 
 // Validates and converts raw env strings; unknown variables (PATH etc.) are

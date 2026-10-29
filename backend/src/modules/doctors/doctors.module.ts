@@ -7,6 +7,7 @@ import {
   DoctorsController,
   PublicDoctorsController,
 } from './doctors.controller.js';
+import { DoctorAccessService } from './doctor-access.service.js';
 import { DoctorsService } from './doctors.service.js';
 import { DoctorClinicService } from './entities/doctor-clinic-service.entity.js';
 import { Doctor } from './entities/doctor.entity.js';
@@ -18,7 +19,7 @@ import { Doctor } from './entities/doctor.entity.js';
     AuthModule,
   ],
   controllers: [DoctorsController, PublicDoctorsController],
-  providers: [DoctorsService],
-  exports: [DoctorsService],
+  providers: [DoctorsService, DoctorAccessService],
+  exports: [DoctorsService, DoctorAccessService],
 })
 export class DoctorsModule {}

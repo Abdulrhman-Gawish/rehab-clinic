@@ -8,13 +8,16 @@ import {
   type EnvironmentVariables,
 } from './config/env.validation.js';
 import { buildLoggerParams } from './config/logger.config.js';
+import { TimeModule } from './common/time/time.module.js';
 import { DatabaseModule } from './database/database.module.js';
+import { AppointmentsModule } from './modules/appointments/appointments.module.js';
 import { AuditModule } from './modules/audit/audit.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { ClinicServicesModule } from './modules/clinic-services/clinic-services.module.js';
 import { DoctorsModule } from './modules/doctors/doctors.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { PatientsModule } from './modules/patients/patients.module.js';
+import { SchedulesModule } from './modules/schedules/schedules.module.js';
 import { UsersModule } from './modules/users/users.module.js';
 
 @Module({
@@ -46,6 +49,7 @@ import { UsersModule } from './modules/users/users.module.js';
       }),
     }),
     DatabaseModule,
+    TimeModule,
     HealthModule,
     AuditModule,
     AuthModule,
@@ -53,6 +57,8 @@ import { UsersModule } from './modules/users/users.module.js';
     PatientsModule,
     ClinicServicesModule,
     DoctorsModule,
+    SchedulesModule,
+    AppointmentsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

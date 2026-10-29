@@ -16,11 +16,12 @@ interface ResolvedError {
   statusCode: number;
   message: string;
   error?: string;
+  code?: string;
   details?: unknown;
 }
 
 // Single place that shapes error responses:
-// { statusCode, error, message, details?, path, timestamp }.
+// { statusCode, error, code?, message, details?, path, timestamp }.
 // HttpExceptions keep their status; known DB/domain errors are mapped;
 // anything else is logged and hidden behind a generic 500.
 @Catch()
@@ -43,6 +44,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const body: ErrorResponseDto = {
       statusCode: resolved.statusCode,
       error: resolved.error ?? STATUS_CODES[resolved.statusCode] ?? 'Error',
+      ...(resolved.code !== undefined && { code: resolved.code }),
       message: resolved.message,
       ...(resolved.details !== undefined && { details: resolved.details }),
       path: request.originalUrl ?? request.url,
@@ -78,6 +80,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
           message: 'Referenced resource does not exist or is still in use',
           details: { constraint: pg.constraint },
         };
+      case PgErrorCode.ExclusionViolation:
+        return {
+          statusCode: HttpStatus.CONFLICT,
+          message: 'Conflicts with an existing record',
+          details: { constraint: pg.constraint },
+        };
       case PgErrorCode.CheckViolation:
         return {
           statusCode: HttpStatus.BAD_REQUEST,
@@ -100,9 +108,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       return { statusCode, message: payload };
     }
 
-    const { message, error, details } = payload as {
+    const { message, error, code, details } = payload as {
       message?: string | string[];
       error?: string;
+      code?: string;
       details?: unknown;
     };
     // Nest's built-in exceptions put a list of messages in `message`.
@@ -117,6 +126,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     return {
       statusCode,
       error,
+      code,
       message: message ?? exception.message,
       details,
     };

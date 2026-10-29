@@ -8,6 +8,12 @@ export class ErrorResponseDto {
   @ApiProperty({ example: 'Bad Request' })
   error: string;
 
+  @ApiPropertyOptional({
+    description: 'Stable machine-readable code for business errors',
+    example: 'SLOT_UNAVAILABLE',
+  })
+  code?: string;
+
   @ApiProperty({ example: 'Validation failed' })
   message: string;
 
