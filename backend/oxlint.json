@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import", "vitest"],
+  "categories": { "correctness": "error", "suspicious": "warn" },
+  "rules": {
+    "typescript/no-explicit-any": "error",
+    "typescript/no-floating-promises": "warn",
+    "no-console": ["warn", { "allow": ["warn", "error"] }]
+  },
+  "overrides": [
+    {
+      "files": ["src/database/seeds/**", "test/**"],
+      "rules": { "no-console": "off" }
+    }
+  ],
+  "env": { "node": true }
+}

@@ -1,0 +1,125 @@
+import { randomUUID } from 'node:crypto';
+import request from 'supertest';
+import type { App } from 'supertest/types.js';
+import { UserRole } from '../src/common/enums/user-role.enum.js';
+import {
+  bearer,
+  createLoggedInUser,
+  type TestUser,
+} from './utils/auth-helpers.js';
+import {
+  createTestApp,
+  resetDatabase,
+  type TestApp,
+} from './utils/test-app.js';
+
+type Method = 'get' | 'post' | 'patch' | 'put' | 'delete';
+type Who = UserRole | 'ANONYMOUS';
+
+const { OWNER, RECEPTIONIST, DOCTOR } = UserRole;
+const STAFF = [OWNER, RECEPTIONIST, DOCTOR];
+const EVERYONE: Who[] = [...STAFF, 'ANONYMOUS'];
+
+const id = randomUUID();
+const otherId = randomUUID();
+
+// Mirrors the permissions matrix from the specification.
+const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
+  // users: OWNER RW
+  { method: 'get', path: '/users', allowed: [OWNER] },
+  { method: 'post', path: '/users', allowed: [OWNER] },
+  { method: 'get', path: `/users/${id}`, allowed: [OWNER] },
+  { method: 'patch', path: `/users/${id}`, allowed: [OWNER] },
+  { method: 'patch', path: `/users/${id}/activate`, allowed: [OWNER] },
+  { method: 'patch', path: `/users/${id}/deactivate`, allowed: [OWNER] },
+  { method: 'post', path: `/users/${id}/reset-password`, allowed: [OWNER] },
+  // audit-logs: OWNER R
+  { method: 'get', path: '/audit-logs', allowed: [OWNER] },
+  // patients: OWNER/RECEPTIONIST RW, DOCTOR R
+  { method: 'get', path: '/patients', allowed: STAFF },
+  { method: 'get', path: '/patients/lookup?phone=01012345678', allowed: STAFF },
+  { method: 'get', path: `/patients/${id}`, allowed: STAFF },
+  { method: 'post', path: '/patients', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'patch', path: `/patients/${id}`, allowed: [OWNER, RECEPTIONIST] },
+  // doctors (staff): OWNER RW, others R
+  { method: 'get', path: '/doctors', allowed: STAFF },
+  { method: 'get', path: `/doctors/${id}`, allowed: STAFF },
+  { method: 'post', path: '/doctors', allowed: [OWNER] },
+  { method: 'patch', path: `/doctors/${id}`, allowed: [OWNER] },
+  { method: 'patch', path: `/doctors/${id}/activate`, allowed: [OWNER] },
+  { method: 'patch', path: `/doctors/${id}/deactivate`, allowed: [OWNER] },
+  {
+    method: 'put',
+    path: `/doctors/${id}/services/${otherId}`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'delete',
+    path: `/doctors/${id}/services/${otherId}`,
+    allowed: [OWNER],
+  },
+  // clinic services (staff): OWNER RW, others R
+  { method: 'get', path: '/clinic-services', allowed: STAFF },
+  { method: 'get', path: `/clinic-services/${id}`, allowed: STAFF },
+  { method: 'post', path: '/clinic-services', allowed: [OWNER] },
+  { method: 'patch', path: `/clinic-services/${id}`, allowed: [OWNER] },
+  {
+    method: 'patch',
+    path: `/clinic-services/${id}/activate`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'patch',
+    path: `/clinic-services/${id}/deactivate`,
+    allowed: [OWNER],
+  },
+  // public: anyone
+  { method: 'get', path: '/public/doctors', allowed: EVERYONE },
+  { method: 'get', path: `/public/doctors/${id}`, allowed: EVERYONE },
+  { method: 'get', path: '/public/services', allowed: EVERYONE },
+];
+
+const CASES = MATRIX.flatMap((route) =>
+  EVERYONE.map((who) => ({
+    ...route,
+    who,
+    expectAllowed: route.allowed.includes(who),
+  })),
+);
+
+describe('Permissions matrix (e2e)', () => {
+  let ctx: TestApp;
+  let server: App;
+  const users = new Map<UserRole, TestUser>();
+
+  beforeAll(async () => {
+    ctx = await createTestApp();
+    server = ctx.app.getHttpServer();
+    await resetDatabase(ctx.dataSource);
+    for (const role of STAFF) {
+      users.set(role, await createLoggedInUser(ctx.app, ctx.dataSource, role));
+    }
+  });
+
+  afterAll(async () => {
+    await ctx.app.close();
+  });
+
+  it.each(CASES)(
+    '$who $method $path -> allowed: $expectAllowed',
+    async ({ method, path, who, expectAllowed }) => {
+      let req = request(server)[method](`/api/v1${path}`).send({});
+      if (who !== 'ANONYMOUS') {
+        req = req.set('Authorization', bearer(users.get(who)!));
+      }
+      const { status } = await req;
+
+      if (expectAllowed) {
+        // Past the guards: may still be 200/201/204/400/404/409.
+        expect([401, 403]).not.toContain(status);
+      } else {
+        expect(status).toBe(who === 'ANONYMOUS' ? 401 : 403);
+      }
+    },
+  );
+});

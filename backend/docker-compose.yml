@@ -1,0 +1,39 @@
+# Local development infrastructure. Reads DB_* from .env.
+#   docker compose up -d                    -> PostgreSQL only
+#   docker compose --profile tools up -d    -> PostgreSQL + pgAdmin (http://localhost:5050)
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: clinic-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-clinic_db}
+      POSTGRES_USER: ${DB_USERNAME:-clinic_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - pg16_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4:9
+    profiles: [tools]
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@clinic.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+    ports:
+      - "127.0.0.1:5050:80"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pg16_data:
