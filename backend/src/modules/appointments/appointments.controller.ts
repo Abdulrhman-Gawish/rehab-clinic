@@ -41,6 +41,7 @@ import {
   AppointmentResponseDto,
   CancelAppointmentDto,
   CreateAppointmentDto,
+  DayListEntryDto,
   DayListQueryDto,
   ListAppointmentsQueryDto,
   RescheduleAppointmentDto,
@@ -108,10 +109,10 @@ export class AppointmentsController {
   @ApiOperation({
     summary: 'Reception day list for a clinic local date',
     description:
-      'Every appointment of the day with patient name + phone, doctor, service, status, bookedName and nameMismatch.',
+      "Every appointment of the day (with its visit if checked in) plus the day's walk-ins (isWalkIn), ordered by time.",
   })
-  @ApiOkResponse({ type: [AppointmentResponseDto] })
-  day(@Query() query: DayListQueryDto): Promise<AppointmentResponseDto[]> {
+  @ApiOkResponse({ type: [DayListEntryDto] })
+  day(@Query() query: DayListQueryDto): Promise<DayListEntryDto[]> {
     return this.appointments.day(query);
   }
 

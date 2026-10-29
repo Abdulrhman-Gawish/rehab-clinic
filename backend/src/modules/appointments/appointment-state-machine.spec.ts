@@ -1,49 +1,75 @@
 import { AppException } from '../../common/errors/app.exception.js';
 import {
   allowedTransitions,
+  AppointmentTrigger as T,
   assertTransition,
   canTransition,
 } from './appointment-state-machine.js';
 import { AppointmentStatus as S } from './appointment.enums.js';
 
-const ALLOWED: [S, S][] = [
-  [S.PENDING, S.CONFIRMED],
-  [S.PENDING, S.CANCELLED],
-  [S.CONFIRMED, S.CANCELLED],
-  [S.CONFIRMED, S.NO_SHOW],
-  [S.CONFIRMED, S.RESCHEDULED],
+// Every allowed (from, to, trigger). Anything else must be rejected.
+const ALLOWED: [S, S, T][] = [
+  [S.PENDING, S.CONFIRMED, T.APPOINTMENT],
+  [S.PENDING, S.CONFIRMED, T.CHECK_IN],
+  [S.PENDING, S.CANCELLED, T.APPOINTMENT],
+  [S.CONFIRMED, S.CANCELLED, T.APPOINTMENT],
+  [S.CONFIRMED, S.NO_SHOW, T.APPOINTMENT],
+  [S.CONFIRMED, S.RESCHEDULED, T.APPOINTMENT],
+  [S.CONFIRMED, S.CHECKED_IN, T.CHECK_IN],
+  [S.CHECKED_IN, S.COMPLETED, T.VISIT_COMPLETE],
+  [S.CHECKED_IN, S.CONFIRMED, T.UNDO_CHECK_IN],
+  [S.CHECKED_IN, S.CANCELLED, T.VISIT_CANCEL],
 ];
 
-const ALL = Object.values(S);
-const FORBIDDEN = ALL.flatMap((from) =>
-  ALL.map((to): [S, S] => [from, to]),
-).filter(([from, to]) => !ALLOWED.some(([f, t]) => f === from && t === to));
+const STATUSES = Object.values(S);
+const TRIGGERS = Object.values(T);
+const ALL: [S, S, T][] = STATUSES.flatMap((from) =>
+  STATUSES.flatMap((to) => TRIGGERS.map((t): [S, S, T] => [from, to, t])),
+);
+const FORBIDDEN = ALL.filter(
+  ([from, to, t]) =>
+    !ALLOWED.some(([f, tt, trig]) => f === from && tt === to && trig === t),
+);
 
 describe('appointment state machine', () => {
-  it.each(ALLOWED)('allows %s -> %s', (from, to) => {
-    expect(canTransition(from, to)).toBe(true);
-    expect(() => assertTransition(from, to)).not.toThrow();
+  it.each(ALLOWED)('allows %s -> %s via %s', (from, to, trigger) => {
+    expect(canTransition(from, to, trigger)).toBe(true);
+    expect(() => assertTransition(from, to, trigger)).not.toThrow();
   });
 
-  it.each(FORBIDDEN)('forbids %s -> %s with 422', (from, to) => {
-    expect(canTransition(from, to)).toBe(false);
-    try {
-      assertTransition(from, to);
-      expect.unreachable();
-    } catch (error) {
-      expect(error).toBeInstanceOf(AppException);
-      expect((error as AppException).getStatus()).toBe(422);
-      expect((error as AppException).code).toBe('INVALID_STATUS_TRANSITION');
-    }
+  it.each(FORBIDDEN)(
+    'forbids %s -> %s via %s with 422',
+    (from, to, trigger) => {
+      expect(canTransition(from, to, trigger)).toBe(false);
+      try {
+        assertTransition(from, to, trigger);
+        expect.unreachable();
+      } catch (error) {
+        expect(error).toBeInstanceOf(AppException);
+        expect((error as AppException).getStatus()).toBe(422);
+        expect((error as AppException).code).toBe('INVALID_STATUS_TRANSITION');
+      }
+    },
+  );
+
+  it('the plain appointment endpoints cannot touch CHECKED_IN appointments', () => {
+    expect(allowedTransitions(S.CHECKED_IN)).toEqual([]);
+    expect(allowedTransitions(S.CONFIRMED)).toEqual([
+      S.CANCELLED,
+      S.NO_SHOW,
+      S.RESCHEDULED,
+    ]);
   });
 
   it('terminal statuses have no outgoing transitions', () => {
     for (const status of [S.NO_SHOW, S.CANCELLED, S.RESCHEDULED, S.COMPLETED]) {
-      expect(allowedTransitions(status)).toEqual([]);
+      for (const trigger of TRIGGERS) {
+        expect(allowedTransitions(status, trigger)).toEqual([]);
+      }
     }
   });
 
-  it('covers all 49 pairs', () => {
-    expect(ALLOWED.length + FORBIDDEN.length).toBe(49);
+  it('covers every (from, to, trigger) combination', () => {
+    expect(ALLOWED.length + FORBIDDEN.length).toBe(7 * 7 * TRIGGERS.length);
   });
 });

@@ -1,6 +1,6 @@
 # Rehab Clinic — Backend
 
-NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, staff users, the audit trail, patients, doctors, the services catalog, doctor schedules, availability and appointments (online and reception booking). Visits/check-in, billing and clinical records will come later as new modules.
+NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, staff users, the audit trail, patients, doctors, the services catalog, doctor schedules, availability appointments (online and reception booking) and visits (check-in, walk-ins, the waiting room, doctor sessions). Billing and clinical records will come later as new modules.
 
 - **Who logs in:** `OWNER`, `DOCTOR` and `RECEPTIONIST` staff.
 - **Patients never log in.** A patient is identified only by their phone number, which is unique.
@@ -110,6 +110,11 @@ Every route is under `/api/v1` and needs `Authorization: Bearer <accessToken>` u
 | `/appointments` create / confirm / cancel / no-show / reschedule | W | W | – | create only (`POST /public/appointments`, PENDING) |
 | `/appointments` list / view / history, `/patients/:id/appointments` | R | R | R (own only) | – |
 | `/appointments/day` | R | R | – | – |
+| check-in, walk-in, undo check-in, cancel visit | W | W | – | – |
+| start / complete visit | W | – | W (own) | – |
+| `/visits/queue`, `/visits`, `/visits/:id`, `/visits/:id/history` | R | R | R (own) | – |
+| `/patients/:id/visits` | R | R | R | – |
+| `/visits/open` | R | R | – | – |
 
 "Own" means a doctor sees only their own data. Asking for another doctor's schedule or appointment returns **404**, not 403, so the response doesn't reveal that it exists.
 
@@ -135,6 +140,12 @@ Business errors also carry a stable machine-readable `code`:
 | `SERVICE_NOT_OFFERED` | 422 | The doctor doesn't offer the service, or it is inactive |
 | `INVALID_STATUS_TRANSITION` | 422 | The state machine doesn't allow the transition |
 | `NO_SHOW_TOO_EARLY` | 422 | NO_SHOW before the appointment's start time |
+| `CHECK_IN_WRONG_DAY` | 422 | Check-in outside the appointment's local date |
+| `ALREADY_CHECKED_IN` | 409 | The appointment already has a live visit |
+| `PATIENT_HAS_OPEN_VISIT` | 409 | The patient already has a WAITING/IN_SESSION visit |
+| `DOCTOR_ALREADY_IN_SESSION` | 409 | The doctor already has an IN_SESSION visit |
+| `INVALID_VISIT_TRANSITION` | 422 | The visit state machine doesn't allow the transition |
+| `VISIT_COMPLETION_BLOCKED` | 422 | The `VisitCompletionPolicy` refused completion (the message gives the reason) |
 | `BACKDATE_LIMIT_EXCEEDED` | 422 | A RECEPTIONIST tried to book (or reschedule) more than `BACKDATE_MAX_DAYS` local days in the past |
 
 ## Modules
@@ -252,9 +263,14 @@ stateDiagram-v2
     CONFIRMED --> CANCELLED: cancel (reason required)
     CONFIRMED --> NO_SHOW: no-show (only after start_at)
     CONFIRMED --> RESCHEDULED: reschedule
-    CONFIRMED --> CHECKED_IN: next stage (visits)
-    CHECKED_IN --> COMPLETED: next stage (visits)
+    PENDING --> CONFIRMED: check-in (first of two steps)
+    CONFIRMED --> CHECKED_IN: check-in
+    CHECKED_IN --> COMPLETED: visit completed
+    CHECKED_IN --> CONFIRMED: undo check-in
+    CHECKED_IN --> CANCELLED: visit cancelled (patient left)
 ```
+
+Each transition also records **which operation** may perform it (the `AppointmentTrigger`). For example, `CHECKED_IN → CONFIRMED` is only reachable through undo check-in, so `PATCH /appointments/:id/confirm|cancel|no-show` all return 422 on a CHECKED_IN appointment.
 
 - Each change locks the row, validates it with the state machine, updates the status, appends `appointment_status_history` (from, to, changed_by, reason) and writes `audit_logs`, all in **one transaction**.
 - **Reschedule** (`POST /appointments/:id/reschedule`) is one transaction. The old appointment becomes RESCHEDULED first, so it stops blocking. Then a new CONFIRMED appointment is inserted with `rescheduled_from_id`: same patient and service, optionally another doctor. If the new slot is taken, everything rolls back.
@@ -265,6 +281,70 @@ stateDiagram-v2
 - `GET /appointments/:id`, `GET /appointments/by-reference/:code` (case-insensitive, e.g. `APT-7K3Q9X`) and `GET /appointments/:id/history`.
 - `GET /patients/:id/appointments` lists a patient's appointments across all doctors.
 
+### `visits`
+
+An **appointment** is a booking; a **visit** is what actually happened when the patient came.
+
+```mermaid
+stateDiagram-v2
+    [*] --> WAITING: check-in (appointment) / walk-in
+    WAITING --> IN_SESSION: start (visit's doctor or OWNER)
+    WAITING --> CANCELLED: undo check-in / patient left (reason required)
+    IN_SESSION --> COMPLETED: complete (visit's doctor or OWNER)
+```
+
+COMPLETED and CANCELLED are final: visits are never reopened. The visit state machine lives only in `visit-state-machine.ts`; anything else returns 422 `INVALID_VISIT_TRANSITION`.
+
+**Check-in** (`POST /appointments/:id/check-in`, OWNER/RECEPTIONIST):
+- Only allowed on the appointment's local date (`CLINIC_TIMEZONE`); late arrival the same day is fine. Otherwise 422 `CHECK_IN_WRONG_DAY`.
+- A PENDING booking is confirmed on the way: two history rows, PENDING→CONFIRMED and CONFIRMED→CHECKED_IN.
+- One transaction locks the appointment, changes its status, inserts the WAITING visit (patient, doctor and service copied from the appointment), and writes both histories and the audit entries.
+- A second check-in returns 409 `ALREADY_CHECKED_IN`. The guarantee is the partial unique index `uq_visits_appointment_live` on `appointment_id WHERE status <> 'CANCELLED'`. It is partial so that after an undo check-in, the same appointment can be checked in again.
+
+**Walk-ins** (`POST /visits/walk-in`):
+- A visit with `appointment_id = NULL`, identified by `patientId` or `name` + `phone` (find-or-create, source RECEPTION). The patient is never renamed.
+- The doctor must be active and offer the (active) service.
+- Walk-ins **do not block booking slots**; the doctor sees them when free.
+
+**One open visit per patient, one session per doctor.** These are partial unique indexes, so they also hold under races:
+- `uq_visits_patient_open`: `patient_id WHERE status IN ('WAITING','IN_SESSION')` → 409 `PATIENT_HAS_OPEN_VISIT`.
+- `uq_visits_doctor_in_session`: `doctor_id WHERE status = 'IN_SESSION'` → 409 `DOCTOR_ALREADY_IN_SESSION`.
+
+CHECK constraints keep the timestamps consistent: IN_SESSION ⇒ `started_at`; COMPLETED ⇒ `started_at`, `completed_at` and `completed_at >= started_at`; CANCELLED ⇒ `cancelled_at` and `cancel_reason`.
+
+**Undo / cancel** (OWNER/RECEPTIONIST, WAITING only):
+- `POST /visits/:id/undo-check-in { reason }`: checked in by mistake. The visit becomes CANCELLED and the appointment goes back to CONFIRMED.
+- `POST /visits/:id/cancel { reason }`: patient left before being seen. The visit becomes CANCELLED and the appointment CANCELLED with the same reason.
+
+**Doctor actions** (the visit's doctor or OWNER; other doctors get 404, reception 403):
+- `POST /visits/:id/start`: WAITING → IN_SESSION.
+- `POST /visits/:id/complete`: IN_SESSION → COMPLETED. The linked appointment becomes COMPLETED in the same transaction.
+
+**`VisitCompletionPolicy` hook** (`visit-completion-policy.ts`):
+- Consulted inside the completion transaction before anything is written. Returning `{ allowed: false, reason }` answers 422 `VISIT_COMPLETION_BLOCKED` and nothing changes.
+- The default `AllowAllVisitCompletionPolicy` allows everything. Stage 7 binds a "signed clinical note required" policy to `VISIT_COMPLETION_POLICY` in `VisitsModule` without touching `VisitsService`.
+
+**Domain events** (`visit.events.ts`, via `@nestjs/event-emitter`):
+
+| Event | When |
+|---|---|
+| `visit.checked_in` | Check-in or walk-in |
+| `visit.started` | Session started |
+| `visit.completed` | Visit completed |
+| `visit.cancelled` | Undo check-in or patient left |
+
+- The payload is `{ visitId, appointmentId (null for walk-ins), patientId, doctorId, serviceId, at }`.
+- Events are emitted **only after the transaction commits**: nothing is emitted when it fails, and listeners always see committed data.
+- There are no listeners yet; billing (Stage 6) will subscribe.
+
+**Reading:**
+- `GET /visits/queue?date=&doctorId=`: the day's WAITING and IN_SESSION visits ordered by check-in. Each row has patient, service, booked start time (null for walk-ins), `checkedInAt` and `waitingMinutes` (minutes since check-in, or minutes waited before the session started once IN_SESSION). Doctors always get their own queue.
+- `GET /appointments/day` now also has `visitId`, `visitStatus` and `checkedInAt` per appointment. It includes the day's walk-ins as rows with `isWalkIn: true` and null appointment fields, ordered by start time (check-in time for walk-ins).
+- `GET /visits` filters by check-in date range, doctor, patient, status and `walkIn`; it is paginated, newest first. Doctors see only their own.
+- `GET /visits/:id` and `/visits/:id/history`.
+- `GET /patients/:id/visits` lists every doctor's visits for the patient: metadata only, no clinical data.
+- `GET /visits/open` lists visits still WAITING/IN_SESSION from previous days, i.e. forgotten ones.
+
 ## Project layout
 
 ```
@@ -273,7 +353,7 @@ src/
   common/      decorators, guards, filters, pipes, dto, errors, utils, time (clinic time zone), base entity, enums
   config/      env validation (Joi), logger config
   database/    data-source.ts (TypeORM CLI), typeorm.options.ts, migrations/, seeds/
-  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, health
+  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, visits, health
 test/          e2e suites + global setup (test DB reset + migrations) + helpers
 ```
 
@@ -286,3 +366,6 @@ test/          e2e suites + global setup (test DB reset + migrations) + helpers
 - Wrap cross-referencing entity relations in `Relation<>` (required for ESM circular imports).
 - Business errors that clients branch on: throw `conflict(...)` / `unprocessable(...)` with an `ErrorCode` (`common/errors/app.exception.ts`).
 - Dates and times: accept and return ISO with offset; convert through `ClinicTimeService`, never with a fixed offset.
+- State machines live in one file per aggregate (`appointment-state-machine.ts`, `visit-state-machine.ts`). Every status change writes its history row and audit entry in the same transaction.
+- Cross-module side effects go through domain events emitted **after commit**, never inside the transaction.
+- Status-history tables default `changed_at` to `clock_timestamp()` (not `now()`), so several rows written in one transaction keep their order.
