@@ -3,10 +3,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
   EntityManager,
+  In,
   Repository,
   type SelectQueryBuilder,
 } from 'typeorm';
@@ -20,9 +22,11 @@ import type {
   Actor,
   AuthenticatedUser,
 } from '../../common/interfaces/authenticated-request.interface.js';
+import { UserRole } from '../../common/enums/user-role.enum.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
 import { parseIsoWithOffset } from '../../common/time/clinic-time.util.js';
 import { normalizePersonName } from '../../common/utils/person-name.util.js';
+import type { EnvironmentVariables } from '../../config/env.validation.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
 import { DoctorAccessService } from '../doctors/doctor-access.service.js';
@@ -30,12 +34,20 @@ import { Patient, PatientSource } from '../patients/entities/patient.entity.js';
 import { PatientsService } from '../patients/patients.service.js';
 import { assertTransition } from './appointment-state-machine.js';
 import { AppointmentWriter } from './appointment-writer.service.js';
-import { toAppointmentResponse, toHistoryEntry } from './appointment.mapper.js';
+import { Visit } from '../visits/entities/visit.entity.js';
+import { VisitStatus } from '../visits/visit.enums.js';
+import {
+  toAppointmentResponse,
+  toDayListEntry,
+  toHistoryEntry,
+  toWalkInDayListEntry,
+} from './appointment.mapper.js';
 import { AppointmentSource, AppointmentStatus } from './appointment.enums.js';
 import { AvailabilityService } from './availability/availability.service.js';
 import type {
   AppointmentResponseDto,
   CreateAppointmentDto,
+  DayListEntryDto,
   DayListQueryDto,
   ListAppointmentsQueryDto,
   RescheduleAppointmentDto,
@@ -50,11 +62,14 @@ const toDate = (value: string) => parseIsoWithOffset(value) as Date;
 
 @Injectable()
 export class AppointmentsService {
+  private readonly backdateMaxDays: number;
+
   constructor(
     @InjectRepository(Appointment)
     private readonly appointments: Repository<Appointment>,
     @InjectRepository(AppointmentStatusHistory)
     private readonly history: Repository<AppointmentStatusHistory>,
+    @InjectRepository(Visit) private readonly visits: Repository<Visit>,
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly writer: AppointmentWriter,
     private readonly availability: AvailabilityService,
@@ -62,7 +77,10 @@ export class AppointmentsService {
     private readonly access: DoctorAccessService,
     private readonly auditService: AuditService,
     private readonly time: ClinicTimeService,
-  ) {}
+    config: ConfigService<EnvironmentVariables, true>,
+  ) {
+    this.backdateMaxDays = config.get('BACKDATE_MAX_DAYS', { infer: true });
+  }
 
   // ---------- Commands (OWNER, RECEPTIONIST) ----------
 
@@ -83,6 +101,7 @@ export class AppointmentsService {
     }
     const startAt = toDate(dto.startAt);
     const outside = dto.allowOutsideSchedule ?? false;
+    if (outside) this.assertBackdateAllowed(startAt, actor);
 
     const id = await this.writer.runBooking(() =>
       this.dataSource.transaction(async (manager) => {
@@ -188,6 +207,7 @@ export class AppointmentsService {
   ): Promise<AppointmentResponseDto> {
     const startAt = toDate(dto.startAt);
     const outside = dto.allowOutsideSchedule ?? false;
+    if (outside) this.assertBackdateAllowed(startAt, actor);
 
     const newId = await this.writer.runBooking(() =>
       this.dataSource.transaction(async (manager) => {
@@ -209,7 +229,7 @@ export class AppointmentsService {
           old,
           AppointmentStatus.RESCHEDULED,
           actor,
-          dto.reason ?? null,
+          { reason: dto.reason ?? null },
         );
         const created = await this.writer.insert(
           manager,
@@ -262,21 +282,81 @@ export class AppointmentsService {
     return this.paginate(qb, query);
   }
 
-  // The reception day list (clinic local date).
-  async day(query: DayListQueryDto): Promise<AppointmentResponseDto[]> {
+  /**
+   * The reception day list (clinic local date): the day's appointments with
+   * their visit (if checked in), plus the day's walk-in visits, ordered by
+   * time (start time, or check-in time for walk-ins).
+   */
+  async day(query: DayListQueryDto): Promise<DayListEntryDto[]> {
     const { start, end } = this.time.dayBounds(query.date);
-    const qb = this.baseQuery()
-      .where('appointment.startAt >= :start AND appointment.startAt < :end', {
-        start,
-        end,
-      })
-      .orderBy('appointment.startAt', 'ASC')
-      .addOrderBy('appointment.id', 'ASC');
-    if (query.doctorId)
+    const toIso = (d: Date) => this.time.toIso(d);
+
+    const qb = this.baseQuery().where(
+      'appointment.startAt >= :start AND appointment.startAt < :end',
+      { start, end },
+    );
+    if (query.doctorId) {
       qb.andWhere('appointment.doctorId = :doctorId', {
         doctorId: query.doctorId,
       });
-    return (await qb.getMany()).map((a) => this.toDto(a));
+    }
+    const appointments = await qb.getMany();
+    const visitByAppointment = await this.visitsOf(
+      appointments.map((a) => a.id),
+    );
+
+    const walkIns = this.visits
+      .createQueryBuilder('visit')
+      .innerJoinAndSelect('visit.patient', 'patient')
+      .innerJoinAndSelect('visit.doctor', 'doctor')
+      .innerJoinAndSelect('doctor.user', 'doctorUser')
+      .innerJoinAndSelect('visit.service', 'service')
+      .where('visit.appointmentId IS NULL')
+      .andWhere('visit.checkedInAt >= :start AND visit.checkedInAt < :end', {
+        start,
+        end,
+      });
+    if (query.doctorId) {
+      walkIns.andWhere('visit.doctorId = :doctorId', {
+        doctorId: query.doctorId,
+      });
+    }
+
+    const rows = [
+      ...appointments.map((appointment) => ({
+        at: appointment.startAt.getTime(),
+        entry: toDayListEntry(
+          appointment,
+          visitByAppointment.get(appointment.id) ?? null,
+          toIso,
+        ),
+      })),
+      ...(await walkIns.getMany()).map((visit) => ({
+        at: visit.checkedInAt.getTime(),
+        entry: toWalkInDayListEntry(visit, toIso),
+      })),
+    ];
+    return rows.sort((a, b) => a.at - b.at).map((row) => row.entry);
+  }
+
+  // The visit shown for each appointment: the live one if any (at most one
+  // by constraint), otherwise the latest cancelled one.
+  private async visitsOf(
+    appointmentIds: string[],
+  ): Promise<Map<string, Visit>> {
+    const result = new Map<string, Visit>();
+    if (appointmentIds.length === 0) return result;
+    const visits = await this.visits.find({
+      where: { appointmentId: In(appointmentIds) },
+      order: { checkedInAt: 'ASC' },
+    });
+    for (const visit of visits) {
+      const current = result.get(visit.appointmentId as string);
+      if (!current || current.status === VisitStatus.CANCELLED) {
+        result.set(visit.appointmentId as string, visit);
+      }
+    }
+    return result;
   }
 
   async findOne(
@@ -330,6 +410,26 @@ export class AppointmentsService {
 
   // ---------- Internals ----------
 
+  /**
+   * allowOutsideSchedule lets the desk record appointments in the past
+   * (e.g. a walk-in noted afterwards). A RECEPTIONIST may go back at most
+   * BACKDATE_MAX_DAYS local days; anything older needs the OWNER.
+   */
+  private assertBackdateAllowed(startAt: Date, actor: Actor): void {
+    if (actor.role === UserRole.OWNER) return;
+    const earliestDate = this.time.addDays(
+      this.time.today(),
+      -this.backdateMaxDays,
+    );
+    if (this.time.localDate(startAt) < earliestDate) {
+      throw unprocessable(
+        ErrorCode.BACKDATE_LIMIT_EXCEEDED,
+        `Only the owner can book appointments before ${earliestDate}`,
+        { earliestDate },
+      );
+    }
+  }
+
   private async transition(
     id: string,
     to: AppointmentStatus,
@@ -340,7 +440,9 @@ export class AppointmentsService {
     await this.dataSource.transaction(async (manager) => {
       const appointment = await this.lockOrFail(id, manager);
       guard?.(appointment);
-      await this.writer.changeStatus(manager, appointment, to, actor, reason);
+      await this.writer.changeStatus(manager, appointment, to, actor, {
+        reason,
+      });
     });
     return this.load(id);
   }

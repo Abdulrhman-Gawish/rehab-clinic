@@ -153,6 +153,31 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
     allowed: [OWNER, RECEPTIONIST],
   },
   { method: 'get', path: `/patients/${id}/appointments`, allowed: STAFF },
+  // visits: desk W (check-in/walk-in/undo/cancel); OWNER + own DOCTOR start/complete
+  {
+    method: 'post',
+    path: `/appointments/${id}/check-in`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'post', path: '/visits/walk-in', allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'post',
+    path: `/visits/${id}/undo-check-in`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/visits/${id}/cancel`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'post', path: `/visits/${id}/start`, allowed: [OWNER, DOCTOR] },
+  { method: 'post', path: `/visits/${id}/complete`, allowed: [OWNER, DOCTOR] },
+  { method: 'get', path: '/visits/queue', allowed: STAFF },
+  { method: 'get', path: '/visits/open', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: '/visits', allowed: STAFF },
+  { method: 'get', path: `/visits/${id}`, allowed: STAFF },
+  { method: 'get', path: `/visits/${id}/history`, allowed: STAFF },
+  { method: 'get', path: `/patients/${id}/visits`, allowed: STAFF },
   // public: anyone
   { method: 'get', path: '/public/doctors', allowed: EVERYONE },
   { method: 'get', path: `/public/doctors/${id}`, allowed: EVERYONE },

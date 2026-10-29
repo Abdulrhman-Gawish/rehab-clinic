@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import {
@@ -19,6 +20,7 @@ import { HealthModule } from './modules/health/health.module.js';
 import { PatientsModule } from './modules/patients/patients.module.js';
 import { SchedulesModule } from './modules/schedules/schedules.module.js';
 import { UsersModule } from './modules/users/users.module.js';
+import { VisitsModule } from './modules/visits/visits.module.js';
 
 @Module({
   imports: [
@@ -48,6 +50,8 @@ import { UsersModule } from './modules/users/users.module.js';
         skipIf: () => !config.get('THROTTLE_ENABLED', { infer: true }),
       }),
     }),
+    // Domain events (e.g. visit.completed), emitted after commit.
+    EventEmitterModule.forRoot(),
     DatabaseModule,
     TimeModule,
     HealthModule,
@@ -59,6 +63,7 @@ import { UsersModule } from './modules/users/users.module.js';
     DoctorsModule,
     SchedulesModule,
     AppointmentsModule,
+    VisitsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

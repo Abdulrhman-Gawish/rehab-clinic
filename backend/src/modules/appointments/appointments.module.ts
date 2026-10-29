@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DoctorsModule } from '../doctors/doctors.module.js';
 import { PatientsModule } from '../patients/patients.module.js';
+import { Visit } from '../visits/entities/visit.entity.js';
 import { AppointmentWriter } from './appointment-writer.service.js';
 import {
   AppointmentsController,
@@ -20,7 +21,7 @@ import { PublicBookingService } from './public-booking.service.js';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Appointment, AppointmentStatusHistory]),
+    TypeOrmModule.forFeature([Appointment, AppointmentStatusHistory, Visit]),
     DoctorsModule,
     PatientsModule,
   ],
@@ -38,6 +39,6 @@ import { PublicBookingService } from './public-booking.service.js';
     // Swap for a CAPTCHA-backed implementation later.
     { provide: BOOKING_VERIFIER, useClass: NoopBookingVerifier },
   ],
-  exports: [AvailabilityService, AppointmentsService],
+  exports: [AvailabilityService, AppointmentsService, AppointmentWriter],
 })
 export class AppointmentsModule {}

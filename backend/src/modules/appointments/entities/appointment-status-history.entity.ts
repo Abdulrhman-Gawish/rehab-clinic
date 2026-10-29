@@ -60,6 +60,8 @@ export class AppointmentStatusHistory {
   @Column({ type: 'varchar', length: 255, nullable: true })
   reason: string | null;
 
-  @Column({ type: 'timestamptz', default: () => 'now()' })
+  // clock_timestamp(), not now(): several rows written in one transaction
+  // (e.g. PENDING -> CONFIRMED -> CHECKED_IN) must keep their order.
+  @Column({ type: 'timestamptz', default: () => 'clock_timestamp()' })
   changedAt: Date;
 }

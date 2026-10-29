@@ -8,7 +8,10 @@ import {
 } from '../../common/utils/pg-errors.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
-import { assertTransition } from './appointment-state-machine.js';
+import {
+  AppointmentTrigger,
+  assertTransition,
+} from './appointment-state-machine.js';
 import { AppointmentSource, AppointmentStatus } from './appointment.enums.js';
 import { AppointmentStatusHistory } from './entities/appointment-status-history.entity.js';
 import {
@@ -27,7 +30,27 @@ const STATUS_AUDIT_ACTION: Partial<Record<AppointmentStatus, AuditAction>> = {
   [AppointmentStatus.CANCELLED]: AuditAction.APPOINTMENT_CANCELLED,
   [AppointmentStatus.NO_SHOW]: AuditAction.APPOINTMENT_NO_SHOW,
   [AppointmentStatus.RESCHEDULED]: AuditAction.APPOINTMENT_RESCHEDULED,
+  [AppointmentStatus.CHECKED_IN]: AuditAction.APPOINTMENT_CHECKED_IN,
+  [AppointmentStatus.COMPLETED]: AuditAction.APPOINTMENT_COMPLETED,
 };
+
+function auditActionFor(
+  to: AppointmentStatus,
+  trigger: AppointmentTrigger,
+): AuditAction {
+  if (trigger === AppointmentTrigger.UNDO_CHECK_IN) {
+    return AuditAction.APPOINTMENT_CHECK_IN_UNDONE;
+  }
+  const action = STATUS_AUDIT_ACTION[to];
+  if (!action) throw new Error(`No audit action defined for status ${to}`);
+  return action;
+}
+
+export interface ChangeStatusOptions {
+  reason?: string | null;
+  // Which operation performs the change (see the state machine).
+  trigger?: AppointmentTrigger;
+}
 
 export interface NewAppointment {
   patientId: string;
@@ -121,13 +144,13 @@ export class AppointmentWriter {
     appointment: Appointment,
     to: AppointmentStatus,
     actor: Actor,
-    reason: string | null,
-    extraAudit: Record<string, unknown> = {},
+    options: ChangeStatusOptions = {},
   ): Promise<Appointment> {
     const from = appointment.status;
-    assertTransition(from, to);
-    const action = STATUS_AUDIT_ACTION[to];
-    if (!action) throw new Error(`No audit action defined for status ${to}`);
+    const trigger = options.trigger ?? AppointmentTrigger.APPOINTMENT;
+    const reason = options.reason ?? null;
+    assertTransition(from, to, trigger);
+    const action = auditActionFor(to, trigger);
 
     appointment.status = to;
     if (to === AppointmentStatus.CANCELLED) appointment.cancelReason = reason;
@@ -144,7 +167,11 @@ export class AppointmentWriter {
       appointment.id,
       {
         oldValues: { status: from },
-        newValues: { status: to, ...(reason && { reason }), ...extraAudit },
+        newValues: {
+          status: to,
+          ...(reason && { reason }),
+          ...(trigger !== AppointmentTrigger.APPOINTMENT && { trigger }),
+        },
       },
       manager,
     );

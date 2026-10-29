@@ -312,6 +312,81 @@ export class StatusHistoryEntryDto {
   changedAt: string;
 }
 
+// Reception day list row: an appointment (with its visit, if checked in) or
+// a walk-in visit (appointment fields null, isWalkIn true).
+export class DayListEntryDto {
+  @ApiProperty()
+  isWalkIn: boolean;
+
+  @ApiProperty({
+    format: 'uuid',
+    nullable: true,
+    type: String,
+    description: 'Appointment id (null for walk-ins)',
+  })
+  id: string | null;
+
+  @ApiProperty({ nullable: true, type: String, example: 'APT-7K3Q9X' })
+  referenceCode: string | null;
+
+  @ApiProperty({ enum: AppointmentStatus, nullable: true })
+  status: AppointmentStatus | null;
+
+  @ApiProperty({ enum: AppointmentSource, nullable: true })
+  source: AppointmentSource | null;
+
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    example: '2026-11-05T17:00:00+02:00',
+  })
+  startAt: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    example: '2026-11-05T17:45:00+02:00',
+  })
+  endAt: string | null;
+
+  @ApiProperty({ nullable: true, type: String })
+  bookedName: string | null;
+
+  @ApiProperty({ description: 'Always false for walk-ins' })
+  nameMismatch: boolean;
+
+  @ApiProperty({ type: AppointmentPatientDto })
+  patient: AppointmentPatientDto;
+
+  @ApiProperty({ type: AppointmentDoctorDto })
+  doctor: AppointmentDoctorDto;
+
+  @ApiProperty({ type: AppointmentServiceDto })
+  service: AppointmentServiceDto;
+
+  @ApiProperty({ nullable: true, type: String })
+  notes: string | null;
+
+  @ApiProperty({ nullable: true, type: String })
+  cancelReason: string | null;
+
+  @ApiProperty({ format: 'uuid', nullable: true, type: String })
+  visitId: string | null;
+
+  @ApiProperty({
+    enum: ['WAITING', 'IN_SESSION', 'COMPLETED', 'CANCELLED'],
+    nullable: true,
+  })
+  visitStatus: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    example: '2026-11-05T16:50:00+02:00',
+  })
+  checkedInAt: string | null;
+}
+
 // What the public website gets back: nothing about the patient record.
 export class PublicBookingResponseDto {
   @ApiProperty({ example: 'APT-7K3Q9X' })
