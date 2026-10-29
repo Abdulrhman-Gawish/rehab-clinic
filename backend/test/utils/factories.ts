@@ -1,6 +1,15 @@
 import type { INestApplication } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 import { UserRole } from '../../src/common/enums/user-role.enum.js';
+import {
+  AppointmentSource,
+  AppointmentStatus,
+} from '../../src/modules/appointments/appointment.enums.js';
+import { Appointment } from '../../src/modules/appointments/entities/appointment.entity.js';
+import {
+  Patient,
+  PatientSource,
+} from '../../src/modules/patients/entities/patient.entity.js';
 import { ClinicService } from '../../src/modules/clinic-services/entities/clinic-service.entity.js';
 import { DoctorClinicService } from '../../src/modules/doctors/entities/doctor-clinic-service.entity.js';
 import { Doctor } from '../../src/modules/doctors/entities/doctor.entity.js';
@@ -91,4 +100,60 @@ export async function insertWeeklySchedule(
     })),
   );
   await dataSource.getRepository(DoctorSchedule).insert(rows);
+}
+
+export async function insertPatient(
+  dataSource: DataSource,
+  name: string,
+  phone: string,
+): Promise<Patient> {
+  const repository = dataSource.getRepository(Patient);
+  return repository.save(
+    repository.create({
+      name,
+      phone,
+      dateOfBirth: null,
+      gender: null,
+      notes: null,
+      createdSource: PatientSource.RECEPTION,
+      createdById: null,
+    }),
+  );
+}
+
+let referenceSequence = 0;
+
+// A CONFIRMED (by default) reception appointment, bypassing slot checks.
+export async function insertAppointment(
+  dataSource: DataSource,
+  data: {
+    patientId: string;
+    doctorId: string;
+    serviceId: string;
+    startAt: Date;
+    durationMinutes?: number;
+    status?: AppointmentStatus;
+  },
+): Promise<Appointment> {
+  referenceSequence += 1;
+  const repository = dataSource.getRepository(Appointment);
+  return repository.save(
+    repository.create({
+      referenceCode: `APT-F${String(referenceSequence).padStart(5, '2')}`,
+      patientId: data.patientId,
+      doctorId: data.doctorId,
+      serviceId: data.serviceId,
+      startAt: data.startAt,
+      endAt: new Date(
+        data.startAt.getTime() + (data.durationMinutes ?? 30) * 60_000,
+      ),
+      status: data.status ?? AppointmentStatus.CONFIRMED,
+      source: AppointmentSource.RECEPTION,
+      bookedName: 'Booked Name',
+      bookedById: null,
+      rescheduledFromId: null,
+      cancelReason: null,
+      notes: null,
+    }),
+  );
 }

@@ -45,6 +45,9 @@ lerna-debug.log*
 .env.production.local
 .env.local
 
+# Uploaded files (local StorageService)
+/storage
+
 # temp directory
 .temp
 .tmp

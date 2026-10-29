@@ -1,10 +1,17 @@
 import { samePersonName } from '../../common/utils/person-name.util.js';
 import type { AppointmentSummaryDto } from './dto/appointment-summary.dto.js';
+import {
+  compareMoney,
+  isZeroMoney,
+  subMoney,
+} from '../../common/utils/money.util.js';
+import type { Invoice } from '../billing/entities/invoice.entity.js';
 import type { Visit } from '../visits/entities/visit.entity.js';
-import type {
-  AppointmentResponseDto,
-  DayListEntryDto,
-  StatusHistoryEntryDto,
+import {
+  DayPaymentStatus,
+  type AppointmentResponseDto,
+  type DayListEntryDto,
+  type StatusHistoryEntryDto,
 } from './dto/appointment.dto.js';
 import type { AppointmentStatusHistory } from './entities/appointment-status-history.entity.js';
 import type { Appointment } from './entities/appointment.entity.js';
@@ -45,10 +52,42 @@ export function toAppointmentResponse(
   };
 }
 
+// Billing columns of a day-list row, from the visit's live invoice.
+function billingColumns(
+  invoice: Invoice | null,
+): Pick<
+  DayListEntryDto,
+  'invoiceId' | 'invoiceTotal' | 'amountPaid' | 'balance' | 'paymentStatus'
+> {
+  if (!invoice) {
+    return {
+      invoiceId: null,
+      invoiceTotal: null,
+      amountPaid: null,
+      balance: null,
+      paymentStatus: DayPaymentStatus.NOT_INVOICED,
+    };
+  }
+  const paymentStatus =
+    compareMoney(invoice.amountPaid, invoice.total) >= 0
+      ? DayPaymentStatus.PAID
+      : isZeroMoney(invoice.amountPaid)
+        ? DayPaymentStatus.UNPAID
+        : DayPaymentStatus.PARTIAL;
+  return {
+    invoiceId: invoice.id,
+    invoiceTotal: invoice.total,
+    amountPaid: invoice.amountPaid,
+    balance: subMoney(invoice.total, invoice.amountPaid),
+    paymentStatus,
+  };
+}
+
 // `visit`: the appointment's visit, if it was checked in.
 export function toDayListEntry(
   appointment: Appointment,
   visit: Visit | null,
+  invoice: Invoice | null,
   toIso: ToIso,
 ): DayListEntryDto {
   const dto = toAppointmentResponse(appointment, toIso);
@@ -70,12 +109,14 @@ export function toDayListEntry(
     visitId: visit?.id ?? null,
     visitStatus: visit?.status ?? null,
     checkedInAt: visit ? toIso(visit.checkedInAt) : null,
+    ...billingColumns(invoice),
   };
 }
 
 // Requires patient, doctor.user and service loaded on the visit.
 export function toWalkInDayListEntry(
   visit: Visit,
+  invoice: Invoice | null,
   toIso: ToIso,
 ): DayListEntryDto {
   const { patient, doctor, service } = visit;
@@ -104,6 +145,7 @@ export function toWalkInDayListEntry(
     visitId: visit.id,
     visitStatus: visit.status,
     checkedInAt: toIso(visit.checkedInAt),
+    ...billingColumns(invoice),
   };
 }
 

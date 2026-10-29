@@ -40,6 +40,12 @@ export interface EnvironmentVariables extends DatabaseEnv {
   BOOKING_MAX_DAYS_AHEAD: number;
   BOOKING_MAX_ACTIVE_PER_PHONE: number;
   BACKDATE_MAX_DAYS: number;
+
+  RECEPTIONIST_MAX_DISCOUNT_PERCENT: number;
+  BILLING_OVERDUE_DAYS: number;
+  CLINIC_NAME: string;
+  CLINIC_PHONE: string;
+  STORAGE_LOCAL_PATH: string;
 }
 
 const databaseKeys = {
@@ -88,6 +94,17 @@ export const envSchema = Joi.object<EnvironmentVariables>({
   BOOKING_MAX_ACTIVE_PER_PHONE: Joi.number().integer().min(1).default(3),
   // How far back a RECEPTIONIST may backdate (allowOutsideSchedule); OWNER: no limit.
   BACKDATE_MAX_DAYS: Joi.number().integer().min(0).default(7),
+
+  // Highest effective discount % a RECEPTIONIST may give (OWNER: no limit).
+  RECEPTIONIST_MAX_DISCOUNT_PERCENT: Joi.number().min(0).max(100).default(100),
+  // Invoices with a balance issued more than N days ago need attention.
+  BILLING_OVERDUE_DAYS: Joi.number().integer().min(1).default(7),
+  // Printed on receipts.
+  CLINIC_NAME: Joi.string().trim().default('Rehab Clinic'),
+  CLINIC_PHONE: Joi.string().trim().allow('').default(''),
+  // Root folder of the local-disk StorageService (expense receipts). Private:
+  // never served statically.
+  STORAGE_LOCAL_PATH: Joi.string().default('./storage'),
 });
 
 // Validates and converts raw env strings; unknown variables (PATH etc.) are

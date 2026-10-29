@@ -9,6 +9,7 @@ import {
   DataSource,
   EntityManager,
   In,
+  Not,
   Repository,
   type SelectQueryBuilder,
 } from 'typeorm';
@@ -34,6 +35,8 @@ import { Patient, PatientSource } from '../patients/entities/patient.entity.js';
 import { PatientsService } from '../patients/patients.service.js';
 import { assertTransition } from './appointment-state-machine.js';
 import { AppointmentWriter } from './appointment-writer.service.js';
+import { InvoiceStatus } from '../billing/billing.enums.js';
+import { Invoice } from '../billing/entities/invoice.entity.js';
 import { Visit } from '../visits/entities/visit.entity.js';
 import { VisitStatus } from '../visits/visit.enums.js';
 import {
@@ -322,21 +325,46 @@ export class AppointmentsService {
       });
     }
 
+    const walkInVisits = await walkIns.getMany();
+    const invoiceByVisit = await this.invoicesOf([
+      ...[...visitByAppointment.values()].map((visit) => visit.id),
+      ...walkInVisits.map((visit) => visit.id),
+    ]);
+
     const rows = [
-      ...appointments.map((appointment) => ({
-        at: appointment.startAt.getTime(),
-        entry: toDayListEntry(
-          appointment,
-          visitByAppointment.get(appointment.id) ?? null,
+      ...appointments.map((appointment) => {
+        const visit = visitByAppointment.get(appointment.id) ?? null;
+        return {
+          at: appointment.startAt.getTime(),
+          entry: toDayListEntry(
+            appointment,
+            visit,
+            visit ? (invoiceByVisit.get(visit.id) ?? null) : null,
+            toIso,
+          ),
+        };
+      }),
+      ...walkInVisits.map((visit) => ({
+        at: visit.checkedInAt.getTime(),
+        entry: toWalkInDayListEntry(
+          visit,
+          invoiceByVisit.get(visit.id) ?? null,
           toIso,
         ),
       })),
-      ...(await walkIns.getMany()).map((visit) => ({
-        at: visit.checkedInAt.getTime(),
-        entry: toWalkInDayListEntry(visit, toIso),
-      })),
     ];
     return rows.sort((a, b) => a.at - b.at).map((row) => row.entry);
+  }
+
+  // Live (not cancelled) invoice of each visit.
+  private async invoicesOf(visitIds: string[]): Promise<Map<string, Invoice>> {
+    if (visitIds.length === 0) return new Map();
+    const invoices = await this.dataSource.getRepository(Invoice).find({
+      where: { visitId: In(visitIds), status: Not(InvoiceStatus.CANCELLED) },
+    });
+    return new Map(
+      invoices.map((invoice) => [invoice.visitId as string, invoice]),
+    );
   }
 
   // The visit shown for each appointment: the live one if any (at most one

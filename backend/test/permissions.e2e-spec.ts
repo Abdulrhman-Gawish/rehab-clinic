@@ -178,6 +178,120 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
   { method: 'get', path: `/visits/${id}`, allowed: STAFF },
   { method: 'get', path: `/visits/${id}/history`, allowed: STAFF },
   { method: 'get', path: `/patients/${id}/visits`, allowed: STAFF },
+  // billing (doctors have no access): OWNER, RECEPTIONIST
+  { method: 'post', path: '/invoices', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: '/invoices', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: `/invoices/${id}`, allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'post',
+    path: `/invoices/${id}/items`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/invoices/${id}/items/${otherId}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'delete',
+    path: `/invoices/${id}/items/${otherId}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/invoices/${id}/cancel`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: `/patients/${id}/invoices`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: `/patients/${id}/balance`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/visits/${id}/invoice`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: `/patients/${id}/last-discount`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/invoices/${id}/discount`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'delete',
+    path: `/invoices/${id}/discount`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/invoices/${id}/payments`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/payments/${id}/void`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'post', path: `/payments/${id}/refund`, allowed: [OWNER] },
+  { method: 'get', path: '/payments', allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'get',
+    path: `/payments/${id}/receipt`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'get', path: '/billing/attention', allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'get',
+    path: '/billing/daily-summary',
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  // expenses: OWNER, RECEPTIONIST; categories: OWNER writes
+  { method: 'post', path: '/expenses', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: '/expenses', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: `/expenses/${id}`, allowed: [OWNER, RECEPTIONIST] },
+  { method: 'patch', path: `/expenses/${id}`, allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'post',
+    path: `/expenses/${id}/void`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/expenses/${id}/receipt`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: `/expenses/${id}/receipt`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: '/expense-categories',
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'post', path: '/expense-categories', allowed: [OWNER] },
+  { method: 'patch', path: `/expense-categories/${id}`, allowed: [OWNER] },
+  {
+    method: 'patch',
+    path: `/expense-categories/${id}/activate`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'patch',
+    path: `/expense-categories/${id}/deactivate`,
+    allowed: [OWNER],
+  },
   // public: anyone
   { method: 'get', path: '/public/doctors', allowed: EVERYONE },
   { method: 'get', path: `/public/doctors/${id}`, allowed: EVERYONE },

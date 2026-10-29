@@ -212,19 +212,25 @@ describe('Visits (e2e)', () => {
       })
     ).map((h) => [h.fromStatus, h.toStatus]);
 
+  // Test listeners are tracked and removed after each test, leaving the
+  // application's own listeners (billing) in place.
+  const added: [string, (payload: VisitEventPayload) => void][] = [];
+  function listen(name: string, handler: (payload: VisitEventPayload) => void) {
+    ctx.app.get(EventEmitter2).on(name, handler);
+    added.push([name, handler]);
+  }
+
   function captureEvents(): { name: string; payload: VisitEventPayload }[] {
     const seen: { name: string; payload: VisitEventPayload }[] = [];
-    const emitter = ctx.app.get(EventEmitter2);
     for (const name of Object.values(VisitEvent)) {
-      emitter.on(name, (payload: VisitEventPayload) =>
-        seen.push({ name, payload }),
-      );
+      listen(name, (payload) => seen.push({ name, payload }));
     }
     return seen;
   }
 
   afterEach(() => {
-    ctx.app.get(EventEmitter2).removeAllListeners();
+    const emitter = ctx.app.get(EventEmitter2);
+    for (const [name, handler] of added.splice(0)) emitter.off(name, handler);
   });
 
   // ---------- check-in ----------
@@ -470,15 +476,13 @@ describe('Visits (e2e)', () => {
     it('full flow: WAITING -> IN_SESSION -> COMPLETED, appointment COMPLETED, events after commit', async () => {
       const events = captureEvents();
       const seenCommitted: boolean[] = [];
-      ctx.app
-        .get(EventEmitter2)
-        .on(VisitEvent.CHECKED_IN, (payload: VisitEventPayload) => {
-          // Read through another connection: only visible if committed.
-          void ctx.dataSource
-            .getRepository(Visit)
-            .existsBy({ id: payload.visitId })
-            .then((exists) => seenCommitted.push(exists));
-        });
+      listen(VisitEvent.CHECKED_IN, (payload: VisitEventPayload) => {
+        // Read through another connection: only visible if committed.
+        void ctx.dataSource
+          .getRepository(Visit)
+          .existsBy({ id: payload.visitId })
+          .then((exists) => seenCommitted.push(exists));
+      });
 
       const appointment = await insertAppointment(p1, doctorA, local('09:30'));
       const visit = (await checkIn(appointment.id).expect(201)).body;
