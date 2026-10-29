@@ -11,6 +11,7 @@ export enum ErrorCode {
   INVALID_STATUS_TRANSITION = 'INVALID_STATUS_TRANSITION',
   NO_SHOW_TOO_EARLY = 'NO_SHOW_TOO_EARLY',
   SCHEDULE_OVERLAP = 'SCHEDULE_OVERLAP',
+  BACKDATE_LIMIT_EXCEEDED = 'BACKDATE_LIMIT_EXCEEDED',
 }
 
 // HttpException carrying a stable `code` (and optional details) that the

@@ -39,6 +39,7 @@ export interface EnvironmentVariables extends DatabaseEnv {
   BOOKING_MIN_LEAD_MINUTES: number;
   BOOKING_MAX_DAYS_AHEAD: number;
   BOOKING_MAX_ACTIVE_PER_PHONE: number;
+  BACKDATE_MAX_DAYS: number;
 }
 
 const databaseKeys = {
@@ -85,6 +86,8 @@ export const envSchema = Joi.object<EnvironmentVariables>({
   BOOKING_MIN_LEAD_MINUTES: Joi.number().integer().min(0).default(60),
   BOOKING_MAX_DAYS_AHEAD: Joi.number().integer().min(1).max(365).default(30),
   BOOKING_MAX_ACTIVE_PER_PHONE: Joi.number().integer().min(1).default(3),
+  // How far back a RECEPTIONIST may backdate (allowOutsideSchedule); OWNER: no limit.
+  BACKDATE_MAX_DAYS: Joi.number().integer().min(0).default(7),
 });
 
 // Validates and converts raw env strings; unknown variables (PATH etc.) are

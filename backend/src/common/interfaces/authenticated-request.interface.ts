@@ -22,4 +22,6 @@ export interface AuthenticatedRequest extends Request {
 export interface Actor {
   userId: string | null;
   ip: string | null;
+  // Role of the acting user, for role-dependent business rules.
+  role?: UserRole;
 }

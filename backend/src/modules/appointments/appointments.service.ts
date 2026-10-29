@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
@@ -20,9 +21,11 @@ import type {
   Actor,
   AuthenticatedUser,
 } from '../../common/interfaces/authenticated-request.interface.js';
+import { UserRole } from '../../common/enums/user-role.enum.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
 import { parseIsoWithOffset } from '../../common/time/clinic-time.util.js';
 import { normalizePersonName } from '../../common/utils/person-name.util.js';
+import type { EnvironmentVariables } from '../../config/env.validation.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
 import { DoctorAccessService } from '../doctors/doctor-access.service.js';
@@ -50,6 +53,8 @@ const toDate = (value: string) => parseIsoWithOffset(value) as Date;
 
 @Injectable()
 export class AppointmentsService {
+  private readonly backdateMaxDays: number;
+
   constructor(
     @InjectRepository(Appointment)
     private readonly appointments: Repository<Appointment>,
@@ -62,7 +67,10 @@ export class AppointmentsService {
     private readonly access: DoctorAccessService,
     private readonly auditService: AuditService,
     private readonly time: ClinicTimeService,
-  ) {}
+    config: ConfigService<EnvironmentVariables, true>,
+  ) {
+    this.backdateMaxDays = config.get('BACKDATE_MAX_DAYS', { infer: true });
+  }
 
   // ---------- Commands (OWNER, RECEPTIONIST) ----------
 
@@ -83,6 +91,7 @@ export class AppointmentsService {
     }
     const startAt = toDate(dto.startAt);
     const outside = dto.allowOutsideSchedule ?? false;
+    if (outside) this.assertBackdateAllowed(startAt, actor);
 
     const id = await this.writer.runBooking(() =>
       this.dataSource.transaction(async (manager) => {
@@ -188,6 +197,7 @@ export class AppointmentsService {
   ): Promise<AppointmentResponseDto> {
     const startAt = toDate(dto.startAt);
     const outside = dto.allowOutsideSchedule ?? false;
+    if (outside) this.assertBackdateAllowed(startAt, actor);
 
     const newId = await this.writer.runBooking(() =>
       this.dataSource.transaction(async (manager) => {
@@ -329,6 +339,26 @@ export class AppointmentsService {
   }
 
   // ---------- Internals ----------
+
+  /**
+   * allowOutsideSchedule lets the desk record appointments in the past
+   * (e.g. a walk-in noted afterwards). A RECEPTIONIST may go back at most
+   * BACKDATE_MAX_DAYS local days; anything older needs the OWNER.
+   */
+  private assertBackdateAllowed(startAt: Date, actor: Actor): void {
+    if (actor.role === UserRole.OWNER) return;
+    const earliestDate = this.time.addDays(
+      this.time.today(),
+      -this.backdateMaxDays,
+    );
+    if (this.time.localDate(startAt) < earliestDate) {
+      throw unprocessable(
+        ErrorCode.BACKDATE_LIMIT_EXCEEDED,
+        `Only the owner can book appointments before ${earliestDate}`,
+        { earliestDate },
+      );
+    }
+  }
 
   private async transition(
     id: string,

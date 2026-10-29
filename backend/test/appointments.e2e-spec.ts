@@ -367,6 +367,55 @@ describe('Appointments (e2e)', () => {
       await staffBook({ phone: undefined }).expect(400);
     });
 
+    describe('backdating with allowOutsideSchedule (BACKDATE_MAX_DAYS = 7)', () => {
+      // "now" is 2026-11-02, so the oldest local date a receptionist may use is 2026-10-26.
+      it('a receptionist may go back up to 7 local days, not further', async () => {
+        await staffBook({
+          startAt: at('10:00', '2026-10-26'),
+          allowOutsideSchedule: true,
+        }).expect(201);
+
+        const res = await staffBook({
+          phone: '01212345678',
+          // Cairo is still on summer time (+03:00) before 2026-10-29.
+          startAt: '2026-10-25T23:30:00+03:00',
+          allowOutsideSchedule: true,
+        }).expect(422);
+        expect(res.body).toMatchObject({
+          code: 'BACKDATE_LIMIT_EXCEEDED',
+          details: { earliestDate: '2026-10-26' },
+        });
+      });
+
+      it('the owner may backdate further', async () => {
+        const owner = await createLoggedInUser(
+          ctx.app,
+          ctx.dataSource,
+          UserRole.OWNER,
+        );
+        await staffBook(
+          { startAt: at('10:00', '2026-10-01'), allowOutsideSchedule: true },
+          owner,
+        ).expect(201);
+      });
+
+      it('the same limit applies to rescheduling into the past', async () => {
+        const booked = await staffBook().expect(201);
+        await request(server)
+          .post(`/api/v1/appointments/${booked.body.id}/reschedule`)
+          .set('Authorization', bearer(receptionist))
+          .send({
+            startAt: at('10:00', '2026-10-20'),
+            allowOutsideSchedule: true,
+          })
+          .expect(422)
+          .expect(({ body }) =>
+            expect(body.code).toBe('BACKDATE_LIMIT_EXCEEDED'),
+          );
+        expect((await appointmentRow(booked.body.id)).status).toBe('CONFIRMED');
+      });
+    });
+
     it('allowOutsideSchedule skips schedule checks (audited) but never the overlap rules', async () => {
       await staffBook({ startAt: at('22:00') }).expect(422);
 

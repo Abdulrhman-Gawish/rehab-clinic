@@ -22,6 +22,10 @@ export const CurrentUser = createParamDecorator(
 export const CurrentActor = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): Actor => {
     const request = ctx.switchToHttp().getRequest<AuthenticatedRequest>();
-    return { userId: request.user?.id ?? null, ip: request.ip ?? null };
+    return {
+      userId: request.user?.id ?? null,
+      ip: request.ip ?? null,
+      role: request.user?.role,
+    };
   },
 );
