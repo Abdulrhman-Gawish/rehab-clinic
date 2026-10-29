@@ -63,6 +63,7 @@ All variables are validated at startup; the app refuses to start on invalid conf
 | `BOOKING_MIN_LEAD_MINUTES` | `60` | Earliest bookable start = now + N minutes (schedule-checked bookings) |
 | `BOOKING_MAX_DAYS_AHEAD` | `30` | Latest bookable local date = today + N days |
 | `BOOKING_MAX_ACTIVE_PER_PHONE` | `3` | Max active future appointments one phone can hold through public booking |
+| `BACKDATE_MAX_DAYS` | `7` | With `allowOutsideSchedule`, a RECEPTIONIST may book up to N local days in the past; older is OWNER only |
 | `SEED_OWNER_NAME` / `SEED_OWNER_EMAIL` / `SEED_OWNER_PASSWORD` | — | First OWNER created by `npm run seed` |
 
 ## Scripts
@@ -134,6 +135,7 @@ Business errors also carry a stable machine-readable `code`:
 | `SERVICE_NOT_OFFERED` | 422 | The doctor doesn't offer the service, or it is inactive |
 | `INVALID_STATUS_TRANSITION` | 422 | The state machine doesn't allow the transition |
 | `NO_SHOW_TOO_EARLY` | 422 | NO_SHOW before the appointment's start time |
+| `BACKDATE_LIMIT_EXCEEDED` | 422 | A RECEPTIONIST tried to book (or reschedule) more than `BACKDATE_MAX_DAYS` local days in the past |
 
 ## Modules
 
@@ -237,6 +239,7 @@ There is no public cancel or lookup endpoint: reception handles changes by phone
 **Reception booking** (`POST /appointments`):
 - Identify the patient with `patientId`, or with `name` + `phone` (find-or-create, source RECEPTION). The appointment is created **CONFIRMED** with `booked_by` = the receptionist.
 - `allowOutsideSchedule` skips the schedule, time-off and lead-time checks and writes an extra `APPOINTMENT_SCHEDULE_OVERRIDE` audit entry. It **never** skips the overlap constraints.
+- It also allows recording past appointments. A RECEPTIONIST may go back at most `BACKDATE_MAX_DAYS` local days; anything older needs the OWNER (422 `BACKDATE_LIMIT_EXCEEDED`). The same rule applies to reschedule.
 
 **Status machine.** The only definition is `appointment-state-machine.ts`; any other transition gets 422 `INVALID_STATUS_TRANSITION`.
 
