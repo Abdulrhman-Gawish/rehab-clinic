@@ -217,6 +217,21 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
     path: `/visits/${id}/invoice`,
     allowed: [OWNER, RECEPTIONIST],
   },
+  {
+    method: 'get',
+    path: `/patients/${id}/last-discount`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/invoices/${id}/discount`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'delete',
+    path: `/invoices/${id}/discount`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
   // public: anyone
   { method: 'get', path: '/public/doctors', allowed: EVERYONE },
   { method: 'get', path: `/public/doctors/${id}`, allowed: EVERYONE },

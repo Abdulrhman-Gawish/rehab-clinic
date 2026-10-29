@@ -9,6 +9,7 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
   EntityManager,
+  IsNull,
   Repository,
   type SelectQueryBuilder,
 } from 'typeorm';
@@ -50,13 +51,17 @@ import type {
 } from './dto/invoice.dto.js';
 import { InvoiceItem } from './entities/invoice-item.entity.js';
 import { Invoice, INVOICE_VISIT_UNIQUE } from './entities/invoice.entity.js';
+import { InvoiceDiscount } from './entities/invoice-discount.entity.js';
 import {
   assertEditable,
   computeTotals,
   deriveInvoiceStatus,
-  type DiscountRule,
 } from './invoice-math.js';
-import { toInvoiceDetail, toInvoiceSummary } from './invoice.mapper.js';
+import {
+  toInvoiceDetail,
+  toInvoiceDiscount,
+  toInvoiceSummary,
+} from './invoice.mapper.js';
 import {
   VISIT_BILLING_POLICY,
   type BillableItem,
@@ -409,10 +414,13 @@ export class InvoicesService {
     const items = await manager
       .getRepository(InvoiceItem)
       .findBy({ invoiceId: invoice.id });
-    const totals = computeTotals(
-      items,
-      await this.activeDiscountRule(invoice.id, manager),
-    );
+    const discount = await this.activeDiscount(invoice.id, manager);
+    const totals = computeTotals(items, discount);
+    // Keep the stored discount amount in line (percent follows the subtotal).
+    if (discount && discount.amount !== totals.discountTotal) {
+      discount.amount = totals.discountTotal;
+      await manager.getRepository(InvoiceDiscount).save(discount);
+    }
     invoice.subtotal = totals.subtotal;
     invoice.discountTotal = totals.discountTotal;
     invoice.total = totals.total;
@@ -422,19 +430,26 @@ export class InvoicesService {
 
   // ---------- Internals ----------
 
-  /** Discounts arrive in Stage 6B. */
-  protected activeDiscountRule(
-    _invoiceId: string,
-    _manager: EntityManager,
-  ): Promise<DiscountRule | null> {
-    return Promise.resolve(null);
+  // The invoice's current (not removed) discount, if any.
+  activeDiscount(
+    invoiceId: string,
+    manager: EntityManager,
+  ): Promise<InvoiceDiscount | null> {
+    return manager
+      .getRepository(InvoiceDiscount)
+      .findOneBy({ invoiceId, removedAt: IsNull() });
   }
 
-  /** Discounts arrive in Stage 6B. */
-  protected activeDiscountDto(
-    _invoiceId: string,
+  private async activeDiscountDto(
+    invoiceId: string,
   ): Promise<InvoiceDiscountDto | null> {
-    return Promise.resolve(null);
+    const discount = await this.activeDiscount(
+      invoiceId,
+      this.dataSource.manager,
+    );
+    return discount
+      ? toInvoiceDiscount(discount, (d) => this.time.toIso(d))
+      : null;
   }
 
   /** Payments arrive in Stage 6C. */

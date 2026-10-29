@@ -24,6 +24,9 @@ export enum ErrorCode {
   INVOICE_NEEDS_ITEMS = 'INVOICE_NEEDS_ITEMS',
   VISIT_CANCELLED = 'VISIT_CANCELLED',
   DISCOUNT_EXCEEDS_SUBTOTAL = 'DISCOUNT_EXCEEDS_SUBTOTAL',
+  DISCOUNT_LIMIT_EXCEEDED = 'DISCOUNT_LIMIT_EXCEEDED',
+  NO_PREVIOUS_DISCOUNT = 'NO_PREVIOUS_DISCOUNT',
+  DISCOUNT_PATIENT_MISMATCH = 'DISCOUNT_PATIENT_MISMATCH',
 }
 
 // HttpException carrying a stable `code` (and optional details) that the
@@ -47,3 +50,6 @@ export const unprocessable = (
   message: string,
   details?: unknown,
 ) => new AppException(HttpStatus.UNPROCESSABLE_ENTITY, code, message, details);
+
+export const notFound = (code: ErrorCode, message: string, details?: unknown) =>
+  new AppException(HttpStatus.NOT_FOUND, code, message, details);
