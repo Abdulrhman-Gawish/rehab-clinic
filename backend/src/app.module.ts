@@ -17,6 +17,7 @@ import { BillingModule } from './modules/billing/billing.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { ClinicServicesModule } from './modules/clinic-services/clinic-services.module.js';
 import { DoctorsModule } from './modules/doctors/doctors.module.js';
+import { ExpensesModule } from './modules/expenses/expenses.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { PatientsModule } from './modules/patients/patients.module.js';
 import { SchedulesModule } from './modules/schedules/schedules.module.js';
@@ -66,6 +67,7 @@ import { VisitsModule } from './modules/visits/visits.module.js';
     AppointmentsModule,
     VisitsModule,
     BillingModule,
+    ExpensesModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

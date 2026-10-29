@@ -45,6 +45,7 @@ export interface EnvironmentVariables extends DatabaseEnv {
   BILLING_OVERDUE_DAYS: number;
   CLINIC_NAME: string;
   CLINIC_PHONE: string;
+  STORAGE_LOCAL_PATH: string;
 }
 
 const databaseKeys = {
@@ -101,6 +102,9 @@ export const envSchema = Joi.object<EnvironmentVariables>({
   // Printed on receipts.
   CLINIC_NAME: Joi.string().trim().default('Rehab Clinic'),
   CLINIC_PHONE: Joi.string().trim().allow('').default(''),
+  // Root folder of the local-disk StorageService (expense receipts). Private:
+  // never served statically.
+  STORAGE_LOCAL_PATH: Joi.string().default('./storage'),
 });
 
 // Validates and converts raw env strings; unknown variables (PATH etc.) are

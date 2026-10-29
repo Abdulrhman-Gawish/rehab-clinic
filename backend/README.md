@@ -1,6 +1,6 @@
 # Rehab Clinic — Backend
 
-NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, staff users, the audit trail, patients, doctors, the services catalog, doctor schedules, availability appointments (online and reception booking) and visits (check-in, walk-ins, the waiting room, doctor sessions). Billing and clinical records will come later as new modules.
+NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, staff users, the audit trail, patients, doctors, the services catalog, doctor schedules, availability appointments (online and reception booking) visits (check-in, walk-ins, the waiting room, doctor sessions), billing (invoices, discounts, payments, refunds, cash-desk summary) and clinic expenses. Packages, clinical notes and reports will come later as new modules.
 
 - **Who logs in:** `OWNER`, `DOCTOR` and `RECEPTIONIST` staff.
 - **Patients never log in.** A patient is identified only by their phone number, which is unique.
@@ -64,6 +64,10 @@ All variables are validated at startup; the app refuses to start on invalid conf
 | `BOOKING_MAX_DAYS_AHEAD` | `30` | Latest bookable local date = today + N days |
 | `BOOKING_MAX_ACTIVE_PER_PHONE` | `3` | Max active future appointments one phone can hold through public booking |
 | `BACKDATE_MAX_DAYS` | `7` | With `allowOutsideSchedule`, a RECEPTIONIST may book up to N local days in the past; older is OWNER only |
+| `RECEPTIONIST_MAX_DISCOUNT_PERCENT` | `100` | Highest effective discount (% of the subtotal) a RECEPTIONIST may give; OWNER has no limit |
+| `BILLING_OVERDUE_DAYS` | `7` | Invoices with a balance issued more than N days ago appear in `GET /billing/attention` |
+| `CLINIC_NAME` / `CLINIC_PHONE` | `Rehab Clinic` / *(empty)* | Printed on receipts |
+| `STORAGE_LOCAL_PATH` | `./storage` | Root folder of the local-disk file storage (expense receipts). Private: never served statically |
 | `SEED_OWNER_NAME` / `SEED_OWNER_EMAIL` / `SEED_OWNER_PASSWORD` | — | First OWNER created by `npm run seed` |
 
 ## Scripts
@@ -115,6 +119,18 @@ Every route is under `/api/v1` and needs `Authorization: Bearer <accessToken>` u
 | `/visits/queue`, `/visits`, `/visits/:id`, `/visits/:id/history` | R | R | R (own) | – |
 | `/patients/:id/visits` | R | R | R | – |
 | `/visits/open` | R | R | – | – |
+| invoices: create, edit items, cancel, view, `/patients/:id/invoices`, `/patients/:id/balance` | RW | RW | – | – |
+| discounts: apply / repeat / remove, `/patients/:id/last-discount` | W | W (limit) | – | – |
+| payments: record, list, receipt | W | W | – | – |
+| payments: void | W | W (own, same day) | – | – |
+| refunds | W | – | – | – |
+| `/billing/attention` | R | R | – | – |
+| `/billing/daily-summary` | R | R (today only) | – | – |
+| expenses: create / edit / void / receipt upload | W | W (own, same day) | – | – |
+| expenses: view, receipt file | R | R | – | – |
+| `/expense-categories` | RW | R | – | – |
+
+Doctors have no access to billing or expenses.
 
 "Own" means a doctor sees only their own data. Asking for another doctor's schedule or appointment returns **404**, not 403, so the response doesn't reveal that it exists.
 
@@ -146,6 +162,24 @@ Business errors also carry a stable machine-readable `code`:
 | `DOCTOR_ALREADY_IN_SESSION` | 409 | The doctor already has an IN_SESSION visit |
 | `INVALID_VISIT_TRANSITION` | 422 | The visit state machine doesn't allow the transition |
 | `VISIT_COMPLETION_BLOCKED` | 422 | The `VisitCompletionPolicy` refused completion (the message gives the reason) |
+| `INVOICE_LOCKED` | 422 | Items/discount can't change: the invoice has (had) payments or is cancelled |
+| `INVOICE_HAS_PAYMENTS` | 422 | Cancel refused: money is still on the invoice (refund it first) |
+| `INVOICE_CANCELLED` | 422 | The invoice is cancelled (no payments, no second cancel) |
+| `INVOICE_NEEDS_ITEMS` | 422 | Removing the last item (cancel the invoice instead) |
+| `VISIT_CANCELLED` | 422 | No invoice can be created for a cancelled visit |
+| `DISCOUNT_EXCEEDS_SUBTOTAL` | 422 | The discount would exceed the subtotal (also when items change) |
+| `DISCOUNT_LIMIT_EXCEEDED` | 422 | RECEPTIONIST above `RECEPTIONIST_MAX_DISCOUNT_PERCENT` |
+| `DISCOUNT_PATIENT_MISMATCH` | 422 | Repeating another patient's discount |
+| `NO_PREVIOUS_DISCOUNT` | 404 | The patient has no active discount to repeat |
+| `OVERPAYMENT` | 422 | The payment is more than the remaining balance |
+| `IDEMPOTENCY_KEY_REUSED` | 409 | Same `Idempotency-Key` with a different request |
+| `VOID_NOT_ALLOWED` | 422 | Not the same local day, not your payment (RECEPTIONIST), already voided, refunds exist, or the invoice is cancelled |
+| `REFUND_NOT_ALLOWED` | 422 | Refunding a voided payment or a refund |
+| `REFUND_EXCEEDS_PAYMENT` | 422 | Refunds would exceed the payment (`details.refundable`) |
+| `EXPENSE_DATE_IN_FUTURE` | 422 | Expense dated after today |
+| `EXPENSE_EDIT_NOT_ALLOWED` | 422 | Not the creator on the same local day (and not OWNER), or the expense is voided |
+| `CATEGORY_INACTIVE` / `CATEGORY_NAME_TAKEN` | 422 / 409 | Expense category inactive / name already used |
+| `UNSUPPORTED_FILE_TYPE` | 422 | The upload's content isn't JPG/PNG/WEBP/PDF, or doesn't match its extension (files over 5 MB get 413) |
 | `BACKDATE_LIMIT_EXCEEDED` | 422 | A RECEPTIONIST tried to book (or reschedule) more than `BACKDATE_MAX_DAYS` local days in the past |
 
 ## Modules
@@ -345,15 +379,98 @@ CHECK constraints keep the timestamps consistent: IN_SESSION ⇒ `started_at`; C
 - `GET /patients/:id/visits` lists every doctor's visits for the patient: metadata only, no clinical data.
 - `GET /visits/open` lists visits still WAITING/IN_SESSION from previous days, i.e. forgotten ones.
 
+### `billing`
+
+#### Money rules (everywhere)
+- Columns are `numeric(12,2)`. In TypeScript money is a string, and all arithmetic goes through `decimal.js` (`common/utils/money.util.ts`), never JS number math.
+- The API accepts and returns money as strings; responses always have 2 decimals (`"320.00"`).
+- Percent discount amount = `round_half_up(subtotal × percent / 100, 2)`. For example, 12.5% of 99.99 = 12.50.
+- All totals are computed by the server; clients never send totals (unknown fields are rejected).
+- DB CHECKs (they also reject hand-written SQL):
+  - all amounts ≥ 0;
+  - `total = subtotal − discount_total` and `amount_paid ≤ total`;
+  - the status matches the amounts;
+  - `line_total = unit_price × quantity`;
+  - discount value ranges per type;
+  - payment shape (refunds point to a payment and have a reason; non-cash payments have a reference; voids are complete).
+- Document numbers are gapless per year in clinic local time: `INV-2026-000123`, `RCP-…`, `EXP-…`. They come from `document_counters`, incremented inside the same transaction as the document, so a rollback releases the number.
+
+#### Invoice lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> ISSUED: check-in (automatic) / manual invoice
+    ISSUED --> PARTIALLY_PAID: payment
+    PARTIALLY_PAID --> PAID: payment
+    ISSUED --> PAID: payment / 0.00 total
+    PAID --> PARTIALLY_PAID: refund / void
+    PARTIALLY_PAID --> ISSUED: refund / void back to 0
+    ISSUED --> CANCELLED: cancel (amount_paid = 0) / visit cancelled
+```
+
+- **Status is derived from the amounts**: nothing paid → ISSUED, part → PARTIALLY_PAID, everything (or a 0.00 total) → PAID. It is stored for querying.
+- **Automatic invoice per visit.**
+  - The `visit.checked_in` event (after commit) creates it in its own transaction.
+  - Pricing comes from the `VisitBillingPolicy` hook. The default is `doctor_services.price_override ?? clinic_services.base_price`, snapshotted into the item, so later catalog changes never touch it.
+  - It is idempotent: a partial unique index on `visit_id` (non-cancelled) makes a replayed event a no-op.
+  - If the listener fails, the visit is untouched and the error is logged with the `visitId`. `POST /visits/:id/invoice` creates the invoice (201) or returns the existing one (200).
+- **Visit cancelled** (`visit.cancelled`): an unpaid invoice is cancelled automatically with the visit's reason. A paid one stays and appears in `GET /billing/attention`.
+- **Manual invoices** (`POST /invoices`): service items take name and base price from the catalog (any client price is ignored); free-text items need a description and a price.
+- **Locking.** Items and the discount change only while the invoice has never had a valid payment (`INVOICE_LOCKED`). Percent discounts are recalculated when items change. An invoice keeps at least one item.
+- **Cancel** requires `amount_paid = 0`. After a full refund, a locked invoice can still be cancelled.
+- **Hook for packages (Stage 8):** bind a different `VisitBillingPolicy` to `VISIT_BILLING_POLICY` in `BillingModule` (e.g. "covered by package" items at 0.00).
+
+#### Discounts and repeat
+- `POST /invoices/:id/discount` takes `{ type, value, reason }` or `{ repeatFromDiscountId }`. Only one discount is active per invoice. Replacing or removing (`DELETE … { reason }`) keeps the old row, with `removed_at` and `removal_reason`.
+- PERCENT: `0 < value ≤ 100`. FIXED: `0 < value ≤ subtotal` (`DISCOUNT_EXCEEDS_SUBTOTAL`).
+- RECEPTIONIST cap: the effective percentage (the percent value, or fixed amount ÷ subtotal) must be ≤ `RECEPTIONIST_MAX_DISCOUNT_PERCENT`. The OWNER has no cap.
+- **Repeat flow:**
+  1. `GET /patients/:id/last-discount` returns the patient's most recent discount that is still applied, on a non-cancelled invoice (or 404 `NO_PREVIOUS_DISCOUNT`).
+  2. `POST /invoices/:new/discount { repeatFromDiscountId }` copies type, value and reason, recomputes the amount on the new subtotal and sets `repeated_from_id`.
+  - The source must belong to the same patient (`DISCOUNT_PATIENT_MISMATCH`), and the cap still applies. The old invoice never changes.
+
+#### Payments: void vs refund
+- `POST /invoices/:id/payments { amount, method, reference? }`. Partial payments are allowed; paying more than the balance gives `OVERPAYMENT` (there is no credit balance). A reference is required for CARD, WALLET and INSTAPAY.
+- Every payment, refund and void **locks the invoice row** (`SELECT … FOR UPDATE`), recomputes `amount_paid` (valid payments − valid refunds) and the status, and writes the audit entry in one transaction. Parallel payments can never overpay.
+- **`Idempotency-Key`** header on payments and refunds:
+  - Same key + same body returns the original (header `Idempotent-Replayed: true`).
+  - Same key + another body gives 409 `IDEMPOTENCY_KEY_REUSED`.
+  - The key is checked after taking the lock, and a unique index backs it up.
+- **VOID = a mistake.** Only on the local day it was recorded. A RECEPTIONIST can void only their own payments; the OWNER any. A reason is required. The row stays with status VOIDED.
+- **REFUND = money returned.** OWNER only, as a new row pointing at a VALID payment of the invoice. Total refunds per payment are capped (`REFUND_EXCEEDS_PAYMENT`). The method defaults to the original payment's.
+- Paid money is never edited or deleted.
+- `GET /payments/:id/receipt` returns the printable data as JSON: clinic name and phone, receipt and invoice numbers, patient, items, discount with reason, total, this payment, total paid, remaining balance, received by, time.
+
+#### Cashier views
+- `GET /appointments/day` rows include `invoiceId`, `invoiceTotal`, `amountPaid`, `balance` and `paymentStatus` (`NOT_INVOICED | UNPAID | PARTIAL | PAID`).
+- `GET /billing/attention` lists invoices of cancelled visits that still hold money, and invoices with a balance issued before the local day `BILLING_OVERDUE_DAYS` ago.
+- `GET /billing/daily-summary?date=` covers one clinic local day (23, 24 or 25 hours with DST): valid payments and refunds by method, voids made that day, active discounts applied that day (by user), and valid expenses dated that day by method. The OWNER can query any date; a RECEPTIONIST today only.
+
+  ```
+  expectedCash = cash payments − cash refunds − cash expenses
+  ```
+
+### `expenses`
+- Clinic purchases (tea, supplies, maintenance) are **expenses, not patient invoices**. Six default categories are seeded by the migration.
+- `POST /expenses`: the date can't be in the future (`EXPENSE_DATE_IN_FUTURE`). A RECEPTIONIST can backdate at most `BACKDATE_MAX_DAYS`.
+- `PATCH /expenses/:id` and `POST /expenses/:id/void { reason }`: allowed for the creator on the same local day, or the OWNER any time (`EXPENSE_EDIT_NOT_ALLOWED`). Old and new values are audited, and there is no hard delete.
+- `GET /expenses` filters by date range, category, method, status and creator. It is paginated and returns `totalAmount`, the sum of VALID expenses across all pages.
+- **Receipt files:**
+  - `POST /expenses/:id/receipt` takes a multipart upload in the `file` field: JPG, PNG, WEBP or PDF, at most 5 MB (413 above that).
+  - The type is decided by the file's **magic bytes**, and the name's extension must match (`UNSUPPORTED_FILE_TYPE`).
+  - `GET /expenses/:id/receipt` streams the file to authorized users only.
+  - Files sit behind the `StorageService` interface (`common/storage`). The default `LocalDiskStorageService` writes under `STORAGE_LOCAL_PATH` with server-generated keys and path-traversal checks, and **nothing is served statically**. To use S3, bind another implementation to `STORAGE_SERVICE`.
+- Categories: the OWNER creates, renames and (de)activates them; the RECEPTIONIST can read them.
+
 ## Project layout
 
 ```
 src/
   app.module.ts, app.setup.ts (shared by main.ts and e2e), main.ts
-  common/      decorators, guards, filters, pipes, dto, errors, utils, time (clinic time zone), base entity, enums
+  common/      decorators, guards, filters, pipes, dto, errors, utils (money, phone...), time (clinic time zone), storage, base entity, enums
   config/      env validation (Joi), logger config
   database/    data-source.ts (TypeORM CLI), typeorm.options.ts, migrations/, seeds/
-  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, visits, health
+  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, visits, billing, expenses, health
 test/          e2e suites + global setup (test DB reset + migrations) + helpers
 ```
 
@@ -369,3 +486,5 @@ test/          e2e suites + global setup (test DB reset + migrations) + helpers
 - State machines live in one file per aggregate (`appointment-state-machine.ts`, `visit-state-machine.ts`). Every status change writes its history row and audit entry in the same transaction.
 - Cross-module side effects go through domain events emitted **after commit**, never inside the transaction.
 - Status-history tables default `changed_at` to `clock_timestamp()` (not `now()`), so several rows written in one transaction keep their order.
+- Money: strings + `decimal.js` helpers only; totals computed server-side; DB CHECKs for every amount invariant.
+- Listeners of domain events run their own transaction and must be idempotent (events can be replayed).

@@ -4,6 +4,7 @@ import { BillingReportsService } from './billing-reports.service.js';
 import { DiscountsController } from './discounts.controller.js';
 import { DiscountsService } from './discounts.service.js';
 import { DocumentCounterService } from './document-counter.service.js';
+import { Expense } from '../expenses/entities/expense.entity.js';
 import { DocumentCounter } from './entities/document-counter.entity.js';
 import { InvoiceDiscount } from './entities/invoice-discount.entity.js';
 import { InvoiceItem } from './entities/invoice-item.entity.js';
@@ -31,6 +32,7 @@ import { VisitBillingListener } from './visit-billing.listener.js';
       InvoiceDiscount,
       Payment,
       DocumentCounter,
+      Expense,
     ]),
   ],
   controllers: [

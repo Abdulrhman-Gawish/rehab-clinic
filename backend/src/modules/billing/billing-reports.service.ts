@@ -12,6 +12,7 @@ import {
   ZERO,
 } from '../../common/utils/money.util.js';
 import type { EnvironmentVariables } from '../../config/env.validation.js';
+import { Expense, ExpenseStatus } from '../expenses/entities/expense.entity.js';
 import { VisitStatus } from '../visits/visit.enums.js';
 import {
   InvoiceStatus,
@@ -148,13 +149,19 @@ export class BillingReportsService {
     };
   }
 
-  /** Expenses arrive in Stage 6D. */
-  protected expenseTotals(_range: DayRange): Promise<MoneyTotalsDto> {
-    return Promise.resolve({
-      count: 0,
-      total: ZERO,
-      byMethod: emptyBreakdown(),
-    });
+  // Valid expenses dated on that local day, by payment method.
+  private async expenseTotals(range: DayRange): Promise<MoneyTotalsDto> {
+    const rows: MethodRow[] = await this.dataSource
+      .getRepository(Expense)
+      .createQueryBuilder('expense')
+      .select('expense.paymentMethod', 'method')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('SUM(expense.amount)', 'total')
+      .where('expense.status = :valid', { valid: ExpenseStatus.VALID })
+      .andWhere('expense.expenseDate = :date', { date: range.date })
+      .groupBy('expense.paymentMethod')
+      .getRawMany();
+    return totalsFromRows(rows);
   }
 
   private async paymentTotals(
