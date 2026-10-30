@@ -12,8 +12,8 @@ import { IsMoney } from '../../../common/decorators/money.decorator.js';
 import {
   OptionalNotNull,
   ToBoolean,
-  Trim,
   TrimAndCollapse,
+  TrimOrNull,
 } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
 import {
@@ -56,7 +56,7 @@ export class CreateDoctorDto {
 
   @ApiPropertyOptional({ nullable: true, type: String, maxLength: 4000 })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(4000)
   bio?: string | null;
@@ -96,7 +96,7 @@ export class UpdateDoctorDto {
 
   @ApiPropertyOptional({ nullable: true, type: String, maxLength: 4000 })
   @NullableOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(4000)
   bio?: string | null;
@@ -140,7 +140,7 @@ export class ListDoctorsQueryDto extends PaginationQueryDto {
 
   @ApiPropertyOptional({ description: 'Part of the name or specialty' })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(100)
   search?: string;

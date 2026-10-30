@@ -6,7 +6,6 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
-  Patch,
   Post,
   Put,
   Query,
@@ -18,7 +17,6 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBadRequestResponse,
   ApiBody,
-  ApiConflictResponse,
   ApiConsumes,
   ApiCreatedResponse,
   ApiNotFoundResponse,
@@ -42,6 +40,7 @@ import {
   type Paginated,
 } from '../../common/dto/pagination.dto.js';
 import { UserRole } from '../../common/enums/user-role.enum.js';
+import { orJsonNull } from '../../common/utils/json-null.util.js';
 import type {
   Actor,
   AuthenticatedUser,
@@ -186,7 +185,7 @@ export class PatientClinicalController {
 @ApiNotFoundResponse({
   type: ErrorResponseDto,
   description:
-    "No note, someone else's draft, or a visit the doctor can't access",
+    "Unknown visit, a visit the doctor can't access, or someone else's draft (NOTE_NOT_VISIBLE)",
 })
 export class VisitNoteController {
   constructor(private readonly notes: ClinicalNotesService) {}
@@ -194,55 +193,37 @@ export class VisitNoteController {
   @Get()
   @Auth(...READERS)
   @ApiOperation({
-    summary: "The visit's note (drafts only for their author)",
+    summary: "The visit's note, or null when it has none yet",
+    description:
+      "Drafts are visible only to their author: another doctor's draft is 404 NOTE_NOT_VISIBLE.",
   })
-  @ApiOkResponse({ type: ClinicalNoteResponseDto })
-  find(
+  @ApiOkResponse({ type: ClinicalNoteResponseDto, description: 'or null' })
+  async find(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthenticatedUser,
-  ): Promise<ClinicalNoteResponseDto> {
-    return this.notes.findForVisit(id, user);
+  ): Promise<ClinicalNoteResponseDto | null> {
+    return orJsonNull(await this.notes.findForVisit(id, user));
   }
 
-  @Post()
+  @Put()
   @Auth(UserRole.DOCTOR)
   @ApiOperation({
-    summary:
-      'Start the note as a DRAFT (the visit’s doctor; ACTIVE visits, any day after)',
+    summary: 'Save the DRAFT: created on the first save, replaced after',
+    description:
+      "The visit's doctor; ACTIVE visits, any day after. A field left out (or blank) becomes null.",
   })
-  @ApiCreatedResponse({ type: ClinicalNoteResponseDto })
-  @ApiConflictResponse({
-    type: ErrorResponseDto,
-    description: 'NOTE_ALREADY_EXISTS',
-  })
-  @ApiUnprocessableEntityResponse({
-    type: ErrorResponseDto,
-    description: 'NOTE_NOT_ALLOWED',
-  })
-  create(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: ClinicalNoteInputDto,
-    @CurrentUser() user: AuthenticatedUser,
-    @CurrentActor() actor: Actor,
-  ): Promise<ClinicalNoteResponseDto> {
-    return this.notes.create(id, dto, user, actor);
-  }
-
-  @Patch()
-  @Auth(UserRole.DOCTOR)
-  @ApiOperation({ summary: 'Edit the DRAFT (fields left out are unchanged)' })
   @ApiOkResponse({ type: ClinicalNoteResponseDto })
   @ApiUnprocessableEntityResponse({
     type: ErrorResponseDto,
-    description: 'NOTE_SIGNED',
+    description: 'NOTE_NOT_ALLOWED or NOTE_SIGNED',
   })
-  update(
+  save(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ClinicalNoteInputDto,
     @CurrentUser() user: AuthenticatedUser,
     @CurrentActor() actor: Actor,
   ): Promise<ClinicalNoteResponseDto> {
-    return this.notes.update(id, dto, user, actor);
+    return this.notes.saveDraft(id, dto, user, actor);
   }
 
   @Post('sign')
@@ -250,18 +231,21 @@ export class VisitNoteController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Sign the note: locked forever (needs assessment or treatment)',
+    description:
+      'With fields in the body, they are saved first (like PUT) and the note is signed in the same transaction. Without a body, the saved draft is signed.',
   })
   @ApiOkResponse({ type: ClinicalNoteResponseDto })
   @ApiUnprocessableEntityResponse({
     type: ErrorResponseDto,
-    description: 'NOTE_INCOMPLETE or NOTE_SIGNED',
+    description: 'NOTE_INCOMPLETE, NOTE_SIGNED or NOTE_NOT_ALLOWED',
   })
   sign(
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ClinicalNoteInputDto,
     @CurrentUser() user: AuthenticatedUser,
     @CurrentActor() actor: Actor,
   ): Promise<ClinicalNoteResponseDto> {
-    return this.notes.sign(id, user, actor);
+    return this.notes.sign(id, dto, user, actor);
   }
 }
 

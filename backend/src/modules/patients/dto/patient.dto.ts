@@ -11,9 +11,10 @@ import { IsBirthDate } from '../../../common/decorators/birth-date.decorator.js'
 import { EgyptianMobile } from '../../../common/decorators/egyptian-mobile.decorator.js';
 import {
   OptionalNotNull,
-  Trim,
+  TrimOrNull,
 } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
+import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
 import { Gender } from '../../../common/enums/gender.enum.js';
 import { PersonNameField } from '../../users/dto/user.dto.js';
 import { PatientSource, type Patient } from '../entities/patient.entity.js';
@@ -93,7 +94,7 @@ export class ListPatientsQueryDto extends PaginationQueryDto {
     example: 'ahmed',
   })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MinLength(1)
   @MaxLength(100)
@@ -128,8 +129,12 @@ export class PatientResponseDto {
   @ApiProperty({ enum: PatientSource })
   createdSource: PatientSource;
 
-  @ApiProperty({ format: 'uuid', nullable: true, type: String })
-  createdById: string | null;
+  @ApiProperty({
+    type: UserRefDto,
+    nullable: true,
+    description: 'null for online bookings',
+  })
+  createdBy: UserRefDto | null;
 
   @ApiProperty()
   createdAt: Date;
@@ -146,9 +151,19 @@ export class PatientResponseDto {
       gender: patient.gender,
       notes: patient.notes,
       createdSource: patient.createdSource,
-      createdById: patient.createdById,
+      createdBy: UserRefDto.fromNullable(patient.createdBy),
       createdAt: patient.createdAt,
       updatedAt: patient.updatedAt,
     };
   }
+}
+
+// An unknown phone is the normal case at the desk, not an error.
+export class PatientLookupDto {
+  @ApiProperty({
+    type: PatientResponseDto,
+    nullable: true,
+    description: 'null when no patient has this phone number',
+  })
+  patient: PatientResponseDto | null;
 }

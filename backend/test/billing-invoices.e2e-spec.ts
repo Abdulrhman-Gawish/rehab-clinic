@@ -37,15 +37,17 @@ const clock = { current: local('09:00') };
 
 const DETAIL_KEYS = [
   'balance',
+  'canCancel',
+  'isLocked',
   'cancelReason',
   'cancelledAt',
-  'cancelledById',
+  'cancelledBy',
   'discount',
   'discountTotal',
   'id',
   'invoiceNumber',
   'issuedAt',
-  'issuedById',
+  'issuedBy',
   'items',
   'notes',
   'patient',
@@ -159,7 +161,7 @@ describe('Billing: invoices (e2e)', () => {
         total: '320.00',
         amountPaid: '0.00',
         balance: '320.00',
-        issuedById: receptionist.id,
+        issuedBy: { id: receptionist.id, name: expect.any(String) },
         issuedAt: '2026-11-03T09:00:00+02:00',
         discount: null,
         payments: [],
@@ -225,7 +227,7 @@ describe('Billing: invoices (e2e)', () => {
       ).expect(201);
       expect(res.body).toMatchObject({
         visitId: null,
-        issuedById: receptionist.id,
+        issuedBy: { id: receptionist.id, name: expect.any(String) },
         subtotal: '750.30',
         total: '750.30',
         status: 'ISSUED',
@@ -324,7 +326,12 @@ describe('Billing: invoices (e2e)', () => {
       ]).expect(201);
       const id = created.body.id as string;
       const itemId = created.body.items[0].id as string;
+      expect(created.body).toMatchObject({ isLocked: false, canCancel: true });
       await markPaid(id, '50.00', 'PARTIALLY_PAID');
+      expect((await getInvoice(id)).body).toMatchObject({
+        isLocked: true,
+        canCancel: false,
+      });
 
       for (const call of [
         () =>
@@ -359,8 +366,10 @@ describe('Billing: invoices (e2e)', () => {
         .expect(200);
       expect(res.body).toMatchObject({
         status: 'CANCELLED',
+        isLocked: true,
+        canCancel: false,
         cancelReason: 'Created by mistake',
-        cancelledById: receptionist.id,
+        cancelledBy: { id: receptionist.id, name: expect.any(String) },
         cancelledAt: '2026-11-03T09:00:00+02:00',
       });
       await request(server)

@@ -154,7 +154,7 @@ describe('Billing: payments (e2e)', () => {
         amount: '100.00',
         method: 'CASH',
         reference: null,
-        receivedById: receptionist.id,
+        receivedBy: { id: receptionist.id, name: expect.any(String) },
         receivedAt: '2026-11-03T09:00:00+02:00',
         invoice: {
           status: 'PARTIALLY_PAID',
@@ -309,7 +309,7 @@ describe('Billing: payments (e2e)', () => {
       const voided = await voidPayment(mine.body.id, receptionist).expect(200);
       expect(voided.body).toMatchObject({
         status: 'VOIDED',
-        voidedById: receptionist.id,
+        voidedBy: { id: receptionist.id, name: expect.any(String) },
         voidReason: 'Typed the wrong amount',
         invoice: { amountPaid: '50.00', status: 'PARTIALLY_PAID' },
       });

@@ -13,7 +13,9 @@ import {
 import {
   assignService,
   createLoggedInDoctor,
+  insertAppointment,
   insertDoctor,
+  insertPatient,
   insertService,
 } from './utils/factories.js';
 import {
@@ -196,7 +198,7 @@ describe('Availability (e2e)', () => {
       .expect(404);
   });
 
-  it('reception can include times outside the schedule (whole day, from now)', async () => {
+  it('reception can include times outside the schedule: the whole day, past times included', async () => {
     const res = await request(server)
       .get(
         `/api/v1/appointments/availability?doctorId=${doctorId}&serviceId=${serviceId}&date=${MONDAY}&includeOutsideSchedule=true`,
@@ -204,10 +206,47 @@ describe('Availability (e2e)', () => {
       .set('Authorization', bearer(receptionist))
       .expect(200);
     const starts = startTimes(res.body);
-    // From "now" (08:00, no lead time) to 23:30, every 15 minutes.
-    expect(starts[0]).toBe('2026-11-02T08:00:00+02:00');
+    // 00:00 to 23:30 every 15 minutes, although "now" is 08:00.
+    expect(starts[0]).toBe('2026-11-02T00:00:00+02:00');
     expect(starts.at(-1)).toBe('2026-11-02T23:30:00+02:00');
-    expect(starts).toHaveLength(63);
+    expect(starts).toHaveLength(95);
+  });
+
+  it('outside the schedule, past dates go back to BACKDATE_MAX_DAYS for reception (any date for the owner), booked slots excluded', async () => {
+    const outside = (date: string, as: TestUser) =>
+      request(server)
+        .get(
+          `/api/v1/appointments/availability?doctorId=${doctorId}&serviceId=${serviceId}&date=${date}&includeOutsideSchedule=true`,
+        )
+        .set('Authorization', bearer(as));
+
+    const patient = await insertPatient(
+      ctx.dataSource,
+      'Past',
+      '+201000000077',
+    );
+    await insertAppointment(ctx.dataSource, {
+      patientId: patient.id,
+      doctorId,
+      serviceId,
+      startAt: new Date('2026-10-26T10:00:00+02:00'),
+    });
+    const weekAgo = await outside('2026-10-26', receptionist).expect(200);
+    const starts = startTimes(weekAgo.body);
+    expect(starts).toHaveLength(95 - 3); // 09:45, 10:00 and 10:15 overlap
+    expect(starts).not.toContain('2026-10-26T10:00:00+02:00');
+
+    const tooOld = await outside('2026-10-25', receptionist).expect(422);
+    expect(tooOld.body).toMatchObject({
+      code: 'DATE_OUT_OF_RANGE',
+      details: { from: '2026-10-26' },
+    });
+    const owner = await createLoggedInUser(
+      ctx.app,
+      ctx.dataSource,
+      UserRole.OWNER,
+    );
+    await outside('2026-09-01', owner).expect(200);
   });
 
   it('doctors query only their own availability (others 404) and cannot widen it', async () => {

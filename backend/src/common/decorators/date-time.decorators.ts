@@ -1,4 +1,10 @@
-import { registerDecorator, type ValidationOptions } from 'class-validator';
+import { applyDecorators } from '@nestjs/common';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsOptional,
+  registerDecorator,
+  type ValidationOptions,
+} from 'class-validator';
 import {
   isValidLocalDate,
   LOCAL_TIME,
@@ -41,3 +47,25 @@ export const IsLocalTime = simple(
   '$property must be a time in HH:mm format',
   (value) => typeof value === 'string' && LOCAL_TIME.test(value),
 );
+
+// List filters `from` / `to`: clinic local dates, both inclusive (turned
+// into instants with ClinicTimeService.dateRange).
+export const LocalDateFrom = (what: string) =>
+  applyDecorators(
+    ApiPropertyOptional({
+      example: '2026-11-01',
+      description: `${what} on or after this clinic local date`,
+    }),
+    IsOptional(),
+    IsLocalDate(),
+  );
+
+export const LocalDateTo = (what: string) =>
+  applyDecorators(
+    ApiPropertyOptional({
+      example: '2026-11-30',
+      description: `${what} on or before this clinic local date (inclusive)`,
+    }),
+    IsOptional(),
+    IsLocalDate(),
+  );

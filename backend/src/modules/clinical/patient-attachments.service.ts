@@ -89,7 +89,13 @@ export class PatientAttachmentsService {
       );
       return saved;
     });
-    return toAttachment(attachment, (d) => this.time.toIso(d));
+    const withUser = await this.dataSource
+      .getRepository(PatientAttachment)
+      .findOneOrFail({
+        where: { id: attachment.id },
+        relations: { uploadedBy: true },
+      });
+    return toAttachment(withUser, (d) => this.time.toIso(d));
   }
 
   async list(
@@ -97,9 +103,11 @@ export class PatientAttachmentsService {
     user: AuthenticatedUser,
   ): Promise<AttachmentResponseDto[]> {
     await this.access.assertCanAccessPatient(user, patientId);
-    const rows = await this.dataSource
-      .getRepository(PatientAttachment)
-      .find({ where: { patientId }, order: { createdAt: 'DESC' } });
+    const rows = await this.dataSource.getRepository(PatientAttachment).find({
+      where: { patientId },
+      relations: { uploadedBy: true },
+      order: { createdAt: 'DESC' },
+    });
     return rows.map((row) => toAttachment(row, (d) => this.time.toIso(d)));
   }
 

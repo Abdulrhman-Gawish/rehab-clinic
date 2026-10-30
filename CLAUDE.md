@@ -27,6 +27,7 @@ a few staff users and at most a few hundred patients a day. `backend/README.md` 
 - **Time:** every instant is `timestamptz` (UTC). The API takes and returns ISO 8601 **with offset**, rendered in
   `CLINIC_TIMEZONE` (Africa/Cairo, DST). Use `ClinicTimeService` (`now`, `today`, `dayBounds`, `toIso`) and
   `common/time/clinic-time.util.ts` (`isoToDate`, `addDays`); never hardcode an offset. Tests freeze time via `CLOCK`.
+  List filters are local dates: `@LocalDateFrom`/`@LocalDateTo` in the DTO, `ClinicTimeService.dateRange` in the service.
 - **Money:** decimal strings (`"150.00"`) end to end, `numeric(12,2)`, arithmetic only through `common/utils/money.util.ts`
   (decimal.js). Use `@IsMoney()` / `@IsPositiveMoney()` in DTOs. The server computes totals, and DB CHECKs guard every amount.
 - **Schema:** migrations only (`synchronize: false`). `npm run migration:generate -- src/database/migrations/<Name>`, then
@@ -38,13 +39,16 @@ a few staff users and at most a few hundred patients a day. `backend/README.md` 
   (`isUniqueViolation`/`isExclusionViolation` by constraint name) to 409s in a `catch` **outside** the transaction.
 - **Audit:** `auditService.logAction(actor, action, entityType, entityId, { oldValues, newValues }, manager)` is the default.
   Use `diffValues`/`pickValues` for old/new values. `auditService.log()` is only for entries without an entity (auth).
-- **Errors:** business errors clients branch on use `conflict(...)`/`unprocessable(...)` with an `ErrorCode`, which gives a
-  stable `code` in the error body. Validation errors are `400 { message: 'Validation failed', details: [{ field, errors }] }`.
+- **Errors:** business errors clients branch on use `conflict(...)`/`unprocessable(...)`/`notFound(...)` with an `ErrorCode`,
+  which gives a stable `code` in the error body. A normal "nothing found" is `200 null` (return `orJsonNull(value)`) or a
+  404 with a code. Validation errors are `400 { message: 'Validation failed', details: [{ field, errors }] }`.
 - **Access:** `@Auth(...roles)` on every non-public route, and `@Public()` opts out. A DOCTOR sees only their own data via
   `DoctorAccessService`, and another doctor's data answers **404, not 403**. Clinical data goes through
   `ClinicalAccessService` (a doctor must have an appointment or visit with the patient; RECEPTIONIST never).
 - **Responses:** every input and output is a DTO. Map entities with `static fromEntity()` on the response DTO, or with a
-  `<module>.mapper.ts` when the mapping needs `toIso` or several entities. Don't add a third style.
+  `<module>.mapper.ts` when the mapping needs `toIso` or several entities. Don't add a third style. "Who did it" is a
+  `UserRefDto` (`{ id, name }`, load the relation), never a bare user id. Every state-changing action is a `POST`.
+- **Inputs:** optional text fields use `@IsOptional()` + `@TrimOrNull()` (blank becomes null).
 - **Cross-module writes:** no domain events or listeners. Writes that must succeed together (attend = appointment +
   visit + invoice) run in one transaction: the owning service exposes a method that takes the caller's `manager`.
 - **Desk workflow:** reception does all attendance (attend, undo attend, no-show, undo no-show, walk-in); doctors only

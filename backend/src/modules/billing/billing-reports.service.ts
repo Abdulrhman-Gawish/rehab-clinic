@@ -83,6 +83,8 @@ export class BillingReportsService {
         .getRepository(Invoice)
         .createQueryBuilder('invoice')
         .innerJoinAndSelect('invoice.patient', 'patient')
+        .leftJoinAndSelect('invoice.issuedBy', 'issuedBy')
+        .leftJoinAndSelect('invoice.cancelledBy', 'cancelledBy')
         .where('invoice.status <> :cancelled', {
           cancelled: InvoiceStatus.CANCELLED,
         })

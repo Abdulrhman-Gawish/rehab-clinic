@@ -16,8 +16,8 @@ import {
   OptionalNotNull,
   ToBoolean,
   ToLowerCaseTrimmed,
-  Trim,
   TrimAndCollapse,
+  TrimOrNull,
 } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
 import { UserRole } from '../../../common/enums/user-role.enum.js';
@@ -161,7 +161,7 @@ export class ListUsersQueryDto extends PaginationQueryDto {
 
   @ApiPropertyOptional({ description: 'Matches name or email' })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(100)
   search?: string;

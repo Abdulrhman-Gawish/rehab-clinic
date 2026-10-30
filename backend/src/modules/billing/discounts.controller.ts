@@ -1,13 +1,13 @@
 import {
   Body,
   Controller,
-  Delete,
   Get,
   HttpCode,
   HttpStatus,
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
@@ -21,9 +21,14 @@ import { Auth } from '../../common/decorators/api-auth.decorator.js';
 import { CurrentActor } from '../../common/decorators/current-user.decorator.js';
 import { ErrorResponseDto } from '../../common/dto/error-response.dto.js';
 import { UserRole } from '../../common/enums/user-role.enum.js';
+import { orJsonNull } from '../../common/utils/json-null.util.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
 import { DiscountsService } from './discounts.service.js';
-import { ApplyDiscountDto, LastDiscountDto } from './dto/discount.dto.js';
+import {
+  ApplyDiscountDto,
+  LastDiscountDto,
+  LastDiscountQueryDto,
+} from './dto/discount.dto.js';
 import { InvoiceDetailDto, ReasonDto } from './dto/invoice.dto.js';
 
 const DESK = [UserRole.OWNER, UserRole.RECEPTIONIST];
@@ -38,16 +43,21 @@ export class DiscountsController {
   @Get('patients/:patientId/last-discount')
   @ApiOperation({
     summary: "The patient's most recent active discount (to repeat it)",
+    description:
+      '`null` when there is none. Pass excludeInvoiceId (the invoice being edited) to get the previous one.',
   })
-  @ApiOkResponse({ type: LastDiscountDto })
+  @ApiOkResponse({ type: LastDiscountDto, description: 'or null' })
   @ApiNotFoundResponse({
     type: ErrorResponseDto,
-    description: 'Patient not found, or NO_PREVIOUS_DISCOUNT',
+    description: 'Patient not found',
   })
-  lastDiscount(
+  async lastDiscount(
     @Param('patientId', ParseUUIDPipe) patientId: string,
-  ): Promise<LastDiscountDto> {
-    return this.discounts.lastForPatient(patientId);
+    @Query() query: LastDiscountQueryDto,
+  ): Promise<LastDiscountDto | null> {
+    return orJsonNull(
+      await this.discounts.lastForPatient(patientId, query.excludeInvoiceId),
+    );
   }
 
   @Post('invoices/:id/discount')
@@ -72,7 +82,8 @@ export class DiscountsController {
     return this.discounts.apply(id, dto, actor);
   }
 
-  @Delete('invoices/:id/discount')
+  @Post('invoices/:id/discount/remove')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Remove the discount (kept in history)' })
   @ApiOkResponse({ type: InvoiceDetailDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })

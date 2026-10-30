@@ -99,22 +99,19 @@ describe('Clinical records (e2e)', () => {
     });
   }
 
+  // PUT saves the draft: created on the first save, replaced after.
   const writeNote = (visitId: string, by: TestUser, body: object = {}) =>
     request(server)
-      .post(api(`/visits/${visitId}/note`))
+      .put(api(`/visits/${visitId}/note`))
       .set(as(by))
       .send(body);
 
-  const editNote = (visitId: string, by: TestUser, body: object) =>
-    request(server)
-      .patch(api(`/visits/${visitId}/note`))
-      .set(as(by))
-      .send(body);
-
-  const sign = (visitId: string, by: TestUser) =>
-    request(server)
+  const sign = (visitId: string, by: TestUser, body?: object) => {
+    const req = request(server)
       .post(api(`/visits/${visitId}/note/sign`))
       .set(as(by));
+    return body ? req.send(body) : req;
+  };
 
   const readNote = (visitId: string, by: TestUser) =>
     request(server)
@@ -128,7 +125,7 @@ describe('Clinical records (e2e)', () => {
       .send({ content });
 
   async function signedNote(visitId: string, by: DoctorUser, text: string) {
-    await writeNote(visitId, by, { assessment: text }).expect(201);
+    await writeNote(visitId, by, { assessment: text }).expect(200);
     return (await sign(visitId, by).expect(200)).body as {
       id: string;
       status: string;
@@ -167,7 +164,7 @@ describe('Clinical records (e2e)', () => {
       const created = await writeNote(visit.id, doctorA, {
         chiefComplaint: 'Knee pain',
         painScore: 7,
-      }).expect(201);
+      }).expect(200);
       expect(created.body).toMatchObject({
         patientId: patient.id,
         visit: { id: visit.id, service: { id: serviceId, name: 'Physio' } },
@@ -180,12 +177,14 @@ describe('Clinical records (e2e)', () => {
         addenda: [],
       });
 
-      await editNote(visit.id, doctorA, {
+      // The whole draft is sent each time; painScore left out -> null.
+      const edited = await writeNote(visit.id, doctorA, {
+        chiefComplaint: 'Knee pain',
         assessment: 'Patellar tendinopathy',
         treatmentDone: 'Ultrasound, 10 min',
         plan: 'Eccentric squats daily',
-        painScore: null,
       }).expect(200);
+      expect(edited.body.id).toBe(created.body.id);
       const signed = await sign(visit.id, doctorA).expect(200);
       expect(signed.body).toMatchObject({
         chiefComplaint: 'Knee pain',
@@ -225,29 +224,86 @@ describe('Clinical records (e2e)', () => {
         new Date(Date.now() - 7 * 24 * 3600_000),
         other.id,
       );
-      await writeNote(lastWeek.id, doctorC).expect(201);
+      await writeNote(lastWeek.id, doctorC).expect(200);
     });
 
     it("only the visit's doctor writes its note (others get 404)", async () => {
       await writeNote(visit.id, doctorB).expect(404);
-      await writeNote(visit.id, doctorA, { assessment: 'x' }).expect(201);
-      await editNote(visit.id, doctorB, { assessment: 'hacked' }).expect(404);
+      await writeNote(visit.id, doctorA, { assessment: 'x' }).expect(200);
+      await writeNote(visit.id, doctorB, { assessment: 'hacked' }).expect(404);
       await sign(visit.id, doctorB).expect(404);
     });
 
-    it('one note per visit', async () => {
-      await writeNote(visit.id, doctorA).expect(201);
-      const res = await writeNote(visit.id, doctorA).expect(409);
-      expect(res.body.code).toBe('NOTE_ALREADY_EXISTS');
+    it('one note per visit: parallel first saves create exactly one', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 5 }, (_, i) =>
+          writeNote(visit.id, doctorA, { assessment: `Version ${i}` }),
+        ),
+      );
+      expect(results.map((r) => r.status)).toEqual([200, 200, 200, 200, 200]);
+      expect(new Set(results.map((r) => r.body.id)).size).toBe(1);
+      expect(
+        await ctx.dataSource
+          .getRepository(ClinicalNote)
+          .countBy({ visitId: visit.id }),
+      ).toBe(1);
+    });
+
+    it('blank text clears a field (cleared textarea -> null)', async () => {
+      await writeNote(visit.id, doctorA, {
+        assessment: 'Sprain',
+        plan: 'Rest',
+      }).expect(200);
+      const cleared = await writeNote(visit.id, doctorA, {
+        assessment: '  Sprain  ',
+        plan: '   ',
+        progress: '',
+      }).expect(200);
+      expect(cleared.body).toMatchObject({
+        assessment: 'Sprain',
+        plan: null,
+        progress: null,
+      });
+    });
+
+    it('sign can save the final fields in the same call', async () => {
+      const noNote = await sign(visit.id, doctorA).expect(422);
+      expect(noNote.body.code).toBe('NOTE_INCOMPLETE');
+
+      const signed = await sign(visit.id, doctorA, {
+        assessment: 'Final assessment',
+        painScore: 3,
+      }).expect(200);
+      expect(signed.body).toMatchObject({
+        assessment: 'Final assessment',
+        painScore: 3,
+        status: 'SIGNED',
+      });
+      const actions = (
+        await ctx.dataSource.getRepository(AuditLog).find({
+          where: { entityId: signed.body.id },
+          order: { createdAt: 'ASC' },
+        })
+      ).map((log) => log.action);
+      expect(actions).toEqual([
+        'CLINICAL_NOTE_CREATED',
+        'CLINICAL_NOTE_SIGNED',
+      ]);
+      // Nothing is saved when the fields can't be signed.
+      const other = await newVisit(doctorA, VisitStatus.ACTIVE);
+      await sign(other.id, doctorA, { plan: 'Only a plan' }).expect(422);
+      await readNote(other.id, doctorA)
+        .expect(200)
+        .expect(({ body }) => expect(body).toBeNull());
     });
 
     it('signing needs an assessment or the treatment done', async () => {
       await writeNote(visit.id, doctorA, {
         chiefComplaint: 'Back pain',
-      }).expect(201);
+      }).expect(200);
       const res = await sign(visit.id, doctorA).expect(422);
       expect(res.body.code).toBe('NOTE_INCOMPLETE');
-      await editNote(visit.id, doctorA, { treatmentDone: 'Massage' }).expect(
+      await writeNote(visit.id, doctorA, { treatmentDone: 'Massage' }).expect(
         200,
       );
       await sign(visit.id, doctorA).expect(200);
@@ -256,7 +312,7 @@ describe('Clinical records (e2e)', () => {
     it('a signed note is locked; addenda are added by any doctor with access', async () => {
       const note = await signedNote(visit.id, doctorA, 'Sprain');
 
-      const edit = await editNote(visit.id, doctorA, { plan: 'Rest' }).expect(
+      const edit = await writeNote(visit.id, doctorA, { plan: 'Rest' }).expect(
         422,
       );
       expect(edit.body.code).toBe('NOTE_SIGNED');
@@ -277,15 +333,20 @@ describe('Clinical records (e2e)', () => {
       ]);
     });
 
-    it('drafts are visible only to their author', async () => {
+    it('no note yet is 200 null; drafts are visible only to their author (NOTE_NOT_VISIBLE)', async () => {
+      const none = await readNote(visit.id, doctorA).expect(200);
+      expect(none.body).toBeNull();
       const draft = (
         await writeNote(visit.id, doctorA, { assessment: 'Unsure yet' }).expect(
-          201,
+          200,
         )
       ).body;
       await readNote(visit.id, doctorA).expect(200);
-      await readNote(visit.id, doctorB).expect(404);
-      await readNote(visit.id, owner).expect(404);
+      const hidden = await readNote(visit.id, doctorB).expect(404);
+      expect(hidden.body.code).toBe('NOTE_NOT_VISIBLE');
+      expect((await readNote(visit.id, owner).expect(404)).body.code).toBe(
+        'NOTE_NOT_VISIBLE',
+      );
       await addAddendum(draft.id, doctorB, 'Nope').expect(404);
       const own = await addAddendum(draft.id, doctorA, 'Too early').expect(422);
       expect(own.body.code).toBe('NOTE_NOT_SIGNED');
@@ -312,7 +373,7 @@ describe('Clinical records (e2e)', () => {
       expect(await queue()).toMatchObject([
         { visitId: visit.id, hasNote: false, noteStatus: null },
       ]);
-      await writeNote(visit.id, doctorA, { assessment: 'x' }).expect(201);
+      await writeNote(visit.id, doctorA, { assessment: 'x' }).expect(200);
       expect(await queue()).toMatchObject([
         { hasNote: true, noteStatus: 'DRAFT' },
       ]);
@@ -367,7 +428,7 @@ describe('Clinical records (e2e)', () => {
         VisitStatus.ACTIVE,
         new Date('2026-10-02T08:00:00Z'),
       );
-      await writeNote(visit.id, doctorA, { assessment: 'Draft' }).expect(201);
+      await writeNote(visit.id, doctorA, { assessment: 'Draft' }).expect(200);
 
       const own = await needsAttention(doctorA);
       expect(own.body.meta.total).toBe(2);
@@ -446,7 +507,7 @@ describe('Clinical records (e2e)', () => {
     expect(empty.body).toMatchObject({
       patientId: patient.id,
       allergies: null,
-      updatedById: null,
+      updatedBy: null,
       updatedAt: null,
     });
 
@@ -458,13 +519,18 @@ describe('Clinical records (e2e)', () => {
     const replaced = await request(server)
       .put(path)
       .set(as(doctorB))
-      .send({ allergies: 'Penicillin', chronicConditions: 'Diabetes' })
+      .send({
+        allergies: 'Penicillin',
+        chronicConditions: 'Diabetes',
+        notes: '   ',
+      })
       .expect(200);
     expect(replaced.body).toMatchObject({
       allergies: 'Penicillin',
       chronicConditions: 'Diabetes',
       currentMedications: null, // left out -> cleared
-      updatedById: doctorB.id,
+      notes: null, // blank -> cleared
+      updatedBy: { id: doctorB.id, name: expect.any(String) },
       updatedAt: expect.any(String),
     });
 
@@ -544,7 +610,7 @@ describe('Clinical records (e2e)', () => {
       title: 'Knee X-ray',
       mimeType: 'image/png',
       sizeBytes: PNG.length,
-      uploadedById: doctorA.id,
+      uploadedBy: { id: doctorA.id, name: expect.any(String) },
     });
     await upload(owner, PDF, 'labs.pdf', { title: 'Blood test' }).expect(201);
 

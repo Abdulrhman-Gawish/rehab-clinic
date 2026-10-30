@@ -1,3 +1,4 @@
+import { UserRefDto } from '../../common/dto/user-ref.dto.js';
 import type { Doctor } from '../doctors/entities/doctor.entity.js';
 import type { Visit } from '../visits/entities/visit.entity.js';
 import type { NoteStatus } from './clinical.enums.js';
@@ -23,6 +24,7 @@ function toDoctor(doctor: Doctor | undefined): ClinicalDoctorDto {
 }
 
 // `info` is null until the first save: every field is then empty.
+// Requires `updatedBy` to be loaded.
 export function toMedicalInfo(
   patientId: string,
   info: PatientMedicalInfo | null,
@@ -35,7 +37,7 @@ export function toMedicalInfo(
     pastSurgeries: info?.pastSurgeries ?? null,
     currentMedications: info?.currentMedications ?? null,
     notes: info?.notes ?? null,
-    updatedById: info?.updatedById ?? null,
+    updatedBy: UserRefDto.fromNullable(info?.updatedBy),
     updatedAt: info ? toIso(info.updatedAt) : null,
   };
 }
@@ -84,6 +86,7 @@ export function toClinicalNote(
   };
 }
 
+// Requires `uploadedBy` to be loaded.
 export function toAttachment(
   attachment: PatientAttachment,
   toIso: ToIso,
@@ -95,7 +98,7 @@ export function toAttachment(
     title: attachment.title,
     mimeType: attachment.mimeType,
     sizeBytes: attachment.sizeBytes,
-    uploadedById: attachment.uploadedById,
+    uploadedBy: UserRefDto.fromEntity(attachment.uploadedBy),
     createdAt: toIso(attachment.createdAt),
   };
 }

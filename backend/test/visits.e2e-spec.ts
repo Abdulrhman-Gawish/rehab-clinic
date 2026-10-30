@@ -46,7 +46,7 @@ const VISIT_KEYS = [
   'appointmentReferenceCode',
   'appointmentStartAt',
   'attendedAt',
-  'attendedById',
+  'attendedBy',
   'createdAt',
   'doctor',
   'id',
@@ -57,7 +57,7 @@ const VISIT_KEYS = [
   'updatedAt',
   'voidReason',
   'voidedAt',
-  'voidedById',
+  'voidedBy',
 ];
 
 type DoctorUser = TestUser & { doctorId: string };
@@ -192,10 +192,10 @@ describe('Desk workflow: attend, walk-in, undo, day list (e2e)', () => {
 
   const writeNote = (visitId: string, as: DoctorUser) =>
     request(server)
-      .post(`/api/v1/visits/${visitId}/note`)
+      .put(`/api/v1/visits/${visitId}/note`)
       .set('Authorization', bearer(as))
       .send({ assessment: 'Seen' })
-      .expect(201);
+      .expect(200);
 
   const pay = (invoiceId: string, amount = '100') =>
     request(server)
@@ -246,7 +246,7 @@ describe('Desk workflow: attend, walk-in, undo, day list (e2e)', () => {
         doctor: { id: doctorA.doctorId },
         service: { id: serviceId },
         attendedAt: iso('09:00'),
-        attendedById: receptionist.id,
+        attendedBy: { id: receptionist.id, name: expect.any(String) },
         voidedAt: null,
         invoiceId: expect.any(String),
       });
@@ -470,7 +470,7 @@ describe('Desk workflow: attend, walk-in, undo, day list (e2e)', () => {
         id: visitId,
         status: 'VOIDED',
         voidedAt: iso('09:10'),
-        voidedById: receptionist.id,
+        voidedBy: { id: receptionist.id, name: expect.any(String) },
         voidReason: 'Wrong patient sent in',
       });
       expect(await invoiceOf(invoiceId)).toMatchObject({

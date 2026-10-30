@@ -24,10 +24,10 @@ import { Public } from '../../common/decorators/public.decorator.js';
 import { ThrottleLogin } from '../../common/decorators/throttle.decorators.js';
 import { ErrorResponseDto } from '../../common/dto/error-response.dto.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
-import { UserResponseDto } from '../users/dto/user.dto.js';
 import { AuthService } from './auth.service.js';
 import {
   AuthTokensDto,
+  AuthUserDto,
   LoginDto,
   LoginResponseDto,
   RefreshTokenDto,
@@ -85,9 +85,9 @@ export class AuthController {
   @Get('me')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'The logged in user' })
-  @ApiOkResponse({ type: UserResponseDto })
+  @ApiOkResponse({ type: AuthUserDto })
   @ApiUnauthorizedResponse({ type: ErrorResponseDto })
-  me(@CurrentActor() actor: Actor): Promise<UserResponseDto> {
+  me(@CurrentActor() actor: Actor): Promise<AuthUserDto> {
     return this.authService.me(actor);
   }
 }

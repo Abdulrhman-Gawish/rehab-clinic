@@ -9,15 +9,17 @@ import {
 } from 'class-validator';
 import { EgyptianMobile } from '../../../common/decorators/egyptian-mobile.decorator.js';
 import {
-  IsIsoWithOffset,
   IsLocalDate,
+  LocalDateFrom,
+  LocalDateTo,
 } from '../../../common/decorators/date-time.decorators.js';
 import {
   ToBoolean,
   Trim,
-  TrimAndCollapse,
+  TrimOrNull,
 } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
+import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
 import {
   AppointmentDoctorDto,
   AppointmentPatientDto,
@@ -44,7 +46,7 @@ export class WalkInDto {
 
   @ApiPropertyOptional({ example: 'Ahmed Hassan' })
   @IsOptional()
-  @TrimAndCollapse()
+  @TrimOrNull({ collapse: true })
   @IsString()
   @Length(2, 120)
   name?: string;
@@ -72,20 +74,10 @@ export class VisitReasonDto {
 }
 
 export class ListVisitsQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({
-    ...AT('2026-11-01T00:00:00+02:00'),
-    description: 'attended_at >= from',
-  })
-  @IsOptional()
-  @IsIsoWithOffset()
+  @LocalDateFrom('Attended')
   from?: string;
 
-  @ApiPropertyOptional({
-    ...AT('2026-12-01T00:00:00+02:00'),
-    description: 'attended_at < to',
-  })
-  @IsOptional()
-  @IsIsoWithOffset()
+  @LocalDateTo('Attended')
   to?: string;
 
   @ApiPropertyOptional({ format: 'uuid' })
@@ -167,14 +159,14 @@ export class VisitResponseDto {
   @ApiProperty(AT('2026-11-05T09:50:00+02:00'))
   attendedAt: string;
 
-  @ApiProperty({ format: 'uuid' })
-  attendedById: string;
+  @ApiProperty({ type: UserRefDto })
+  attendedBy: UserRefDto;
 
   @ApiProperty({ nullable: true, type: String })
   voidedAt: string | null;
 
-  @ApiProperty({ format: 'uuid', nullable: true, type: String })
-  voidedById: string | null;
+  @ApiProperty({ type: UserRefDto, nullable: true })
+  voidedBy: UserRefDto | null;
 
   @ApiProperty({ nullable: true, type: String })
   voidReason: string | null;
@@ -238,8 +230,8 @@ export class VisitHistoryEntryDto {
   @ApiProperty({ enum: VisitStatus })
   toStatus: VisitStatus;
 
-  @ApiProperty({ format: 'uuid' })
-  changedById: string;
+  @ApiProperty({ type: UserRefDto })
+  changedBy: UserRefDto;
 
   @ApiProperty({ nullable: true, type: String })
   reason: string | null;

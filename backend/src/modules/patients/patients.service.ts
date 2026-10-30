@@ -27,6 +27,7 @@ import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
 import {
   PatientResponseDto,
+  type PatientLookupDto,
   type CreatePatientDto,
   type ListPatientsQueryDto,
   type UpdatePatientDto,
@@ -164,7 +165,7 @@ export class PatientsService {
         );
         return saved;
       });
-      return PatientResponseDto.fromEntity(patient);
+      return this.findOne(patient.id);
     } catch (error) {
       return this.rethrowPhoneConflict(error, phone);
     }
@@ -175,6 +176,7 @@ export class PatientsService {
   ): Promise<Paginated<PatientResponseDto>> {
     const qb = this.patients
       .createQueryBuilder('patient')
+      .leftJoinAndSelect('patient.createdBy', 'createdBy')
       .skip(query.skip)
       .take(query.limit);
 
@@ -211,18 +213,19 @@ export class PatientsService {
     );
   }
 
-  async findByPhone(phone: string): Promise<PatientResponseDto> {
-    const patient = await this.patients.findOneBy({
-      phone: normalizeEgyptianMobile(phone),
+  async findByPhone(phone: string): Promise<PatientLookupDto> {
+    const patient = await this.patients.findOne({
+      where: { phone: normalizeEgyptianMobile(phone) },
+      relations: { createdBy: true },
     });
-    if (!patient) {
-      throw new NotFoundException('No patient with this phone number');
-    }
-    return PatientResponseDto.fromEntity(patient);
+    return { patient: patient ? PatientResponseDto.fromEntity(patient) : null };
   }
 
   async findOne(id: string): Promise<PatientResponseDto> {
-    const patient = await this.patients.findOneBy({ id });
+    const patient = await this.patients.findOne({
+      where: { id },
+      relations: { createdBy: true },
+    });
     if (!patient) throw new NotFoundException('Patient not found');
     return PatientResponseDto.fromEntity(patient);
   }
@@ -266,7 +269,7 @@ export class PatientsService {
         );
         return saved;
       });
-      return PatientResponseDto.fromEntity(patient);
+      return this.findOne(patient.id);
     } catch (error) {
       return this.rethrowPhoneConflict(error, phone);
     }

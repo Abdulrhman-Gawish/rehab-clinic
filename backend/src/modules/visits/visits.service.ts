@@ -22,7 +22,6 @@ import type {
   AuthenticatedUser,
 } from '../../common/interfaces/authenticated-request.interface.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
-import { isoToDate } from '../../common/time/clinic-time.util.js';
 import { isZeroMoney } from '../../common/utils/money.util.js';
 import { isUniqueViolation } from '../../common/utils/pg-errors.js';
 import {
@@ -241,6 +240,7 @@ export class VisitsService {
     await this.findOne(id, user);
     const entries = await this.history.find({
       where: { visitId: id },
+      relations: { changedBy: true },
       order: { changedAt: 'ASC', id: 'ASC' },
     });
     return entries.map((entry) =>
@@ -253,12 +253,9 @@ export class VisitsService {
     user: AuthenticatedUser,
   ): Promise<Paginated<VisitResponseDto>> {
     const qb = await this.scopedQuery(user);
-    if (query.from)
-      qb.andWhere('visit.attendedAt >= :from', {
-        from: isoToDate(query.from),
-      });
-    if (query.to)
-      qb.andWhere('visit.attendedAt < :to', { to: isoToDate(query.to) });
+    const { start, end } = this.time.dateRange(query.from, query.to);
+    if (start) qb.andWhere('visit.attendedAt >= :start', { start });
+    if (end) qb.andWhere('visit.attendedAt < :end', { end });
     if (query.doctorId)
       qb.andWhere('visit.doctorId = :doctorId', { doctorId: query.doctorId });
     if (query.patientId) {
@@ -519,6 +516,8 @@ export class VisitsService {
       .innerJoinAndSelect('visit.doctor', 'doctor')
       .innerJoinAndSelect('doctor.user', 'doctorUser')
       .innerJoinAndSelect('visit.service', 'service')
+      .innerJoinAndSelect('visit.attendedBy', 'attendedBy')
+      .leftJoinAndSelect('visit.voidedBy', 'voidedBy')
       .leftJoinAndSelect('visit.appointment', 'appointment');
   }
 

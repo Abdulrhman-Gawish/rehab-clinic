@@ -51,4 +51,16 @@ export class ClinicTimeService {
   dayBounds(date: string): { start: Date; end: Date } {
     return localDayBounds(date, this.zone);
   }
+
+  /**
+   * List filters `from=YYYY-MM-DD&to=YYYY-MM-DD` (inclusive, clinic local
+   * dates) as instants: `start` = start of `from`, `end` = start of the day
+   * after `to` (exclusive). Either may be missing.
+   */
+  dateRange(from?: string, to?: string): { start?: Date; end?: Date } {
+    return {
+      start: from ? this.dayBounds(from).start : undefined,
+      end: to ? this.dayBounds(to).end : undefined,
+    };
+  }
 }

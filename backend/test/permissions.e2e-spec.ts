@@ -222,8 +222,8 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
     allowed: [OWNER, RECEPTIONIST],
   },
   {
-    method: 'delete',
-    path: `/invoices/${id}/discount`,
+    method: 'post',
+    path: `/invoices/${id}/discount/remove`,
     allowed: [OWNER, RECEPTIONIST],
   },
   {
@@ -311,8 +311,7 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
   },
   { method: 'get', path: `/attachments/${id}/file`, allowed: [OWNER, DOCTOR] },
   { method: 'get', path: `/visits/${id}/note`, allowed: [OWNER, DOCTOR] },
-  { method: 'post', path: `/visits/${id}/note`, allowed: [DOCTOR] },
-  { method: 'patch', path: `/visits/${id}/note`, allowed: [DOCTOR] },
+  { method: 'put', path: `/visits/${id}/note`, allowed: [DOCTOR] },
   { method: 'post', path: `/visits/${id}/note/sign`, allowed: [DOCTOR] },
   { method: 'post', path: `/clinical-notes/${id}/addenda`, allowed: [DOCTOR] },
   {

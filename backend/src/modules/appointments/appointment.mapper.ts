@@ -1,3 +1,4 @@
+import { UserRefDto } from '../../common/dto/user-ref.dto.js';
 import { samePersonName } from '../../common/utils/person-name.util.js';
 import type { AppointmentSummaryDto } from './dto/appointment-summary.dto.js';
 import {
@@ -19,7 +20,7 @@ import type { Appointment } from './entities/appointment.entity.js';
 
 type ToIso = (instant: Date) => string;
 
-// Requires patient, doctor.user and service to be loaded.
+// Requires patient, doctor.user, service and bookedBy to be loaded.
 export function toAppointmentResponse(
   appointment: Appointment,
   toIso: ToIso,
@@ -44,7 +45,7 @@ export function toAppointmentResponse(
       name: service.name,
       durationMinutes: service.durationMinutes,
     },
-    bookedById: appointment.bookedById,
+    bookedBy: UserRefDto.fromNullable(appointment.bookedBy),
     rescheduledFromId: appointment.rescheduledFromId,
     cancelReason: appointment.cancelReason,
     notes: appointment.notes,
@@ -191,6 +192,7 @@ export function toAppointmentSummary(
   };
 }
 
+// Requires `changedBy` to be loaded.
 export function toHistoryEntry(
   entry: AppointmentStatusHistory,
   toIso: ToIso,
@@ -198,7 +200,7 @@ export function toHistoryEntry(
   return {
     fromStatus: entry.fromStatus,
     toStatus: entry.toStatus,
-    changedById: entry.changedById,
+    changedBy: UserRefDto.fromNullable(entry.changedBy),
     reason: entry.reason,
     changedAt: toIso(entry.changedAt),
   };

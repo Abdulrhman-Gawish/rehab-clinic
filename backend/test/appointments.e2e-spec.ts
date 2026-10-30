@@ -336,7 +336,7 @@ describe('Appointments (e2e)', () => {
         status: 'CONFIRMED',
         source: 'RECEPTION',
         bookedName: 'Ahmed Hassan',
-        bookedById: receptionist.id,
+        bookedBy: { id: receptionist.id, name: expect.any(String) },
         nameMismatch: false,
         startAt: at('11:00'),
         endAt: at('11:30'),
@@ -484,7 +484,7 @@ describe('Appointments (e2e)', () => {
       ]);
       expect(history.body[2]).toMatchObject({
         reason: 'Patient travelling',
-        changedById: receptionist.id,
+        changedBy: { id: receptionist.id, name: expect.any(String) },
       });
 
       const actions = (
@@ -718,15 +718,28 @@ describe('Appointments (e2e)', () => {
         ),
       ).toEqual([online.body.referenceCode]);
 
+      // from / to are clinic local dates, both inclusive.
+      const wednesday = await staffBook({
+        name: 'Wednesday Patient',
+        phone: '01512345678',
+        startAt: at('11:00', '2026-11-04'),
+      }).expect(201);
       const range = await request(server)
-        .get(
-          `/api/v1/appointments?from=${encodeURIComponent(at('10:00'))}&to=${encodeURIComponent(at('12:00'))}`,
-        )
+        .get('/api/v1/appointments?from=2026-11-04&to=2026-11-04')
         .set('Authorization', bearer(receptionist))
         .expect(200);
       expect(range.body.items.map((x: { id: string }) => x.id)).toEqual([
-        a.body.id,
+        wednesday.body.id,
       ]);
+      const tuesday = await request(server)
+        .get(`/api/v1/appointments?from=${TUESDAY}&to=${TUESDAY}`)
+        .set('Authorization', bearer(receptionist))
+        .expect(200);
+      expect(tuesday.body.meta.total).toBe(3);
+      await request(server)
+        .get(`/api/v1/appointments?from=${encodeURIComponent(at('10:00'))}`)
+        .set('Authorization', bearer(receptionist))
+        .expect(400);
 
       await request(server)
         .get(
@@ -735,6 +748,11 @@ describe('Appointments (e2e)', () => {
         .set('Authorization', bearer(receptionist))
         .expect(200)
         .expect(({ body }) => expect(body.status).toBe('PENDING'));
+      await request(server)
+        .get('/api/v1/appointments/by-reference/APT-NOPE22')
+        .set('Authorization', bearer(receptionist))
+        .expect(404)
+        .expect(({ body }) => expect(body.code).toBe('REFERENCE_NOT_FOUND'));
 
       const history = await request(server)
         .get(`/api/v1/patients/${a.body.patient.id}/appointments`)

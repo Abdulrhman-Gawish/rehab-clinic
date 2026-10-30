@@ -59,11 +59,12 @@ export class DoctorTimeOffService {
 
     const qb = this.timeOff
       .createQueryBuilder('off')
+      .innerJoinAndSelect('off.createdBy', 'createdBy')
       .where('off.doctorId = :doctorId', { doctorId })
       .orderBy('off.startAt', 'ASC');
-    if (query.from)
-      qb.andWhere('off.endAt > :from', { from: isoToDate(query.from) });
-    if (query.to) qb.andWhere('off.startAt < :to', { to: isoToDate(query.to) });
+    const { start, end } = this.time.dateRange(query.from, query.to);
+    if (start) qb.andWhere('off.endAt > :start', { start });
+    if (end) qb.andWhere('off.startAt < :end', { end });
 
     return (await qb.getMany()).map((row) => this.toDto(row));
   }
@@ -178,8 +179,12 @@ export class DoctorTimeOffService {
   private async withConflicts(
     row: DoctorTimeOff,
   ): Promise<TimeOffMutationResponseDto> {
+    const withUser = await this.timeOff.findOneOrFail({
+      where: { id: row.id },
+      relations: { createdBy: true },
+    });
     return {
-      timeOff: this.toDto(row),
+      timeOff: this.toDto(withUser),
       conflictingAppointments: await this.findConflictingAppointments(row),
     };
   }

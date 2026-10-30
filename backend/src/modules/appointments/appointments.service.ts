@@ -18,7 +18,11 @@ import {
   type Paginated,
   type PaginationQueryDto,
 } from '../../common/dto/pagination.dto.js';
-import { ErrorCode, unprocessable } from '../../common/errors/app.exception.js';
+import {
+  ErrorCode,
+  notFound,
+  unprocessable,
+} from '../../common/errors/app.exception.js';
 import type {
   Actor,
   AuthenticatedUser,
@@ -252,12 +256,9 @@ export class AppointmentsService {
     user: AuthenticatedUser,
   ): Promise<Paginated<AppointmentResponseDto>> {
     const qb = await this.scopedQuery(user);
-    if (query.from)
-      qb.andWhere('appointment.startAt >= :from', {
-        from: isoToDate(query.from),
-      });
-    if (query.to)
-      qb.andWhere('appointment.startAt < :to', { to: isoToDate(query.to) });
+    const { start, end } = this.time.dateRange(query.from, query.to);
+    if (start) qb.andWhere('appointment.startAt >= :start', { start });
+    if (end) qb.andWhere('appointment.startAt < :end', { end });
     if (query.doctorId)
       qb.andWhere('appointment.doctorId = :doctorId', {
         doctorId: query.doctorId,
@@ -442,7 +443,15 @@ export class AppointmentsService {
       'appointment.referenceCode = :code',
       { code: normalizeReferenceCode(code) },
     );
-    return this.toDto(await this.oneOrNotFound(qb));
+    // A mistyped code read out on the phone is a normal answer at the desk.
+    const appointment = await qb.getOne();
+    if (!appointment) {
+      throw notFound(
+        ErrorCode.REFERENCE_NOT_FOUND,
+        'No appointment with this reference code',
+      );
+    }
+    return this.toDto(appointment);
   }
 
   async statusHistory(
@@ -452,6 +461,7 @@ export class AppointmentsService {
     await this.findOne(id, user);
     const entries = await this.history.find({
       where: { appointmentId: id },
+      relations: { changedBy: true },
       order: { changedAt: 'ASC', id: 'ASC' },
     });
     return entries.map((entry) =>
@@ -473,6 +483,12 @@ export class AppointmentsService {
     return this.paginate(qb, query);
   }
 
+  // The oldest local date the role may book into (null = no limit).
+  earliestBackdate(role: UserRole | undefined): string | null {
+    if (role === UserRole.OWNER) return null;
+    return addDays(this.time.today(), -this.backdateMaxDays);
+  }
+
   // ---------- Internals ----------
 
   /**
@@ -481,9 +497,8 @@ export class AppointmentsService {
    * BACKDATE_MAX_DAYS local days; anything older needs the OWNER.
    */
   private assertBackdateAllowed(startAt: Date, actor: Actor): void {
-    if (actor.role === UserRole.OWNER) return;
-    const earliestDate = addDays(this.time.today(), -this.backdateMaxDays);
-    if (this.time.localDate(startAt) < earliestDate) {
+    const earliestDate = this.earliestBackdate(actor.role);
+    if (earliestDate !== null && this.time.localDate(startAt) < earliestDate) {
       throw unprocessable(
         ErrorCode.BACKDATE_LIMIT_EXCEEDED,
         `Only the owner can book appointments before ${earliestDate}`,
@@ -561,7 +576,8 @@ export class AppointmentsService {
       .innerJoinAndSelect('appointment.patient', 'patient')
       .innerJoinAndSelect('appointment.doctor', 'doctor')
       .innerJoinAndSelect('doctor.user', 'doctorUser')
-      .innerJoinAndSelect('appointment.service', 'service');
+      .innerJoinAndSelect('appointment.service', 'service')
+      .leftJoinAndSelect('appointment.bookedBy', 'bookedBy');
   }
 
   // DOCTOR users only ever see their own appointments.

@@ -5,7 +5,15 @@ import type { App } from 'supertest/types.js';
 import { UserRole } from '../src/common/enums/user-role.enum.js';
 import { AuditLog } from '../src/modules/audit/entities/audit-log.entity.js';
 import { RefreshToken } from '../src/modules/auth/entities/refresh-token.entity.js';
-import { insertUser, login, TEST_PASSWORD } from './utils/auth-helpers.js';
+import {
+  bearer,
+  createLoggedInUser,
+  insertUser,
+  login,
+  TEST_PASSWORD,
+  type TestUser,
+} from './utils/auth-helpers.js';
+import { insertDoctor } from './utils/factories.js';
 import {
   createTestApp,
   resetDatabase,
@@ -43,7 +51,12 @@ describe('Auth (e2e)', () => {
         accessToken: expect.any(String),
         accessTokenExpiresIn: 900,
         refreshToken: expect.any(String),
-        user: { id: user.id, email: user.email, role: 'RECEPTIONIST' },
+        user: {
+          id: user.id,
+          email: user.email,
+          role: 'RECEPTIONIST',
+          doctorId: null,
+        },
       });
       expect(JSON.stringify(res.body)).not.toMatch(/password/i);
 
@@ -114,15 +127,26 @@ describe('Auth (e2e)', () => {
   });
 
   describe('GET /auth/me', () => {
-    it('returns the current user', async () => {
+    it('returns the current user; a doctor also gets their doctorId (login too)', async () => {
       const user = await insertUser(ctx.dataSource, UserRole.DOCTOR);
-      const { accessToken } = await login(ctx.app, user.email);
+      const doctor = await insertDoctor(ctx.dataSource, { userId: user.id });
+      const { accessToken, user: loggedIn } = (
+        await request(server)
+          .post('/api/v1/auth/login')
+          .send({ email: user.email, password: TEST_PASSWORD })
+          .expect(200)
+      ).body as { accessToken: string; user: { doctorId: string } };
+      expect(loggedIn.doctorId).toBe(doctor.id);
 
       const res = await request(server)
         .get('/api/v1/auth/me')
         .set('Authorization', `Bearer ${accessToken}`)
         .expect(200);
-      expect(res.body).toMatchObject({ id: user.id, role: 'DOCTOR' });
+      expect(res.body).toMatchObject({
+        id: user.id,
+        role: 'DOCTOR',
+        doctorId: doctor.id,
+      });
       expect(res.body).not.toHaveProperty('passwordHash');
     });
 
@@ -253,37 +277,63 @@ describe('Auth (e2e)', () => {
   });
 });
 
-describe('Login rate limiting (e2e)', () => {
+describe('Rate limiting (e2e)', () => {
   let ctx: TestApp;
+  let server: App;
 
   beforeAll(async () => {
-    // e2e runs with throttling off; switch it on for this app instance only.
+    // e2e runs with throttling off; switch it on for this app instance only,
+    // with a small default limit (login keeps its own 5/min).
     ctx = await createTestApp((builder) =>
       builder.overrideProvider(getOptionsToken()).useValue({
-        throttlers: [{ name: 'default', ttl: 60_000, limit: 1000 }],
+        throttlers: [{ name: 'default', ttl: 60_000, limit: 3 }],
       }),
     );
+    server = ctx.app.getHttpServer();
+    await resetDatabase(ctx.dataSource);
   });
 
   afterAll(async () => {
     await ctx.app.close();
   });
 
-  it('allows 5 login attempts per minute per IP, then answers 429', async () => {
-    const server = ctx.app.getHttpServer();
-    for (let attempt = 0; attempt < 5; attempt++) {
-      await request(server)
-        .post('/api/v1/auth/login')
-        .send({ email: 'nobody@test.local', password: 'wrong-pass' })
-        .expect(401);
-    }
-    const res = await request(server)
+  const tryLogin = (email: string) =>
+    request(server)
       .post('/api/v1/auth/login')
-      .send({ email: 'nobody@test.local', password: 'wrong-pass' })
-      .expect(429);
+      .send({ email, password: 'wrong-pass' });
+
+  it('login: 5 attempts per minute per email + IP, then 429; another email from the same IP still works', async () => {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await tryLogin('typo@test.local').expect(401);
+    }
+    const res = await tryLogin('typo@test.local').expect(429);
     expect(res.body).toMatchObject({
       statusCode: 429,
       error: 'Too Many Requests',
     });
+    // Same email in another case/spacing is the same account.
+    await tryLogin(' TYPO@test.local ').expect(429);
+    await tryLogin('colleague@test.local').expect(401);
+  });
+
+  it('authenticated routes count per user, not per IP', async () => {
+    const [first, second] = await Promise.all([
+      createLoggedInUser(ctx.app, ctx.dataSource, UserRole.OWNER),
+      createLoggedInUser(ctx.app, ctx.dataSource, UserRole.OWNER),
+    ]);
+    const me = (user: TestUser) =>
+      request(server).get('/api/v1/auth/me').set('Authorization', bearer(user));
+
+    for (let i = 0; i < 3; i++) await me(first).expect(200);
+    await me(first).expect(429);
+    // Same IP (the whole clinic behind one router), different user.
+    await me(second).expect(200);
+  });
+
+  it('public routes count per IP (public reads: 30/min)', async () => {
+    for (let i = 0; i < 30; i++) {
+      await request(server).get('/api/v1/public/services').expect(200);
+    }
+    await request(server).get('/api/v1/public/services').expect(429);
   });
 });

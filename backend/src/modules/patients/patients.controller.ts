@@ -30,6 +30,7 @@ import {
   CreatePatientDto,
   ListPatientsQueryDto,
   LookupPatientQueryDto,
+  PatientLookupDto,
   PatientResponseDto,
   UpdatePatientDto,
 } from './dto/patient.dto.js';
@@ -73,10 +74,12 @@ export class PatientsController {
 
   @Get('lookup')
   @Auth(...READERS)
-  @ApiOperation({ summary: 'Find the patient owning an exact phone number' })
-  @ApiOkResponse({ type: PatientResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
-  lookup(@Query() query: LookupPatientQueryDto): Promise<PatientResponseDto> {
+  @ApiOperation({
+    summary: 'Find the patient owning an exact phone number',
+    description: '`{ patient: null }` when the phone is unknown.',
+  })
+  @ApiOkResponse({ type: PatientLookupDto })
+  lookup(@Query() query: LookupPatientQueryDto): Promise<PatientLookupDto> {
     return this.patientsService.findByPhone(query.phone);
   }
 

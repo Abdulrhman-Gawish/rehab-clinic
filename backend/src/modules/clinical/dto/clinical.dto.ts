@@ -9,7 +9,11 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { Trim } from '../../../common/decorators/transform.decorators.js';
+import {
+  Trim,
+  TrimOrNull,
+} from '../../../common/decorators/transform.decorators.js';
+import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
 import {
   PaginatedResponse,
   PaginationQueryDto,
@@ -19,13 +23,13 @@ import { NoteStatus } from '../clinical.enums.js';
 
 const MAX_TEXT = 5000;
 
-// Optional clinical text: omitted = unchanged (PATCH) / empty (POST, PUT);
-// null clears it. Blank strings are rejected.
+// Optional clinical text. The PUT endpoints replace the record: a field
+// left out, null or blank (a cleared textarea) becomes null.
 const ClinicalText = (description?: string) =>
   applyDecorators(
     ApiPropertyOptional({ nullable: true, maxLength: MAX_TEXT, description }),
     IsOptional(),
-    Trim(),
+    TrimOrNull(),
     IsString(),
     Length(1, MAX_TEXT),
   );
@@ -142,12 +146,11 @@ export class MedicalInfoResponseDto {
   notes: string | null;
 
   @ApiProperty({
-    format: 'uuid',
+    type: UserRefDto,
     nullable: true,
-    type: String,
     description: 'null until the first save',
   })
-  updatedById: string | null;
+  updatedBy: UserRefDto | null;
 
   @ApiProperty({ nullable: true, type: String })
   updatedAt: string | null;
@@ -247,8 +250,8 @@ export class AttachmentResponseDto {
   @ApiProperty({ example: 182044 })
   sizeBytes: number;
 
-  @ApiProperty({ format: 'uuid' })
-  uploadedById: string;
+  @ApiProperty({ type: UserRefDto })
+  uploadedBy: UserRefDto;
 
   @ApiProperty()
   createdAt: string;

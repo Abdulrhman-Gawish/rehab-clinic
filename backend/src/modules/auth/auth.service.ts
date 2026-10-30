@@ -7,6 +7,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
+import { UserRole } from '../../common/enums/user-role.enum.js';
 import type {
   Actor,
   JwtPayload,
@@ -17,10 +18,12 @@ import {
 } from '../../common/utils/password.util.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
+import { Doctor } from '../doctors/entities/doctor.entity.js';
 import { UserResponseDto } from '../users/dto/user.dto.js';
 import { User } from '../users/entities/user.entity.js';
 import type {
   AuthTokensDto,
+  AuthUserDto,
   LoginDto,
   LoginResponseDto,
 } from './dto/auth.dto.js';
@@ -91,7 +94,7 @@ export class AuthService {
         },
         manager,
       );
-      return { ...tokens, user: UserResponseDto.fromEntity(user) };
+      return { ...tokens, user: await this.toAuthUser(user, manager) };
     });
   }
 
@@ -163,12 +166,29 @@ export class AuthService {
     }
   }
 
-  async me(actor: Actor): Promise<UserResponseDto> {
+  async me(actor: Actor): Promise<AuthUserDto> {
     const user = actor.userId
       ? await this.users.findOneBy({ id: actor.userId })
       : null;
     if (!user) throw new NotFoundException('User not found');
-    return UserResponseDto.fromEntity(user);
+    return this.toAuthUser(user, this.dataSource.manager);
+  }
+
+  private async toAuthUser(
+    user: User,
+    manager: EntityManager,
+  ): Promise<AuthUserDto> {
+    const doctor =
+      user.role === UserRole.DOCTOR
+        ? await manager.findOne(Doctor, {
+            where: { userId: user.id },
+            select: { id: true },
+          })
+        : null;
+    return {
+      ...UserResponseDto.fromEntity(user),
+      doctorId: doctor?.id ?? null,
+    };
   }
 
   private async issueTokens(

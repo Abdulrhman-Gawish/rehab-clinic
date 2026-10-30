@@ -14,8 +14,8 @@ import { IsMoney } from '../../../common/decorators/money.decorator.js';
 import {
   OptionalNotNull,
   ToBoolean,
-  Trim,
   TrimAndCollapse,
+  TrimOrNull,
 } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
 import type { ClinicService } from '../entities/clinic-service.entity.js';
@@ -29,7 +29,7 @@ export class CreateClinicServiceDto {
 
   @ApiPropertyOptional({ nullable: true, type: String, maxLength: 2000 })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(2000)
   description?: string | null;
@@ -55,7 +55,7 @@ export class UpdateClinicServiceDto {
 
   @ApiPropertyOptional({ nullable: true, type: String, maxLength: 2000 })
   @ValidateIf((_object, value) => value !== undefined && value !== null)
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(2000)
   description?: string | null;
@@ -86,7 +86,7 @@ export class ListClinicServicesQueryDto extends PaginationQueryDto {
 
   @ApiPropertyOptional({ description: 'Part of the name' })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(100)
   search?: string;

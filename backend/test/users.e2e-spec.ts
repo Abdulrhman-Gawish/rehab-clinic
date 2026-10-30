@@ -286,7 +286,7 @@ describe('Users & audit logs (e2e)', () => {
         'USER_CREATED',
       ]);
       expect(res.body.items[0]).toMatchObject({
-        userId: owner.id,
+        user: { id: owner.id, name: expect.any(String), role: 'OWNER' },
         oldValues: { name: 'Sara Mahmoud' },
         newValues: { name: 'Renamed Person' },
       });
@@ -296,7 +296,7 @@ describe('Users & audit logs (e2e)', () => {
       await login(ctx.app, owner.email);
       const res = await request(server)
         .get(
-          `/api/v1/audit-logs?userId=${owner.id}&from=2000-01-01T00:00:00Z&to=2999-01-01T00:00:00Z`,
+          `/api/v1/audit-logs?userId=${owner.id}&from=2000-01-01&to=2999-01-01`,
         )
         .set('Authorization', bearer(owner))
         .expect(200);

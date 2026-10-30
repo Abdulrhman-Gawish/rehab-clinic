@@ -8,7 +8,8 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { IsPositiveMoney } from '../../../common/decorators/money.decorator.js';
-import { Trim } from '../../../common/decorators/transform.decorators.js';
+import { TrimOrNull } from '../../../common/decorators/transform.decorators.js';
+import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
 import { DiscountType } from '../billing.enums.js';
 
 const isRepeat = (dto: ApplyDiscountDto) =>
@@ -45,7 +46,7 @@ export class ApplyDiscountDto {
   @ValidateIf(
     (dto: ApplyDiscountDto) => !isRepeat(dto) || dto.reason !== undefined,
   )
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @Length(3, 255)
   reason?: string;
@@ -58,6 +59,17 @@ export class ApplyDiscountDto {
   @IsOptional()
   @IsUUID()
   repeatFromDiscountId?: string;
+}
+
+export class LastDiscountQueryDto {
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      "Ignore this invoice's discount (the invoice being edited), so the answer is the previous one",
+  })
+  @IsOptional()
+  @IsUUID()
+  excludeInvoiceId?: string;
 }
 
 export class LastDiscountDto {
@@ -85,8 +97,8 @@ export class LastDiscountDto {
   @ApiProperty({ example: 'Regular patient' })
   reason: string;
 
-  @ApiProperty({ format: 'uuid' })
-  appliedById: string;
+  @ApiProperty({ type: UserRefDto })
+  appliedBy: UserRefDto;
 
   @ApiProperty({ example: '2026-11-01T10:00:00+02:00' })
   appliedAt: string;

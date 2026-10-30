@@ -20,7 +20,6 @@ import {
 import { ErrorCode, unprocessable } from '../../common/errors/app.exception.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
-import { isoToDate } from '../../common/time/clinic-time.util.js';
 import {
   isZeroMoney,
   lineTotal,
@@ -268,7 +267,7 @@ export class InvoicesService {
   async findOne(id: string): Promise<InvoiceDetailDto> {
     const invoice = await this.invoices.findOne({
       where: { id },
-      relations: { patient: true },
+      relations: { patient: true, issuedBy: true, cancelledBy: true },
     });
     if (!invoice) throw new NotFoundException('Invoice not found');
     const items = await this.items.find({
@@ -280,6 +279,7 @@ export class InvoicesService {
       items,
       await this.activeDiscountDto(id),
       await this.paymentsOf(id),
+      await this.isLocked(invoice, this.dataSource.manager),
       (d) => this.time.toIso(d),
     );
   }
@@ -288,12 +288,9 @@ export class InvoicesService {
     query: ListInvoicesQueryDto,
   ): Promise<Paginated<InvoiceSummaryDto>> {
     const qb = this.summaryQuery();
-    if (query.from)
-      qb.andWhere('invoice.issuedAt >= :from', {
-        from: isoToDate(query.from),
-      });
-    if (query.to)
-      qb.andWhere('invoice.issuedAt < :to', { to: isoToDate(query.to) });
+    const { start, end } = this.time.dateRange(query.from, query.to);
+    if (start) qb.andWhere('invoice.issuedAt >= :start', { start });
+    if (end) qb.andWhere('invoice.issuedAt < :end', { end });
     if (query.patientId) {
       qb.andWhere('invoice.patientId = :patientId', {
         patientId: query.patientId,
@@ -396,10 +393,12 @@ export class InvoicesService {
   private async activeDiscountDto(
     invoiceId: string,
   ): Promise<InvoiceDiscountDto | null> {
-    const discount = await this.activeDiscount(
-      invoiceId,
-      this.dataSource.manager,
-    );
+    const discount = await this.dataSource
+      .getRepository(InvoiceDiscount)
+      .findOne({
+        where: { invoiceId, removedAt: IsNull() },
+        relations: { appliedBy: true },
+      });
     return discount
       ? toInvoiceDiscount(discount, (d) => this.time.toIso(d))
       : null;
@@ -408,6 +407,7 @@ export class InvoicesService {
   private async paymentsOf(invoiceId: string): Promise<InvoicePaymentDto[]> {
     const payments = await this.dataSource.getRepository(Payment).find({
       where: { invoiceId },
+      relations: { receivedBy: true },
       order: { receivedAt: 'ASC', receiptNumber: 'ASC' },
     });
     return payments.map((payment) =>
@@ -425,17 +425,32 @@ export class InvoicesService {
     manager: EntityManager,
   ): Promise<void> {
     assertEditable(invoice);
-    const paid = await manager.getRepository(Payment).existsBy({
-      invoiceId: invoice.id,
-      type: PaymentType.PAYMENT,
-      status: PaymentStatus.VALID,
-    });
-    if (paid) {
+    if (await this.hasValidPayment(invoice, manager)) {
       throw unprocessable(
         ErrorCode.INVOICE_LOCKED,
         'The invoice has payments; items and discount can no longer change',
       );
     }
+  }
+
+  // The rule above as a flag for clients (InvoiceDetailDto.isLocked).
+  async isLocked(invoice: Invoice, manager: EntityManager): Promise<boolean> {
+    return (
+      invoice.status === InvoiceStatus.CANCELLED ||
+      !isZeroMoney(invoice.amountPaid) ||
+      (await this.hasValidPayment(invoice, manager))
+    );
+  }
+
+  private hasValidPayment(
+    invoice: Invoice,
+    manager: EntityManager,
+  ): Promise<boolean> {
+    return manager.getRepository(Payment).existsBy({
+      invoiceId: invoice.id,
+      type: PaymentType.PAYMENT,
+      status: PaymentStatus.VALID,
+    });
   }
 
   /**
@@ -664,7 +679,9 @@ export class InvoicesService {
   private summaryQuery(): SelectQueryBuilder<Invoice> {
     return this.invoices
       .createQueryBuilder('invoice')
-      .innerJoinAndSelect('invoice.patient', 'patient');
+      .innerJoinAndSelect('invoice.patient', 'patient')
+      .leftJoinAndSelect('invoice.issuedBy', 'issuedBy')
+      .leftJoinAndSelect('invoice.cancelledBy', 'cancelledBy');
   }
 
   private async paginate(

@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { toPaginated } from '../../common/dto/pagination.dto.js';
+import { UserRefDto } from '../../common/dto/user-ref.dto.js';
 import { UserRole } from '../../common/enums/user-role.enum.js';
 import { ErrorCode, unprocessable } from '../../common/errors/app.exception.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
@@ -235,7 +236,7 @@ export class ExpensesService {
   async findOne(id: string): Promise<ExpenseResponseDto> {
     const expense = await this.expenses.findOne({
       where: { id },
-      relations: { category: true },
+      relations: { category: true, createdBy: true, voidedBy: true },
     });
     if (!expense) throw new NotFoundException('Expense not found');
     return this.toDto(expense);
@@ -244,7 +245,9 @@ export class ExpensesService {
   async list(query: ListExpensesQueryDto): Promise<ExpenseListDto> {
     const qb = this.expenses
       .createQueryBuilder('expense')
-      .innerJoinAndSelect('expense.category', 'category');
+      .innerJoinAndSelect('expense.category', 'category')
+      .innerJoinAndSelect('expense.createdBy', 'createdBy')
+      .leftJoinAndSelect('expense.voidedBy', 'voidedBy');
     if (query.from)
       qb.andWhere('expense.expenseDate >= :from', { from: query.from });
     if (query.to) qb.andWhere('expense.expenseDate <= :to', { to: query.to });
@@ -405,10 +408,10 @@ export class ExpensesService {
       reference: expense.reference,
       hasReceipt: expense.receiptFileKey !== null,
       status: expense.status,
-      createdById: expense.createdById,
+      createdBy: UserRefDto.fromEntity(expense.createdBy),
       createdAt: toIso(expense.createdAt),
       voidedAt: expense.voidedAt ? toIso(expense.voidedAt) : null,
-      voidedById: expense.voidedById,
+      voidedBy: UserRefDto.fromNullable(expense.voidedBy),
       voidReason: expense.voidReason,
     };
   }

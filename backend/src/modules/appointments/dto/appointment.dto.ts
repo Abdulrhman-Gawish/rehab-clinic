@@ -13,13 +13,16 @@ import { EgyptianMobile } from '../../../common/decorators/egyptian-mobile.decor
 import {
   IsIsoWithOffset,
   IsLocalDate,
+  LocalDateFrom,
+  LocalDateTo,
 } from '../../../common/decorators/date-time.decorators.js';
 import {
   ToArray,
   Trim,
-  TrimAndCollapse,
+  TrimOrNull,
 } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
+import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
 import { NoteStatus } from '../../clinical/clinical.enums.js';
 import { PersonNameField } from '../../users/dto/user.dto.js';
 import { VisitStatus } from '../../visits/visit.enums.js';
@@ -51,7 +54,7 @@ export class CreateAppointmentDto {
     description: 'New or existing patient by phone (with phone)',
   })
   @IsOptional()
-  @TrimAndCollapse()
+  @TrimOrNull({ collapse: true })
   @IsString()
   @Length(2, 120)
   name?: string;
@@ -75,7 +78,7 @@ export class CreateAppointmentDto {
 
   @ApiPropertyOptional({ maxLength: 2000, description: 'Administrative only' })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(2000)
   notes?: string;
@@ -142,7 +145,7 @@ export class RescheduleAppointmentDto {
 
   @ApiPropertyOptional({ maxLength: 255 })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(255)
   reason?: string;
@@ -154,20 +157,10 @@ export class RescheduleAppointmentDto {
 }
 
 export class ListAppointmentsQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({
-    example: '2026-11-01T00:00:00+02:00',
-    description: 'start_at >= from',
-  })
-  @IsOptional()
-  @IsIsoWithOffset()
+  @LocalDateFrom('Starting')
   from?: string;
 
-  @ApiPropertyOptional({
-    example: '2026-12-01T00:00:00+02:00',
-    description: 'start_at < to',
-  })
-  @IsOptional()
-  @IsIsoWithOffset()
+  @LocalDateTo('Starting')
   to?: string;
 
   @ApiPropertyOptional({ format: 'uuid' })
@@ -285,8 +278,12 @@ export class AppointmentResponseDto {
   @ApiProperty({ type: AppointmentServiceDto })
   service: AppointmentServiceDto;
 
-  @ApiProperty({ format: 'uuid', nullable: true, type: String })
-  bookedById: string | null;
+  @ApiProperty({
+    type: UserRefDto,
+    nullable: true,
+    description: 'null for online bookings',
+  })
+  bookedBy: UserRefDto | null;
 
   @ApiProperty({ format: 'uuid', nullable: true, type: String })
   rescheduledFromId: string | null;
@@ -311,8 +308,12 @@ export class StatusHistoryEntryDto {
   @ApiProperty({ enum: AppointmentStatus })
   toStatus: AppointmentStatus;
 
-  @ApiProperty({ format: 'uuid', nullable: true, type: String })
-  changedById: string | null;
+  @ApiProperty({
+    type: UserRefDto,
+    nullable: true,
+    description: 'null for online (public) actions',
+  })
+  changedBy: UserRefDto | null;
 
   @ApiProperty({ nullable: true, type: String })
   reason: string | null;

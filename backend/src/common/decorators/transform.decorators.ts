@@ -19,6 +19,16 @@ export const Trim = () =>
     typeof value === 'string' ? value.trim() : value,
   );
 
+// Optional text: trimmed, and a blank string becomes null, so clearing a
+// textarea clears the field. `collapse` also collapses inner whitespace.
+// Use on every optional (nullable) text field, with @IsOptional().
+export const TrimOrNull = ({ collapse = false } = {}) =>
+  Transform(({ value }: { value: unknown }) => {
+    if (typeof value !== 'string') return value;
+    const text = collapse ? normalizePersonName(value) : value.trim();
+    return text === '' ? null : text;
+  });
+
 export const ToLowerCaseTrimmed = () =>
   Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,

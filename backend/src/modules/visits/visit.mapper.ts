@@ -5,6 +5,7 @@ import type {
 } from './dto/visit.dto.js';
 import type { VisitStatusHistory } from './entities/visit-status-history.entity.js';
 import type { Visit } from './entities/visit.entity.js';
+import { UserRefDto } from '../../common/dto/user-ref.dto.js';
 import type { NoteStatus } from '../clinical/clinical.enums.js';
 
 type ToIso = (instant: Date) => string;
@@ -28,7 +29,8 @@ function refs(visit: Visit) {
 const isoOrNull = (instant: Date | null, toIso: ToIso) =>
   instant ? toIso(instant) : null;
 
-// Requires patient, doctor.user, service (and appointment, if any) loaded.
+// Requires patient, doctor.user, service, attendedBy, voidedBy (and the
+// appointment, if any) loaded.
 export function toVisitResponse(visit: Visit, toIso: ToIso): VisitResponseDto {
   return {
     id: visit.id,
@@ -39,9 +41,9 @@ export function toVisitResponse(visit: Visit, toIso: ToIso): VisitResponseDto {
     appointmentStartAt: isoOrNull(visit.appointment?.startAt ?? null, toIso),
     ...refs(visit),
     attendedAt: toIso(visit.attendedAt),
-    attendedById: visit.attendedById,
+    attendedBy: UserRefDto.fromEntity(visit.attendedBy),
     voidedAt: isoOrNull(visit.voidedAt, toIso),
-    voidedById: visit.voidedById,
+    voidedBy: UserRefDto.fromNullable(visit.voidedBy),
     voidReason: visit.voidReason,
     createdAt: visit.createdAt,
     updatedAt: visit.updatedAt,
@@ -65,6 +67,7 @@ export function toQueueEntry(
   };
 }
 
+// Requires `changedBy` to be loaded.
 export function toVisitHistoryEntry(
   entry: VisitStatusHistory,
   toIso: ToIso,
@@ -72,7 +75,7 @@ export function toVisitHistoryEntry(
   return {
     fromStatus: entry.fromStatus,
     toStatus: entry.toStatus,
-    changedById: entry.changedById,
+    changedBy: UserRefDto.fromEntity(entry.changedBy),
     reason: entry.reason,
     changedAt: toIso(entry.changedAt),
   };

@@ -9,11 +9,13 @@ import type { InvoiceDiscount } from './entities/invoice-discount.entity.js';
 import type { InvoiceItem } from './entities/invoice-item.entity.js';
 import type { Payment } from './entities/payment.entity.js';
 import type { Invoice } from './entities/invoice.entity.js';
-import { subMoney } from '../../common/utils/money.util.js';
+import { UserRefDto } from '../../common/dto/user-ref.dto.js';
+import { isZeroMoney, subMoney } from '../../common/utils/money.util.js';
+import { InvoiceStatus } from './billing.enums.js';
 
 type ToIso = (instant: Date) => string;
 
-// Requires `patient` to be loaded.
+// Requires `patient`, `issuedBy` and `cancelledBy` to be loaded.
 export function toInvoiceSummary(
   invoice: Invoice,
   toIso: ToIso,
@@ -32,10 +34,10 @@ export function toInvoiceSummary(
     amountPaid: invoice.amountPaid,
     balance: subMoney(invoice.total, invoice.amountPaid),
     notes: invoice.notes,
-    issuedById: invoice.issuedById,
+    issuedBy: UserRefDto.fromNullable(invoice.issuedBy),
     issuedAt: toIso(invoice.issuedAt),
     cancelledAt: invoice.cancelledAt ? toIso(invoice.cancelledAt) : null,
-    cancelledById: invoice.cancelledById,
+    cancelledBy: UserRefDto.fromNullable(invoice.cancelledBy),
     cancelReason: invoice.cancelReason,
   };
 }
@@ -51,6 +53,7 @@ export function toInvoiceItem(item: InvoiceItem): InvoiceItemDto {
   };
 }
 
+// Requires `appliedBy` to be loaded.
 export function toInvoiceDiscount(
   discount: InvoiceDiscount,
   toIso: ToIso,
@@ -62,11 +65,12 @@ export function toInvoiceDiscount(
     amount: discount.amount,
     reason: discount.reason,
     repeatedFromId: discount.repeatedFromId,
-    appliedById: discount.appliedById,
+    appliedBy: UserRefDto.fromEntity(discount.appliedBy),
     appliedAt: toIso(discount.appliedAt),
   };
 }
 
+// Requires `receivedBy` to be loaded.
 export function toInvoicePayment(
   payment: Payment,
   toIso: ToIso,
@@ -80,20 +84,26 @@ export function toInvoicePayment(
     method: payment.method,
     reference: payment.reference,
     refundOfId: payment.refundOfId,
-    receivedById: payment.receivedById,
+    receivedBy: UserRefDto.fromEntity(payment.receivedBy),
     receivedAt: toIso(payment.receivedAt),
   };
 }
 
+// `isLocked`: see InvoicesService.isLocked (the one definition of the rule).
 export function toInvoiceDetail(
   invoice: Invoice,
   items: InvoiceItem[],
   discount: InvoiceDiscountDto | null,
   payments: InvoicePaymentDto[],
+  isLocked: boolean,
   toIso: ToIso,
 ): InvoiceDetailDto {
   return {
     ...toInvoiceSummary(invoice, toIso),
+    isLocked,
+    canCancel:
+      invoice.status !== InvoiceStatus.CANCELLED &&
+      isZeroMoney(invoice.amountPaid),
     items: items.map(toInvoiceItem),
     discount,
     payments,

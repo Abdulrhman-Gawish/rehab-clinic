@@ -80,7 +80,7 @@ export class AppointmentsController {
   @ApiOperation({
     summary: 'Free slots of a doctor for a service on a local date',
     description:
-      'Doctors may query only themselves. includeOutsideSchedule is honoured for OWNER/RECEPTIONIST only.',
+      'Doctors may query only themselves. includeOutsideSchedule is honoured for OWNER/RECEPTIONIST only, and then also allows past dates and times (RECEPTIONIST: back to BACKDATE_MAX_DAYS).',
   })
   @ApiOkResponse({ type: [SlotDto] })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
@@ -101,6 +101,7 @@ export class AppointmentsController {
         includeOutsideSchedule:
           user.role !== UserRole.DOCTOR &&
           (query.includeOutsideSchedule ?? false),
+        earliestDate: this.appointments.earliestBackdate(user.role),
       },
     );
   }
@@ -123,7 +124,10 @@ export class AppointmentsController {
   @Get('by-reference/:code')
   @Auth(...STAFF)
   @ApiOkResponse({ type: AppointmentResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  @ApiNotFoundResponse({
+    type: ErrorResponseDto,
+    description: 'REFERENCE_NOT_FOUND',
+  })
   byReference(
     @Param('code') code: string,
     @CurrentUser() user: AuthenticatedUser,

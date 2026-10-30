@@ -9,18 +9,23 @@ import {
   MaxLength,
   ValidateIf,
 } from 'class-validator';
-import { IsLocalDate } from '../../../common/decorators/date-time.decorators.js';
+import {
+  IsLocalDate,
+  LocalDateFrom,
+  LocalDateTo,
+} from '../../../common/decorators/date-time.decorators.js';
 import { IsPositiveMoney } from '../../../common/decorators/money.decorator.js';
 import {
   OptionalNotNull,
   ToBoolean,
-  Trim,
   TrimAndCollapse,
+  TrimOrNull,
 } from '../../../common/decorators/transform.decorators.js';
 import {
   PaginationMetaDto,
   PaginationQueryDto,
 } from '../../../common/dto/pagination.dto.js';
+import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
 import { PaymentMethod } from '../../billing/billing.enums.js';
 import { ExpenseStatus } from '../entities/expense.entity.js';
 
@@ -56,7 +61,7 @@ export class CreateExpenseDto {
 
   @ApiPropertyOptional({ example: 'Corner shop', maxLength: 120 })
   @IsOptional()
-  @TrimAndCollapse()
+  @TrimOrNull({ collapse: true })
   @IsString()
   @MaxLength(120)
   vendorName?: string;
@@ -67,7 +72,7 @@ export class CreateExpenseDto {
 
   @ApiPropertyOptional({ example: 'INV-778', maxLength: 100 })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(100)
   reference?: string;
@@ -98,7 +103,7 @@ export class UpdateExpenseDto {
 
   @ApiPropertyOptional({ nullable: true, type: String, maxLength: 120 })
   @NullableOptional()
-  @TrimAndCollapse()
+  @TrimOrNull({ collapse: true })
   @IsString()
   @MaxLength(120)
   vendorName?: string | null;
@@ -110,27 +115,17 @@ export class UpdateExpenseDto {
 
   @ApiPropertyOptional({ nullable: true, type: String, maxLength: 100 })
   @NullableOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(100)
   reference?: string | null;
 }
 
 export class ListExpensesQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({
-    example: '2026-11-01',
-    description: 'expense_date >= from (local date)',
-  })
-  @IsOptional()
-  @IsLocalDate()
+  @LocalDateFrom('Dated')
   from?: string;
 
-  @ApiPropertyOptional({
-    example: '2026-11-30',
-    description: 'expense_date <= to (local date)',
-  })
-  @IsOptional()
-  @IsLocalDate()
+  @LocalDateTo('Dated')
   to?: string;
 
   @ApiPropertyOptional({ format: 'uuid' })
@@ -219,8 +214,8 @@ export class ExpenseResponseDto {
   @ApiProperty({ enum: ExpenseStatus })
   status: ExpenseStatus;
 
-  @ApiProperty({ format: 'uuid' })
-  createdById: string;
+  @ApiProperty({ type: UserRefDto })
+  createdBy: UserRefDto;
 
   @ApiProperty({ example: '2026-11-03T09:00:00+02:00' })
   createdAt: string;
@@ -228,8 +223,8 @@ export class ExpenseResponseDto {
   @ApiProperty({ nullable: true, type: String })
   voidedAt: string | null;
 
-  @ApiProperty({ format: 'uuid', nullable: true, type: String })
-  voidedById: string | null;
+  @ApiProperty({ type: UserRefDto, nullable: true })
+  voidedBy: UserRefDto | null;
 
   @ApiProperty({ nullable: true, type: String })
   voidReason: string | null;
