@@ -1,11 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, MaxLength, ValidateIf } from 'class-validator';
-import { IsIsoWithOffset } from '../../../common/decorators/date-time.decorators.js';
+import {
+  IsIsoWithOffset,
+  LocalDateFrom,
+  LocalDateTo,
+} from '../../../common/decorators/date-time.decorators.js';
 import {
   OptionalNotNull,
-  Trim,
+  TrimOrNull,
 } from '../../../common/decorators/transform.decorators.js';
 import { AppointmentSummaryDto } from '../../appointments/dto/appointment-summary.dto.js';
+import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
 import type { DoctorTimeOff } from '../entities/doctor-time-off.entity.js';
 
 const AT_DOC = (example: string) => ({
@@ -24,7 +29,7 @@ export class CreateTimeOffDto {
 
   @ApiPropertyOptional({ nullable: true, type: String, maxLength: 255 })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(255)
   reason?: string | null;
@@ -43,21 +48,17 @@ export class UpdateTimeOffDto {
 
   @ApiPropertyOptional({ nullable: true, type: String, maxLength: 255 })
   @ValidateIf((_object, value) => value !== undefined && value !== null)
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(255)
   reason?: string | null;
 }
 
 export class ListTimeOffQueryDto {
-  @ApiPropertyOptional(AT_DOC('2026-11-01T00:00:00+02:00'))
-  @IsOptional()
-  @IsIsoWithOffset()
+  @LocalDateFrom('Overlapping days')
   from?: string;
 
-  @ApiPropertyOptional(AT_DOC('2026-12-01T00:00:00+02:00'))
-  @IsOptional()
-  @IsIsoWithOffset()
+  @LocalDateTo('Overlapping days')
   to?: string;
 }
 
@@ -77,8 +78,8 @@ export class TimeOffResponseDto {
   @ApiProperty({ nullable: true, type: String })
   reason: string | null;
 
-  @ApiProperty({ format: 'uuid' })
-  createdById: string;
+  @ApiProperty({ type: UserRefDto })
+  createdBy: UserRefDto;
 
   @ApiProperty()
   createdAt: Date;
@@ -93,7 +94,7 @@ export class TimeOffResponseDto {
       startAt: toIso(timeOff.startAt),
       endAt: toIso(timeOff.endAt),
       reason: timeOff.reason,
-      createdById: timeOff.createdById,
+      createdBy: UserRefDto.fromEntity(timeOff.createdBy),
       createdAt: timeOff.createdAt,
     };
   }

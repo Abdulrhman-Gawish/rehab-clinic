@@ -1,12 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEnum, IsOptional, IsString, IsUUID, Length } from 'class-validator';
 import {
-  IsIsoWithOffset,
   IsLocalDate,
+  LocalDateFrom,
+  LocalDateTo,
 } from '../../../common/decorators/date-time.decorators.js';
 import { IsPositiveMoney } from '../../../common/decorators/money.decorator.js';
-import { Trim } from '../../../common/decorators/transform.decorators.js';
+import {
+  Trim,
+  TrimOrNull,
+} from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
+import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
 import {
   DiscountType,
   PaymentMethod,
@@ -37,7 +42,7 @@ export class RecordPaymentDto {
       'Optional free text for any method (never validated against anything)',
   })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @Length(1, 100)
   reference?: string;
@@ -68,20 +73,10 @@ export class RefundPaymentDto {
 }
 
 export class ListPaymentsQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({
-    example: '2026-11-01T00:00:00+02:00',
-    description: 'received_at >= from',
-  })
-  @IsOptional()
-  @IsIsoWithOffset()
+  @LocalDateFrom('Received')
   from?: string;
 
-  @ApiPropertyOptional({
-    example: '2026-12-01T00:00:00+02:00',
-    description: 'received_at < to',
-  })
-  @IsOptional()
-  @IsIsoWithOffset()
+  @LocalDateTo('Received')
   to?: string;
 
   @ApiPropertyOptional({ enum: PaymentMethod })
@@ -180,8 +175,8 @@ export class PaymentResponseDto {
   })
   invoice: PaymentInvoiceStateDto;
 
-  @ApiProperty({ format: 'uuid' })
-  receivedById: string;
+  @ApiProperty({ type: UserRefDto })
+  receivedBy: UserRefDto;
 
   @ApiProperty({ example: '2026-11-05T10:05:00+02:00' })
   receivedAt: string;
@@ -189,8 +184,8 @@ export class PaymentResponseDto {
   @ApiProperty({ nullable: true, type: String })
   voidedAt: string | null;
 
-  @ApiProperty({ format: 'uuid', nullable: true, type: String })
-  voidedById: string | null;
+  @ApiProperty({ type: UserRefDto, nullable: true })
+  voidedBy: UserRefDto | null;
 
   @ApiProperty({ nullable: true, type: String })
   voidReason: string | null;
@@ -383,9 +378,9 @@ export class AttentionDto {
 
   @ApiProperty({
     type: [InvoiceSummaryDto],
-    description: 'Invoices of CANCELLED visits that still hold money',
+    description: 'Invoices of VOIDED visits that still hold money',
   })
-  cancelledVisitsWithPayments: InvoiceSummaryDto[];
+  voidedVisitsWithPayments: InvoiceSummaryDto[];
 
   @ApiProperty({
     type: [InvoiceSummaryDto],

@@ -36,6 +36,7 @@ import type {
   AuthenticatedUser,
 } from '../../common/interfaces/authenticated-request.interface.js';
 import {
+  AttendResponseDto,
   ListVisitsQueryDto,
   QueueEntryDto,
   QueueQueryDto,
@@ -48,11 +49,11 @@ import { VisitsService } from './visits.service.js';
 
 const STAFF = [UserRole.OWNER, UserRole.RECEPTIONIST, UserRole.DOCTOR];
 const DESK = [UserRole.OWNER, UserRole.RECEPTIONIST];
-const CLINICIANS = [UserRole.OWNER, UserRole.DOCTOR];
 
-const TRANSITION_ERROR = {
+const UNDO_ERRORS = {
   type: ErrorResponseDto,
-  description: 'INVALID_VISIT_TRANSITION',
+  description:
+    'UNDO_WRONG_DAY, VISIT_HAS_NOTE, INVOICE_HAS_PAYMENTS, VISIT_VOIDED or INVALID_STATUS_TRANSITION',
 };
 
 // Doctors only see/act on their own visits; others' are 404.
@@ -69,14 +70,10 @@ export class VisitsController {
   @ApiOperation({
     summary: 'Register a walk-in (visit without appointment)',
     description:
-      'patientId OR name + phone (find-or-create). Walk-ins do not block booking slots.',
+      'patientId OR name + phone (find-or-create). Attended now; the invoice is created in the same transaction (invoiceId). Walk-ins do not block booking slots.',
   })
-  @ApiCreatedResponse({ type: VisitResponseDto })
+  @ApiCreatedResponse({ type: AttendResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
-  @ApiConflictResponse({
-    type: ErrorResponseDto,
-    description: 'PATIENT_HAS_OPEN_VISIT',
-  })
   @ApiUnprocessableEntityResponse({
     type: ErrorResponseDto,
     description: 'SERVICE_NOT_OFFERED',
@@ -84,15 +81,14 @@ export class VisitsController {
   walkIn(
     @Body() dto: WalkInDto,
     @CurrentActor() actor: Actor,
-  ): Promise<VisitResponseDto> {
+  ): Promise<AttendResponseDto> {
     return this.visits.walkIn(dto, actor);
   }
 
   @Get('queue')
   @Auth(...STAFF)
   @ApiOperation({
-    summary:
-      "The day's waiting room: WAITING and IN_SESSION visits by check-in time",
+    summary: "The day's ACTIVE visits, in the order they attended",
   })
   @ApiOkResponse({ type: [QueueEntryDto] })
   queue(
@@ -102,20 +98,9 @@ export class VisitsController {
     return this.visits.queue(query, user);
   }
 
-  @Get('open')
-  @Auth(...DESK)
-  @ApiOperation({
-    summary:
-      'Visits still WAITING/IN_SESSION from previous days (forgotten ones)',
-  })
-  @ApiOkResponse({ type: [VisitResponseDto] })
-  open(): Promise<VisitResponseDto[]> {
-    return this.visits.openFromPreviousDays();
-  }
-
   @Get()
   @Auth(...STAFF)
-  @ApiOperation({ summary: 'Search visits (newest check-in first)' })
+  @ApiOperation({ summary: 'Search visits (newest first)' })
   @ApiOkResponse({ type: PaginatedResponse(VisitResponseDto) })
   list(
     @Query() query: ListVisitsQueryDto,
@@ -146,114 +131,73 @@ export class VisitsController {
     return this.visits.statusHistory(id, user);
   }
 
-  @Post(':id/undo-check-in')
+  @Post(':id/undo-attend')
   @Auth(...DESK)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Checked in by mistake (WAITING only)',
-    description: 'Visit -> CANCELLED; the appointment goes back to CONFIRMED.',
-  })
-  @ApiOkResponse({ type: VisitResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
-  @ApiUnprocessableEntityResponse(TRANSITION_ERROR)
-  undoCheckIn(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: VisitReasonDto,
-    @CurrentActor() actor: Actor,
-  ): Promise<VisitResponseDto> {
-    return this.visits.undoCheckIn(id, dto.reason, actor);
-  }
-
-  @Post(':id/cancel')
-  @Auth(...DESK)
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Patient left before being seen (WAITING only)',
-    description: 'Visit and its appointment -> CANCELLED with the same reason.',
-  })
-  @ApiOkResponse({ type: VisitResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
-  @ApiUnprocessableEntityResponse(TRANSITION_ERROR)
-  cancel(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: VisitReasonDto,
-    @CurrentActor() actor: Actor,
-  ): Promise<VisitResponseDto> {
-    return this.visits.cancel(id, dto.reason, actor);
-  }
-
-  @Post(':id/start')
-  @Auth(...CLINICIANS)
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: "WAITING -> IN_SESSION (the visit's doctor or OWNER)",
-  })
-  @ApiOkResponse({ type: VisitResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
-  @ApiConflictResponse({
-    type: ErrorResponseDto,
-    description: 'DOCTOR_ALREADY_IN_SESSION',
-  })
-  @ApiUnprocessableEntityResponse(TRANSITION_ERROR)
-  start(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthenticatedUser,
-    @CurrentActor() actor: Actor,
-  ): Promise<VisitResponseDto> {
-    return this.visits.start(id, user, actor);
-  }
-
-  @Post(':id/complete')
-  @Auth(...CLINICIANS)
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: "IN_SESSION -> COMPLETED (the visit's doctor or OWNER)",
+    summary: 'Undo an attendance through its visit (the way to undo a walk-in)',
     description:
-      'The linked appointment becomes COMPLETED in the same transaction.',
+      'Same day only, no note, nothing paid. Visit -> VOIDED and its invoice CANCELLED; for an appointment visit the appointment goes back to CONFIRMED.',
   })
   @ApiOkResponse({ type: VisitResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
-  @ApiUnprocessableEntityResponse({
-    type: ErrorResponseDto,
-    description: 'INVALID_VISIT_TRANSITION or VISIT_COMPLETION_BLOCKED',
-  })
-  complete(
+  @ApiUnprocessableEntityResponse(UNDO_ERRORS)
+  undoAttend(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: VisitReasonDto,
     @CurrentActor() actor: Actor,
   ): Promise<VisitResponseDto> {
-    return this.visits.complete(id, user, actor);
+    return this.visits.undoVisit(id, dto.reason, actor);
   }
 }
 
 @ApiTags('Visits')
 @Controller('appointments')
-export class CheckInController {
+@ApiBadRequestResponse({ type: ErrorResponseDto })
+export class AttendController {
   constructor(private readonly visits: VisitsService) {}
 
-  @Post(':id/check-in')
+  @Post(':id/attend')
   @Auth(...DESK)
   @ApiOperation({
-    summary: 'Check in an appointment (creates the WAITING visit)',
+    summary: 'The patient entered the doctor (PENDING/CONFIRMED -> ATTENDED)',
     description:
-      "Only on the appointment's local date. A PENDING booking is confirmed on the way (two history rows).",
+      "Only on the appointment's local date. Creates the ACTIVE visit and its invoice in one transaction; the response includes invoiceId.",
   })
-  @ApiCreatedResponse({ type: VisitResponseDto })
-  @ApiBadRequestResponse({ type: ErrorResponseDto })
+  @ApiCreatedResponse({ type: AttendResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
   @ApiConflictResponse({
     type: ErrorResponseDto,
-    description: 'ALREADY_CHECKED_IN or PATIENT_HAS_OPEN_VISIT',
+    description: 'ALREADY_ATTENDED',
   })
   @ApiUnprocessableEntityResponse({
     type: ErrorResponseDto,
-    description: 'CHECK_IN_WRONG_DAY or INVALID_STATUS_TRANSITION',
+    description: 'ATTEND_WRONG_DAY or INVALID_STATUS_TRANSITION',
   })
-  checkIn(
+  attend(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentActor() actor: Actor,
+  ): Promise<AttendResponseDto> {
+    return this.visits.attend(id, actor);
+  }
+
+  @Post(':id/undo-attend')
+  @Auth(...DESK)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Attended by mistake (ATTENDED -> CONFIRMED)',
+    description:
+      'Same local day only, and only while the doctor has no note and the invoice has no payments. The visit is VOIDED and its invoice CANCELLED.',
+  })
+  @ApiOkResponse({ type: VisitResponseDto })
+  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  @ApiUnprocessableEntityResponse(UNDO_ERRORS)
+  undoAttend(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: VisitReasonDto,
+    @CurrentActor() actor: Actor,
   ): Promise<VisitResponseDto> {
-    return this.visits.checkIn(id, actor);
+    return this.visits.undoAttend(id, dto.reason, actor);
   }
 }
 

@@ -36,7 +36,7 @@ const EXPENSE_KEYS = [
   'amount',
   'category',
   'createdAt',
-  'createdById',
+  'createdBy',
   'description',
   'expenseDate',
   'expenseNumber',
@@ -48,7 +48,7 @@ const EXPENSE_KEYS = [
   'vendorName',
   'voidReason',
   'voidedAt',
-  'voidedById',
+  'voidedBy',
 ];
 
 describe('Expenses (e2e)', () => {
@@ -127,7 +127,7 @@ describe('Expenses (e2e)', () => {
         reference: null,
         hasReceipt: false,
         status: 'VALID',
-        createdById: receptionist.id,
+        createdBy: { id: receptionist.id, name: expect.any(String) },
         createdAt: '2026-11-03T09:00:00+02:00',
       });
       const second = await create().expect(201);
@@ -227,7 +227,7 @@ describe('Expenses (e2e)', () => {
       expect(voided.body).toMatchObject({
         status: 'VOIDED',
         voidReason: 'Entered twice',
-        voidedById: receptionist.id,
+        voidedBy: { id: receptionist.id, name: expect.any(String) },
         voidedAt: '2026-11-03T09:00:00+02:00',
       });
       await request(server)

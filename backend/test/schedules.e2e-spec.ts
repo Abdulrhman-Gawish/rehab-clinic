@@ -243,7 +243,7 @@ describe('Doctor schedules & time off (e2e)', () => {
           startAt: '2026-11-10T09:00:00+02:00',
           endAt: '2026-11-10T17:00:00+02:00',
           reason: 'Conference',
-          createdById: receptionist.id,
+          createdBy: { id: receptionist.id, name: expect.any(String) },
         }),
         conflictingAppointments: [],
       });
@@ -283,7 +283,7 @@ describe('Doctor schedules & time off (e2e)', () => {
 
       const november = await request(server)
         .get(
-          `/api/v1/doctors/${doctorId}/time-off?from=${encodeURIComponent('2026-11-01T00:00:00+02:00')}&to=${encodeURIComponent('2026-12-01T00:00:00+02:00')}`,
+          `/api/v1/doctors/${doctorId}/time-off?from=2026-11-01&to=2026-11-30`,
         )
         .set('Authorization', bearer(doctorUser))
         .expect(200);

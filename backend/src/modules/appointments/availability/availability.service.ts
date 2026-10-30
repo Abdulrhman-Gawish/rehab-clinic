@@ -34,7 +34,10 @@ export interface SlotQueryOptions {
   // Public website: the doctor must also be listed publicly.
   publicOnly?: boolean;
   // Reception: whole local day, ignoring schedule, time off and lead time.
+  // Past dates and times are included too, back to `earliestDate` (the
+  // backdate limit; null = no limit, for the OWNER).
   includeOutsideSchedule?: boolean;
+  earliestDate?: string | null;
 }
 
 /**
@@ -70,10 +73,13 @@ export class AvailabilityService {
       options,
       manager,
     );
-    this.assertDateInRange(date);
+    const outside = options.includeOutsideSchedule ?? false;
+    this.assertDateInRange(
+      date,
+      outside ? (options.earliestDate ?? null) : undefined,
+    );
 
     const day = this.time.dayBounds(date);
-    const outside = options.includeOutsideSchedule ?? false;
     const windows = outside
       ? [day]
       : await this.windowsFor(doctorId, date, manager);
@@ -85,7 +91,8 @@ export class AvailabilityService {
       durationMinutes: context.service.durationMinutes,
       intervalMinutes: this.intervalMinutes,
       blocked,
-      notBefore: outside ? this.time.now() : this.earliestStart(),
+      // Outside the schedule, past times can be recorded after the fact.
+      notBefore: outside ? day.start : this.earliestStart(),
     });
     return slots.map((slot) => ({
       startAt: this.time.toIso(slot.start),
@@ -130,15 +137,20 @@ export class AvailabilityService {
     return { doctor, service: assignment.service };
   }
 
-  // Local dates from today up to today + BOOKING_MAX_DAYS_AHEAD.
-  assertDateInRange(date: string): void {
-    const today = this.time.today();
-    const last = addDays(today, this.maxDaysAhead);
-    if (date < today || date > last) {
+  // Local dates from `earliest` (default today; null = no lower limit) up
+  // to today + BOOKING_MAX_DAYS_AHEAD.
+  assertDateInRange(
+    date: string,
+    earliest: string | null = this.time.today(),
+  ): void {
+    const last = addDays(this.time.today(), this.maxDaysAhead);
+    if ((earliest !== null && date < earliest) || date > last) {
       throw unprocessable(
         ErrorCode.DATE_OUT_OF_RANGE,
-        `Date must be between ${today} and ${last}`,
-        { from: today, to: last },
+        earliest === null
+          ? `Date must be at most ${last}`
+          : `Date must be between ${earliest} and ${last}`,
+        { from: earliest, to: last },
       );
     }
   }

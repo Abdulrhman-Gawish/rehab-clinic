@@ -1,6 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { IsEnum, IsOptional, IsUUID } from 'class-validator';
+import {
+  LocalDateFrom,
+  LocalDateTo,
+} from '../../../common/decorators/date-time.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
+import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
+import { UserRole } from '../../../common/enums/user-role.enum.js';
 import { AuditAction, AuditEntityType } from '../audit.constants.js';
 import type { AuditLog, AuditValues } from '../entities/audit-log.entity.js';
 
@@ -27,36 +33,30 @@ export class ListAuditLogsQueryDto extends PaginationQueryDto {
   @IsEnum(AuditAction)
   action?: AuditAction;
 
-  @ApiPropertyOptional({
-    description: 'Inclusive lower bound (ISO 8601)',
-    example: '2026-01-01T00:00:00Z',
-  })
-  @IsOptional()
-  @IsDateString({ strict: true })
+  @LocalDateFrom('Logged')
   from?: string;
 
-  @ApiPropertyOptional({
-    description: 'Inclusive upper bound (ISO 8601)',
-    example: '2026-01-31T23:59:59Z',
-  })
-  @IsOptional()
-  @IsDateString({ strict: true })
+  @LocalDateTo('Logged')
   to?: string;
 }
 
 // ---------- Outputs ----------
+
+export class AuditUserDto extends UserRefDto {
+  @ApiProperty({ enum: UserRole, enumName: 'UserRole' })
+  role: UserRole;
+}
 
 export class AuditLogResponseDto {
   @ApiProperty({ format: 'uuid' })
   id: string;
 
   @ApiProperty({
-    format: 'uuid',
+    type: AuditUserDto,
     nullable: true,
-    type: String,
     description: 'Acting user; null for public/system actions',
   })
-  userId: string | null;
+  user: AuditUserDto | null;
 
   @ApiProperty({ example: 'PATIENT_UPDATED' })
   action: string;
@@ -89,10 +89,13 @@ export class AuditLogResponseDto {
   @ApiProperty()
   createdAt: Date;
 
+  // Requires `user` to be loaded.
   static fromEntity(this: void, log: AuditLog): AuditLogResponseDto {
     return {
       id: log.id,
-      userId: log.userId,
+      user: log.user
+        ? { id: log.user.id, name: log.user.name, role: log.user.role }
+        : null,
       action: log.action,
       entityType: log.entityType,
       entityId: log.entityId,

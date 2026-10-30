@@ -15,44 +15,26 @@ import { Patient } from '../../patients/entities/patient.entity.js';
 import { User } from '../../users/entities/user.entity.js';
 import { VisitStatus } from '../visit.enums.js';
 
-export const VISIT_APPOINTMENT_UNIQUE = 'uq_visits_appointment_live';
-export const VISIT_PATIENT_OPEN_UNIQUE = 'uq_visits_patient_open';
-export const VISIT_DOCTOR_IN_SESSION_UNIQUE = 'uq_visits_doctor_in_session';
+export const VISIT_APPOINTMENT_UNIQUE = 'uq_visits_appointment_active';
 
 /**
- * What actually happened when the patient came. Created by check-in (from an
- * appointment) or as a walk-in (appointment_id NULL). Walk-ins never block
- * booking slots. The partial unique indexes are the real guarantees.
+ * The patient attended: created by reception from an appointment ("attend")
+ * or as a walk-in (appointment_id NULL), together with its invoice. Walk-ins
+ * never block booking slots. Undoing an attendance voids the visit.
  */
 @Entity('visits')
-@Index('idx_visits_doctor_checked_in', ['doctorId', 'checkedInAt'])
-@Index('idx_visits_patient_checked_in', ['patientId', 'checkedInAt'])
+@Index('idx_visits_doctor_attended', ['doctorId', 'attendedAt'])
+@Index('idx_visits_patient_attended', ['patientId', 'attendedAt'])
 @Index('idx_visits_status', ['status'])
-// One live visit per appointment. A CANCELLED one (undo check-in) doesn't
-// count, so the appointment can be checked in again.
+// One ACTIVE visit per appointment. A VOIDED one (undo attend) doesn't
+// count, so the appointment can attend again.
 @Index(VISIT_APPOINTMENT_UNIQUE, ['appointmentId'], {
   unique: true,
-  where: `"status" <> 'CANCELLED'`,
-})
-@Index(VISIT_PATIENT_OPEN_UNIQUE, ['patientId'], {
-  unique: true,
-  where: `"status" IN ('WAITING', 'IN_SESSION')`,
-})
-@Index(VISIT_DOCTOR_IN_SESSION_UNIQUE, ['doctorId'], {
-  unique: true,
-  where: `"status" = 'IN_SESSION'`,
+  where: `"status" = 'ACTIVE'`,
 })
 @Check(
-  'chk_visits_in_session_started',
-  `"status" <> 'IN_SESSION' OR "started_at" IS NOT NULL`,
-)
-@Check(
-  'chk_visits_completed_times',
-  `"status" <> 'COMPLETED' OR ("started_at" IS NOT NULL AND "completed_at" IS NOT NULL AND "completed_at" >= "started_at")`,
-)
-@Check(
-  'chk_visits_cancelled_reason',
-  `"status" <> 'CANCELLED' OR ("cancelled_at" IS NOT NULL AND "cancel_reason" IS NOT NULL)`,
+  'chk_visits_voided',
+  `"status" <> 'VOIDED' OR ("voided_at" IS NOT NULL AND "void_reason" IS NOT NULL)`,
 )
 export class Visit extends BaseEntity {
   // NULL = walk-in.
@@ -77,7 +59,7 @@ export class Visit extends BaseEntity {
   @JoinColumn({ foreignKeyConstraintName: 'fk_visits_doctor' })
   doctor?: Relation<Doctor>;
 
-  // Needed for walk-ins and for billing later.
+  // Needed for walk-ins and for billing.
   @Column({ type: 'uuid' })
   serviceId: string;
 
@@ -89,47 +71,31 @@ export class Visit extends BaseEntity {
   status: VisitStatus;
 
   @Column({ type: 'timestamptz' })
-  checkedInAt: Date;
+  attendedAt: Date;
 
-  @Column({ type: 'uuid', name: 'checked_in_by' })
-  checkedInById: string;
+  @Column({ type: 'uuid', name: 'attended_by' })
+  attendedById: string;
 
   @ManyToOne(() => User, { onDelete: 'RESTRICT' })
   @JoinColumn({
-    name: 'checked_in_by',
-    foreignKeyConstraintName: 'fk_visits_checked_in_by',
+    name: 'attended_by',
+    foreignKeyConstraintName: 'fk_visits_attended_by',
   })
-  checkedInBy?: Relation<User>;
+  attendedBy?: Relation<User>;
 
   @Column({ type: 'timestamptz', nullable: true })
-  startedAt: Date | null;
+  voidedAt: Date | null;
 
-  @Column({ type: 'timestamptz', nullable: true })
-  completedAt: Date | null;
-
-  @Column({ type: 'uuid', name: 'completed_by', nullable: true })
-  completedById: string | null;
+  @Column({ type: 'uuid', name: 'voided_by', nullable: true })
+  voidedById: string | null;
 
   @ManyToOne(() => User, { nullable: true, onDelete: 'RESTRICT' })
   @JoinColumn({
-    name: 'completed_by',
-    foreignKeyConstraintName: 'fk_visits_completed_by',
+    name: 'voided_by',
+    foreignKeyConstraintName: 'fk_visits_voided_by',
   })
-  completedBy?: Relation<User> | null;
-
-  @Column({ type: 'timestamptz', nullable: true })
-  cancelledAt: Date | null;
-
-  @Column({ type: 'uuid', name: 'cancelled_by', nullable: true })
-  cancelledById: string | null;
-
-  @ManyToOne(() => User, { nullable: true, onDelete: 'RESTRICT' })
-  @JoinColumn({
-    name: 'cancelled_by',
-    foreignKeyConstraintName: 'fk_visits_cancelled_by',
-  })
-  cancelledBy?: Relation<User> | null;
+  voidedBy?: Relation<User> | null;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
-  cancelReason: string | null;
+  voidReason: string | null;
 }

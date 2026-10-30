@@ -24,7 +24,7 @@ export class StaffSlotsQueryDto extends PublicSlotsQueryDto {
   @ApiPropertyOptional({
     default: false,
     description:
-      'Reception only: whole day, ignoring schedule, time off and lead time (still excludes booked slots)',
+      'Reception only: whole day, ignoring schedule, time off and lead time, past dates and times included (RECEPTIONIST: back to BACKDATE_MAX_DAYS). Still excludes booked slots.',
   })
   @IsOptional()
   @ToBoolean()

@@ -2,7 +2,6 @@ import {
   BadRequestException,
   Inject,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
@@ -21,7 +20,6 @@ import {
 import { ErrorCode, unprocessable } from '../../common/errors/app.exception.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
-import { isoToDate } from '../../common/time/clinic-time.util.js';
 import {
   isZeroMoney,
   lineTotal,
@@ -29,13 +27,11 @@ import {
   toMoney,
   ZERO,
 } from '../../common/utils/money.util.js';
-import { isUniqueViolation } from '../../common/utils/pg-errors.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
 import { ClinicService } from '../clinic-services/entities/clinic-service.entity.js';
 import { Patient } from '../patients/entities/patient.entity.js';
-import { Visit } from '../visits/entities/visit.entity.js';
-import { VisitStatus } from '../visits/visit.enums.js';
+import type { Visit } from '../visits/entities/visit.entity.js';
 import {
   DocumentScope,
   InvoiceStatus,
@@ -55,7 +51,7 @@ import type {
   UpdateInvoiceItemDto,
 } from './dto/invoice.dto.js';
 import { InvoiceItem } from './entities/invoice-item.entity.js';
-import { Invoice, INVOICE_VISIT_UNIQUE } from './entities/invoice.entity.js';
+import { Invoice } from './entities/invoice.entity.js';
 import { InvoiceDiscount } from './entities/invoice-discount.entity.js';
 import { Payment } from './entities/payment.entity.js';
 import {
@@ -75,17 +71,8 @@ import {
   type VisitBillingPolicy,
 } from './visit-billing-policy.js';
 
-const SYSTEM: Actor = { userId: null, ip: null };
-
-export interface VisitInvoiceResult {
-  invoice: InvoiceDetailDto;
-  created: boolean;
-}
-
 @Injectable()
 export class InvoicesService {
-  private readonly logger = new Logger(InvoicesService.name);
-
   constructor(
     @InjectRepository(Invoice) private readonly invoices: Repository<Invoice>,
     @InjectRepository(InvoiceItem)
@@ -123,89 +110,48 @@ export class InvoicesService {
   }
 
   /**
-   * The visit's invoice: created on check-in (event listener) or manually.
-   * Idempotent: an existing live invoice is returned, and a concurrent
-   * creation losing on the partial unique index is treated as success.
+   * The visit's invoice, written in the caller's transaction (attend and
+   * walk-in): if anything fails, neither the visit nor the invoice exists.
+   * The items come from the VisitBillingPolicy.
    */
   async createForVisit(
-    visitId: string,
+    manager: EntityManager,
+    visit: Visit,
     actor: Actor,
-  ): Promise<VisitInvoiceResult> {
-    try {
-      const { id, created } = await this.dataSource.transaction(
-        async (manager) => {
-          // FOR SHARE: serializes with a concurrent visit cancellation.
-          const visit = await manager
-            .getRepository(Visit)
-            .createQueryBuilder('visit')
-            .where('visit.id = :visitId', { visitId })
-            .setLock('pessimistic_read')
-            .getOne();
-          if (!visit) throw new NotFoundException('Visit not found');
-
-          const existing = await this.liveInvoiceOfVisit(visitId, manager);
-          if (existing) return { id: existing.id, created: false };
-          if (visit.status === VisitStatus.CANCELLED) {
-            throw unprocessable(
-              ErrorCode.VISIT_CANCELLED,
-              'The visit is cancelled',
-            );
-          }
-
-          const lines = await this.billingPolicy.itemsFor(visit, manager);
-          const invoice = await this.insertInvoice(manager, actor, {
-            patientId: visit.patientId,
-            visitId: visit.id,
-            notes: null,
-            lines,
-          });
-          return { id: invoice.id, created: true };
-        },
-      );
-      return { invoice: await this.findOne(id), created };
-    } catch (error) {
-      if (!isUniqueViolation(error, INVOICE_VISIT_UNIQUE)) throw error;
-      const existing = await this.liveInvoiceOfVisit(
-        visitId,
-        this.dataSource.manager,
-      );
-      if (!existing) throw error;
-      return { invoice: await this.findOne(existing.id), created: false };
-    }
+  ): Promise<Invoice> {
+    const lines = await this.billingPolicy.itemsFor(visit, manager);
+    return this.insertInvoice(manager, actor, {
+      patientId: visit.patientId,
+      visitId: visit.id,
+      notes: null,
+      lines,
+    });
   }
 
-  /**
-   * After a visit is cancelled: an unpaid invoice is cancelled with the
-   * visit's reason. A paid one stays (it shows up in the attention list).
-   */
-  async cancelForCancelledVisit(visitId: string): Promise<void> {
-    await this.dataSource.transaction(async (manager) => {
-      const invoice = await manager
-        .getRepository(Invoice)
-        .createQueryBuilder('invoice')
-        .where('invoice.visitId = :visitId', { visitId })
-        .andWhere('invoice.status <> :cancelled', {
-          cancelled: InvoiceStatus.CANCELLED,
-        })
-        .setLock('pessimistic_write')
-        .getOne();
-      if (!invoice) return;
-      if (!isZeroMoney(invoice.amountPaid)) {
-        this.logger.warn(
-          `Visit ${visitId} was cancelled but invoice ${invoice.invoiceNumber} has payments; left for review`,
-        );
-        return;
-      }
-      const visit = await manager
-        .getRepository(Visit)
-        .findOneByOrFail({ id: visitId });
-      await this.markCancelled(
-        manager,
-        invoice,
-        visit.cancelReason ?? 'Visit cancelled',
-        SYSTEM,
-      );
-    });
+  // The visit's live (not cancelled) invoice, locked; null if none.
+  lockLiveInvoiceOfVisit(
+    visitId: string,
+    manager: EntityManager,
+  ): Promise<Invoice | null> {
+    return manager
+      .getRepository(Invoice)
+      .createQueryBuilder('invoice')
+      .where('invoice.visitId = :visitId', { visitId })
+      .andWhere('invoice.status <> :cancelled', {
+        cancelled: InvoiceStatus.CANCELLED,
+      })
+      .setLock('pessimistic_write')
+      .getOne();
+  }
+
+  // Undo attend: the caller has locked the invoice and checked it is unpaid.
+  cancelForVoidedVisit(
+    manager: EntityManager,
+    invoice: Invoice,
+    reason: string,
+    actor: Actor,
+  ): Promise<void> {
+    return this.markCancelled(manager, invoice, reason, actor);
   }
 
   // ---------- Items ----------
@@ -321,7 +267,7 @@ export class InvoicesService {
   async findOne(id: string): Promise<InvoiceDetailDto> {
     const invoice = await this.invoices.findOne({
       where: { id },
-      relations: { patient: true },
+      relations: { patient: true, issuedBy: true, cancelledBy: true },
     });
     if (!invoice) throw new NotFoundException('Invoice not found');
     const items = await this.items.find({
@@ -333,6 +279,7 @@ export class InvoicesService {
       items,
       await this.activeDiscountDto(id),
       await this.paymentsOf(id),
+      await this.isLocked(invoice, this.dataSource.manager),
       (d) => this.time.toIso(d),
     );
   }
@@ -341,12 +288,9 @@ export class InvoicesService {
     query: ListInvoicesQueryDto,
   ): Promise<Paginated<InvoiceSummaryDto>> {
     const qb = this.summaryQuery();
-    if (query.from)
-      qb.andWhere('invoice.issuedAt >= :from', {
-        from: isoToDate(query.from),
-      });
-    if (query.to)
-      qb.andWhere('invoice.issuedAt < :to', { to: isoToDate(query.to) });
+    const { start, end } = this.time.dateRange(query.from, query.to);
+    if (start) qb.andWhere('invoice.issuedAt >= :start', { start });
+    if (end) qb.andWhere('invoice.issuedAt < :end', { end });
     if (query.patientId) {
       qb.andWhere('invoice.patientId = :patientId', {
         patientId: query.patientId,
@@ -449,10 +393,12 @@ export class InvoicesService {
   private async activeDiscountDto(
     invoiceId: string,
   ): Promise<InvoiceDiscountDto | null> {
-    const discount = await this.activeDiscount(
-      invoiceId,
-      this.dataSource.manager,
-    );
+    const discount = await this.dataSource
+      .getRepository(InvoiceDiscount)
+      .findOne({
+        where: { invoiceId, removedAt: IsNull() },
+        relations: { appliedBy: true },
+      });
     return discount
       ? toInvoiceDiscount(discount, (d) => this.time.toIso(d))
       : null;
@@ -461,6 +407,7 @@ export class InvoicesService {
   private async paymentsOf(invoiceId: string): Promise<InvoicePaymentDto[]> {
     const payments = await this.dataSource.getRepository(Payment).find({
       where: { invoiceId },
+      relations: { receivedBy: true },
       order: { receivedAt: 'ASC', receiptNumber: 'ASC' },
     });
     return payments.map((payment) =>
@@ -478,17 +425,32 @@ export class InvoicesService {
     manager: EntityManager,
   ): Promise<void> {
     assertEditable(invoice);
-    const paid = await manager.getRepository(Payment).existsBy({
-      invoiceId: invoice.id,
-      type: PaymentType.PAYMENT,
-      status: PaymentStatus.VALID,
-    });
-    if (paid) {
+    if (await this.hasValidPayment(invoice, manager)) {
       throw unprocessable(
         ErrorCode.INVOICE_LOCKED,
         'The invoice has payments; items and discount can no longer change',
       );
     }
+  }
+
+  // The rule above as a flag for clients (InvoiceDetailDto.isLocked).
+  async isLocked(invoice: Invoice, manager: EntityManager): Promise<boolean> {
+    return (
+      invoice.status === InvoiceStatus.CANCELLED ||
+      !isZeroMoney(invoice.amountPaid) ||
+      (await this.hasValidPayment(invoice, manager))
+    );
+  }
+
+  private hasValidPayment(
+    invoice: Invoice,
+    manager: EntityManager,
+  ): Promise<boolean> {
+    return manager.getRepository(Payment).existsBy({
+      invoiceId: invoice.id,
+      type: PaymentType.PAYMENT,
+      status: PaymentStatus.VALID,
+    });
   }
 
   /**
@@ -714,22 +676,12 @@ export class InvoicesService {
     return (row?.max ?? 0) + 1;
   }
 
-  private liveInvoiceOfVisit(
-    visitId: string,
-    manager: EntityManager,
-  ): Promise<Invoice | null> {
-    return manager
-      .getRepository(Invoice)
-      .createQueryBuilder('invoice')
-      .where('invoice.visitId = :visitId', { visitId })
-      .andWhere("invoice.status <> 'CANCELLED'")
-      .getOne();
-  }
-
   private summaryQuery(): SelectQueryBuilder<Invoice> {
     return this.invoices
       .createQueryBuilder('invoice')
-      .innerJoinAndSelect('invoice.patient', 'patient');
+      .innerJoinAndSelect('invoice.patient', 'patient')
+      .leftJoinAndSelect('invoice.issuedBy', 'issuedBy')
+      .leftJoinAndSelect('invoice.cancelledBy', 'cancelledBy');
   }
 
   private async paginate(

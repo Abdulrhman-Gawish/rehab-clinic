@@ -30,16 +30,18 @@ const STATUS_AUDIT_ACTION: Partial<Record<AppointmentStatus, AuditAction>> = {
   [AppointmentStatus.CANCELLED]: AuditAction.APPOINTMENT_CANCELLED,
   [AppointmentStatus.NO_SHOW]: AuditAction.APPOINTMENT_NO_SHOW,
   [AppointmentStatus.RESCHEDULED]: AuditAction.APPOINTMENT_RESCHEDULED,
-  [AppointmentStatus.CHECKED_IN]: AuditAction.APPOINTMENT_CHECKED_IN,
-  [AppointmentStatus.COMPLETED]: AuditAction.APPOINTMENT_COMPLETED,
+  [AppointmentStatus.ATTENDED]: AuditAction.APPOINTMENT_ATTENDED,
 };
 
 function auditActionFor(
   to: AppointmentStatus,
   trigger: AppointmentTrigger,
 ): AuditAction {
-  if (trigger === AppointmentTrigger.UNDO_CHECK_IN) {
-    return AuditAction.APPOINTMENT_CHECK_IN_UNDONE;
+  if (trigger === AppointmentTrigger.UNDO_ATTEND) {
+    return AuditAction.APPOINTMENT_ATTEND_UNDONE;
+  }
+  if (trigger === AppointmentTrigger.UNDO_NO_SHOW) {
+    return AuditAction.APPOINTMENT_NO_SHOW_UNDONE;
   }
   const action = STATUS_AUDIT_ACTION[to];
   if (!action) throw new Error(`No audit action defined for status ${to}`);

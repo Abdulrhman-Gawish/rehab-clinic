@@ -1,10 +1,14 @@
+import { UserRefDto } from '../../common/dto/user-ref.dto.js';
 import type { Doctor } from '../doctors/entities/doctor.entity.js';
+import type { Visit } from '../visits/entities/visit.entity.js';
+import type { NoteStatus } from './clinical.enums.js';
 import type {
   AddendumResponseDto,
   AttachmentResponseDto,
   ClinicalDoctorDto,
   ClinicalNoteResponseDto,
   MedicalInfoResponseDto,
+  NeedsAttentionEntryDto,
 } from './dto/clinical.dto.js';
 import type { ClinicalNoteAddendum } from './entities/clinical-note-addendum.entity.js';
 import type { ClinicalNote } from './entities/clinical-note.entity.js';
@@ -20,6 +24,7 @@ function toDoctor(doctor: Doctor | undefined): ClinicalDoctorDto {
 }
 
 // `info` is null until the first save: every field is then empty.
+// Requires `updatedBy` to be loaded.
 export function toMedicalInfo(
   patientId: string,
   info: PatientMedicalInfo | null,
@@ -32,7 +37,7 @@ export function toMedicalInfo(
     pastSurgeries: info?.pastSurgeries ?? null,
     currentMedications: info?.currentMedications ?? null,
     notes: info?.notes ?? null,
-    updatedById: info?.updatedById ?? null,
+    updatedBy: UserRefDto.fromNullable(info?.updatedBy),
     updatedAt: info ? toIso(info.updatedAt) : null,
   };
 }
@@ -63,7 +68,7 @@ export function toClinicalNote(
     patientId: note.patientId,
     visit: {
       id: visit.id,
-      date: toIso(visit.checkedInAt),
+      date: toIso(visit.attendedAt),
       service: { id: visit.service.id, name: visit.service.name },
     },
     doctor: toDoctor(note.doctor),
@@ -81,6 +86,7 @@ export function toClinicalNote(
   };
 }
 
+// Requires `uploadedBy` to be loaded.
 export function toAttachment(
   attachment: PatientAttachment,
   toIso: ToIso,
@@ -92,7 +98,25 @@ export function toAttachment(
     title: attachment.title,
     mimeType: attachment.mimeType,
     sizeBytes: attachment.sizeBytes,
-    uploadedById: attachment.uploadedById,
+    uploadedBy: UserRefDto.fromEntity(attachment.uploadedBy),
     createdAt: toIso(attachment.createdAt),
+  };
+}
+
+// Requires patient, service and doctor.user loaded on the visit.
+export function toNeedsAttentionEntry(
+  visit: Visit,
+  noteStatus: NoteStatus | null,
+  toIso: ToIso,
+): NeedsAttentionEntryDto {
+  const { patient, service } = visit;
+  if (!patient || !service) throw new Error('Visit relations are not loaded');
+  return {
+    visitId: visit.id,
+    visitDate: toIso(visit.attendedAt),
+    patient: { id: patient.id, name: patient.name },
+    service: { id: service.id, name: service.name },
+    doctor: toDoctor(visit.doctor),
+    noteStatus,
   };
 }

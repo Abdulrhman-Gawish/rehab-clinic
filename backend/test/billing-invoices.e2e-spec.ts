@@ -1,4 +1,3 @@
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
 import { UserRole } from '../src/common/enums/user-role.enum.js';
@@ -10,12 +9,9 @@ import {
 } from '../src/modules/audit/audit.service.js';
 import { InvoiceItem } from '../src/modules/billing/entities/invoice-item.entity.js';
 import { Invoice } from '../src/modules/billing/entities/invoice.entity.js';
-import { InvoicesService } from '../src/modules/billing/invoices.service.js';
 import { ClinicService } from '../src/modules/clinic-services/entities/clinic-service.entity.js';
 import { DoctorClinicService } from '../src/modules/doctors/entities/doctor-clinic-service.entity.js';
 import type { Patient } from '../src/modules/patients/entities/patient.entity.js';
-import { Visit } from '../src/modules/visits/entities/visit.entity.js';
-import { VisitEvent } from '../src/modules/visits/visit.events.js';
 import {
   bearer,
   createLoggedInUser,
@@ -41,15 +37,17 @@ const clock = { current: local('09:00') };
 
 const DETAIL_KEYS = [
   'balance',
+  'canCancel',
+  'isLocked',
   'cancelReason',
   'cancelledAt',
-  'cancelledById',
+  'cancelledBy',
   'discount',
   'discountTotal',
   'id',
   'invoiceNumber',
   'issuedAt',
-  'issuedById',
+  'issuedBy',
   'items',
   'notes',
   'patient',
@@ -109,7 +107,9 @@ describe('Billing: invoices (e2e)', () => {
 
   const as = (user: TestUser) => ({ Authorization: bearer(user) });
 
-  async function checkInToday(time = '09:30'): Promise<string> {
+  async function attendToday(
+    time = '09:30',
+  ): Promise<{ visitId: string; invoiceId: string }> {
     const appointment = await insertAppointment(ctx.dataSource, {
       patientId: patient.id,
       doctorId: doctor.doctorId,
@@ -117,22 +117,10 @@ describe('Billing: invoices (e2e)', () => {
       startAt: local(time),
     });
     const res = await request(server)
-      .post(`/api/v1/appointments/${appointment.id}/check-in`)
+      .post(`/api/v1/appointments/${appointment.id}/attend`)
       .set(as(receptionist))
       .expect(201);
-    return res.body.id as string;
-  }
-
-  // The listener runs after the check-in transaction commits.
-  async function waitForInvoice(visitId: string): Promise<Invoice> {
-    let invoice: Invoice | null = null;
-    await vi.waitFor(async () => {
-      invoice = await ctx.dataSource
-        .getRepository(Invoice)
-        .findOneBy({ visitId });
-      expect(invoice).not.toBeNull();
-    });
-    return invoice as unknown as Invoice;
+    return { visitId: res.body.id, invoiceId: res.body.invoiceId };
   }
 
   const getInvoice = (id: string) =>
@@ -157,12 +145,11 @@ describe('Billing: invoices (e2e)', () => {
       [invoiceId, amount, status],
     );
 
-  describe('automatic invoice on check-in', () => {
-    it("is created after check-in with the doctor's price override snapshotted", async () => {
-      const visitId = await checkInToday();
-      const invoice = await waitForInvoice(visitId);
+  describe('invoice created on attend', () => {
+    it("is created with the visit, with the doctor's price override snapshotted", async () => {
+      const { visitId, invoiceId } = await attendToday();
 
-      const res = await getInvoice(invoice.id);
+      const res = await getInvoice(invoiceId);
       expect(Object.keys(res.body).sort()).toEqual(DETAIL_KEYS);
       expect(res.body).toMatchObject({
         invoiceNumber: 'INV-2026-000001',
@@ -174,7 +161,7 @@ describe('Billing: invoices (e2e)', () => {
         total: '320.00',
         amountPaid: '0.00',
         balance: '320.00',
-        issuedById: null,
+        issuedBy: { id: receptionist.id, name: expect.any(String) },
         issuedAt: '2026-11-03T09:00:00+02:00',
         discount: null,
         payments: [],
@@ -195,7 +182,7 @@ describe('Billing: invoices (e2e)', () => {
         name: 'Renamed',
         basePrice: '999.00',
       });
-      expect((await getInvoice(invoice.id)).body.items[0]).toMatchObject({
+      expect((await getInvoice(invoiceId)).body.items[0]).toMatchObject({
         description: 'Physio session',
         unitPrice: '320.00',
       });
@@ -216,110 +203,15 @@ describe('Billing: invoices (e2e)', () => {
           serviceId: other.id,
         })
         .expect(201);
-      const invoice = await waitForInvoice(walkIn.body.id);
-      expect(invoice).toMatchObject({ total: '150.50', status: 'ISSUED' });
-    });
-
-    it('replaying the event never creates a second invoice', async () => {
-      const visitId = await checkInToday();
-      await waitForInvoice(visitId);
-      const visit = await ctx.dataSource
-        .getRepository(Visit)
-        .findOneByOrFail({ id: visitId });
-      const payload = {
-        visitId,
-        appointmentId: visit.appointmentId,
-        patientId: visit.patientId,
-        doctorId: visit.doctorId,
-        serviceId: visit.serviceId,
-        at: visit.checkedInAt,
-      };
-      const emitter = ctx.app.get(EventEmitter2);
-      await Promise.all([
-        emitter.emitAsync(VisitEvent.CHECKED_IN, payload),
-        emitter.emitAsync(VisitEvent.CHECKED_IN, payload),
-      ]);
       expect(
-        await ctx.dataSource.getRepository(Invoice).countBy({ visitId }),
-      ).toBe(1);
-    });
-
-    it('a listener failure leaves the visit intact and the manual endpoint recovers (idempotently)', async () => {
-      const invoices = ctx.app.get(InvoicesService);
-      const failed = vi
-        .spyOn(invoices, 'createForVisit')
-        .mockRejectedValueOnce(new Error('billing is down'));
-
-      const visitId = await checkInToday();
-      await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
-      failed.mockRestore();
-
-      const visit = await ctx.dataSource
-        .getRepository(Visit)
-        .findOneByOrFail({ id: visitId });
-      expect(visit.status).toBe('WAITING');
-      expect(
-        await ctx.dataSource.getRepository(Invoice).countBy({ visitId }),
-      ).toBe(0);
-
-      const created = await request(server)
-        .post(`/api/v1/visits/${visitId}/invoice`)
-        .set(as(receptionist))
-        .expect(201);
-      expect(created.body).toMatchObject({
-        visitId,
-        total: '320.00',
-        issuedById: receptionist.id,
-      });
-      const again = await request(server)
-        .post(`/api/v1/visits/${visitId}/invoice`)
-        .set(as(receptionist))
-        .expect(200);
-      expect(again.body.id).toBe(created.body.id);
-    });
-
-    it('cancelling the visit cancels an unpaid invoice; a paid one is left alone', async () => {
-      const visitId = await checkInToday('09:30');
-      const invoice = await waitForInvoice(visitId);
-      await request(server)
-        .post(`/api/v1/visits/${visitId}/cancel`)
-        .set(as(receptionist))
-        .send({ reason: 'Patient left' })
-        .expect(200);
-      await vi.waitFor(async () => {
-        const stored = await ctx.dataSource
+        await ctx.dataSource
           .getRepository(Invoice)
-          .findOneByOrFail({ id: invoice.id });
-        expect(stored).toMatchObject({
-          status: 'CANCELLED',
-          cancelReason: 'Patient left',
-          cancelledById: null,
-        });
+          .findOneByOrFail({ id: walkIn.body.invoiceId }),
+      ).toMatchObject({
+        visitId: walkIn.body.id,
+        total: '150.50',
+        status: 'ISSUED',
       });
-
-      const paidVisitId = await checkInToday('10:30');
-      const paid = await waitForInvoice(paidVisitId);
-      await markPaid(paid.id, '100.00', 'PARTIALLY_PAID');
-      await request(server)
-        .post(`/api/v1/visits/${paidVisitId}/cancel`)
-        .set(as(receptionist))
-        .send({ reason: 'Patient left' })
-        .expect(200);
-      // Give the listener a chance to (not) act.
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      expect(
-        (
-          await ctx.dataSource
-            .getRepository(Invoice)
-            .findOneByOrFail({ id: paid.id })
-        ).status,
-      ).toBe('PARTIALLY_PAID');
-
-      await request(server)
-        .post(`/api/v1/visits/${visitId}/invoice`)
-        .set(as(receptionist))
-        .expect(422)
-        .expect(({ body }) => expect(body.code).toBe('VISIT_CANCELLED'));
     });
   });
 
@@ -335,7 +227,7 @@ describe('Billing: invoices (e2e)', () => {
       ).expect(201);
       expect(res.body).toMatchObject({
         visitId: null,
-        issuedById: receptionist.id,
+        issuedBy: { id: receptionist.id, name: expect.any(String) },
         subtotal: '750.30',
         total: '750.30',
         status: 'ISSUED',
@@ -434,7 +326,12 @@ describe('Billing: invoices (e2e)', () => {
       ]).expect(201);
       const id = created.body.id as string;
       const itemId = created.body.items[0].id as string;
+      expect(created.body).toMatchObject({ isLocked: false, canCancel: true });
       await markPaid(id, '50.00', 'PARTIALLY_PAID');
+      expect((await getInvoice(id)).body).toMatchObject({
+        isLocked: true,
+        canCancel: false,
+      });
 
       for (const call of [
         () =>
@@ -469,8 +366,10 @@ describe('Billing: invoices (e2e)', () => {
         .expect(200);
       expect(res.body).toMatchObject({
         status: 'CANCELLED',
+        isLocked: true,
+        canCancel: false,
         cancelReason: 'Created by mistake',
-        cancelledById: receptionist.id,
+        cancelledBy: { id: receptionist.id, name: expect.any(String) },
         cancelledAt: '2026-11-03T09:00:00+02:00',
       });
       await request(server)

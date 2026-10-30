@@ -1,11 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Brackets, EntityManager, Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import {
   toPaginated,
   type Paginated,
 } from '../../common/dto/pagination.dto.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
+import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
 import type { AuditAction, AuditEntityType } from './audit.constants.js';
 import {
   AuditLogResponseDto,
@@ -28,6 +29,7 @@ export class AuditService {
   constructor(
     @InjectRepository(AuditLog)
     private readonly auditLogs: Repository<AuditLog>,
+    private readonly time: ClinicTimeService,
   ) {}
 
   /**
@@ -81,6 +83,7 @@ export class AuditService {
   ): Promise<Paginated<AuditLogResponseDto>> {
     const qb = this.auditLogs
       .createQueryBuilder('log')
+      .leftJoinAndSelect('log.user', 'user')
       .orderBy('log.createdAt', 'DESC')
       .addOrderBy('log.id', 'DESC')
       .skip(query.skip)
@@ -100,16 +103,9 @@ export class AuditService {
     if (query.action) {
       qb.andWhere('log.action = :action', { action: query.action });
     }
-    if (query.from || query.to) {
-      qb.andWhere(
-        new Brackets((range) => {
-          if (query.from)
-            range.andWhere('log.createdAt >= :from', { from: query.from });
-          if (query.to)
-            range.andWhere('log.createdAt <= :to', { to: query.to });
-        }),
-      );
-    }
+    const { start, end } = this.time.dateRange(query.from, query.to);
+    if (start) qb.andWhere('log.createdAt >= :start', { start });
+    if (end) qb.andWhere('log.createdAt < :end', { end });
 
     const [logs, total] = await qb.getManyAndCount();
     return toPaginated(logs.map(AuditLogResponseDto.fromEntity), total, query);

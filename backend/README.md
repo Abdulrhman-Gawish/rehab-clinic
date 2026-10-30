@@ -1,6 +1,6 @@
 # Rehab Clinic — Backend
 
-NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, staff users, the audit trail, patients, doctors, the services catalog, doctor schedules, availability appointments (online and reception booking) visits (check-in, walk-ins, the waiting room, doctor sessions), billing (invoices, discounts, payments, refunds, cash-desk summary), clinic expenses and clinical records (medical info, session notes, addenda, attachments). Packages and reports will come later as new modules.
+NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, staff users, the audit trail, patients, doctors, the services catalog, doctor schedules, availability, appointments (online and reception booking), visits (attend, walk-ins, undo, the day list), billing (invoices, discounts, payments, refunds, cash-desk summary), clinic expenses and clinical records (medical info, session notes, addenda, attachments). Packages and reports will come later as new modules.
 
 - **Who logs in:** `OWNER`, `DOCTOR` and `RECEPTIONIST` staff.
 - **Patients never log in.** A patient is identified only by their phone number, which is unique.
@@ -18,9 +18,32 @@ NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, 
 | Validation | `class-validator` DTOs + global `ValidationPipe` (whitelist, forbid unknown, transform) |
 | Config | `@nestjs/config` + Joi schema (`src/config/env.validation.ts`) |
 | Logging | `nestjs-pino`, one request id per request (`X-Request-Id` in and out) |
-| Rate limiting | `@nestjs/throttler` (stricter on login and public endpoints) |
+| Rate limiting | `@nestjs/throttler`: per user when authenticated, per email + IP on login, per IP on public endpoints |
 | Docs | Swagger UI at `/api/docs`, JSON at `/api/docs-json` |
 | Tests | Vitest (Jest-compatible API) + supertest e2e against a real PostgreSQL |
+
+## Run everything with Docker
+
+From the repo root, after `cp backend/.env.example backend/.env` (set `JWT_ACCESS_SECRET` and `SEED_OWNER_*`):
+
+```bash
+docker compose up -d --build     # db + backend + demo seed + playground
+```
+
+| Service | What it does |
+|---|---|
+| `db` | PostgreSQL 16, its own volume (host port 5433, so it doesn't clash with the dev database) |
+| `backend` | API on <http://localhost:3000/api/v1>. On every start it runs the migrations and the OWNER seed (both idempotent) |
+| `demo-seed` | One-shot: demo staff, services, schedules and a sample day. Skipped when doctors already exist |
+| `playground` | Throwaway UI on <http://localhost:5173> (quick-login buttons for the demo accounts) |
+
+The containers take `backend/.env`, with the `DB_*` values overridden to point at `db` and `NODE_ENV=production`.
+Seeding happens when the containers start, not at image build time (there is no database during the build).
+
+- Logs: `docker compose logs -f backend` (or `demo-seed`).
+- Stop: `docker compose down`. Start again later: `docker compose up -d`.
+- Fresh database and demo data again: `docker compose down -v && docker compose up -d --build` (**deletes the Docker database and uploaded files**).
+- After code changes: `docker compose up -d --build`.
 
 ## Getting started
 
@@ -55,7 +78,7 @@ All variables are validated at startup; the app refuses to start on invalid conf
 | `DB_LOGGING` | `false` | Log SQL |
 | `DB_TEST_DATABASE` | `<DB_DATABASE>_test` | Database used by e2e tests. **It is wiped on every run** and must differ from `DB_DATABASE` |
 | `JWT_ACCESS_SECRET` | — | At least 32 characters |
-| `THROTTLE_ENABLED` | `true` | Global switch (off in e2e). The limits are fixed per IP: 120/min by default; login 5/min; refresh 20/min; public reads 30/min; public booking 5 per 15 min |
+| `THROTTLE_ENABLED` | `true` | Global switch (off in e2e). Fixed limits: 120/min by default, counted **per user** on authenticated routes (the whole clinic usually shares one IP) and per IP on public ones; login 5/min **per email + IP**; refresh 20/min; public reads 30/min; public booking 5 per 15 min (per IP) |
 | `CLINIC_TIMEZONE` | `Africa/Cairo` | IANA zone of the clinic. Schedules are in this zone's wall-clock time; offsets (DST) are resolved per date |
 | `SLOT_INTERVAL_MINUTES` | `15` | Candidate slot starts every N minutes inside a schedule range |
 | `BOOKING_MIN_LEAD_MINUTES` | `60` | Earliest bookable start = now + N minutes (schedule-checked bookings) |
@@ -109,14 +132,12 @@ Every route is under `/api/v1` and needs `Authorization: Bearer <accessToken>` u
 | `/public/doctors`, `/public/services` | – | – | – | R |
 | `/doctors/:id/schedules`, `/doctors/:id/time-off` | RW | RW | R (own) | – |
 | `/appointments/availability`, `/public/doctors/:id/slots` | R | R | R (own) | R |
-| `/appointments` create / confirm / cancel / no-show / reschedule | W | W | – | create only (`POST /public/appointments`, PENDING) |
+| `/appointments` create / confirm / cancel / no-show / undo no-show / reschedule | W | W | – | create only (`POST /public/appointments`, PENDING) |
 | `/appointments` list / view / history, `/patients/:id/appointments` | R | R | R (own only) | – |
-| `/appointments/day` | R | R | – | – |
-| check-in, walk-in, undo check-in, cancel visit | W | W | – | – |
-| start / complete visit | W | – | W (own) | – |
+| `/appointments/day` | R | R | R (own, no billing) | – |
+| attend, undo attend, walk-in | W | W | – | – |
 | `/visits/queue`, `/visits`, `/visits/:id`, `/visits/:id/history` | R | R | R (own) | – |
 | `/patients/:id/visits` | R | R | R | – |
-| `/visits/open` | R | R | – | – |
 | invoices: create, edit items, cancel, view, `/patients/:id/invoices`, `/patients/:id/balance` | RW | RW | – | – |
 | discounts: apply / repeat / remove, `/patients/:id/last-discount` | W | W (limit) | – | – |
 | payments: record, list, receipt | W | W | – | – |
@@ -128,6 +149,7 @@ Every route is under `/api/v1` and needs `Authorization: Bearer <accessToken>` u
 | expenses: view, receipt file | R | R | – | – |
 | `/expense-categories` | RW | R | – | – |
 | clinical: medical info, notes, history, attachments (read) | R | – | R (patients they treat) | – |
+| `/clinical-notes/needs-attention` | R | – | R (own) | – |
 | clinical: `PUT …/medical-info`, notes (write, sign), addenda | – | – | W (notes: own visits) | – |
 | clinical: attachment upload | W | – | W (patients they treat) | – |
 
@@ -144,6 +166,13 @@ Errors always have this shape:
 
 Validation errors have `message: "Validation failed"` and `details: [{ field, errors[] }]`.
 
+**Conventions every client can rely on:**
+- *Who did it* is always `{ id, name }` (`receivedBy`, `appliedBy`, `createdBy`, `voidedBy`, `issuedBy`, `cancelledBy`, `attendedBy`, `bookedBy`, `updatedBy`, `uploadedBy`, `changedBy`; audit rows have `user: { id, name, role }`), so a RECEPTIONIST can show names without `/users`. Optional ones are `null` (online bookings, public or system actions, not voided yet).
+- List date filters are clinic local dates: `from=YYYY-MM-DD&to=YYYY-MM-DD`, both inclusive (`CLINIC_TIMEZONE`, DST-aware). Single-day endpoints take `date=YYYY-MM-DD`.
+- Every state-changing action is a `POST`.
+- Optional text fields are trimmed, and a blank string becomes `null` (`TrimOrNull`), so clearing a textarea clears the field.
+- A normal "nothing found" that clients branch on is either `200` with `null` (`GET /visits/:id/note`, `GET /patients/:id/last-discount`, `{ patient: null }` for `GET /patients/lookup`) or a 404 with a `code` (`REFERENCE_NOT_FOUND`, `NOTE_NOT_VISIBLE`).
+
 Business errors also carry a stable machine-readable `code`:
 
 | Code | Status | Meaning |
@@ -151,27 +180,25 @@ Business errors also carry a stable machine-readable `code`:
 | `SLOT_UNAVAILABLE` | 409 | The doctor already has an active appointment overlapping that time |
 | `PATIENT_OVERLAP` | 409 | The patient already has an active appointment overlapping that time |
 | `BOOKING_LIMIT_REACHED` | 409 | The phone already holds `BOOKING_MAX_ACTIVE_PER_PHONE` upcoming appointments (public booking) |
+| `REFERENCE_NOT_FOUND` | 404 | No appointment with this reference code (or another doctor's) |
 | `SCHEDULE_OVERLAP` | 409 | A schedule range overlaps another active range of the same doctor and day |
 | `OUTSIDE_SCHEDULE` | 422 | The start is not a slot in the doctor's schedule: outside the ranges, off the slot grid, in time off, or inside the lead time |
 | `DATE_OUT_OF_RANGE` | 422 | The date is before today or beyond `BOOKING_MAX_DAYS_AHEAD` |
 | `SERVICE_NOT_OFFERED` | 422 | The doctor doesn't offer the service, or it is inactive |
 | `INVALID_STATUS_TRANSITION` | 422 | The state machine doesn't allow the transition |
 | `NO_SHOW_TOO_EARLY` | 422 | NO_SHOW before the appointment's start time |
-| `CHECK_IN_WRONG_DAY` | 422 | Check-in outside the appointment's local date |
-| `ALREADY_CHECKED_IN` | 409 | The appointment already has a live visit |
-| `PATIENT_HAS_OPEN_VISIT` | 409 | The patient already has a WAITING/IN_SESSION visit |
-| `DOCTOR_ALREADY_IN_SESSION` | 409 | The doctor already has an IN_SESSION visit |
-| `INVALID_VISIT_TRANSITION` | 422 | The visit state machine doesn't allow the transition |
-| `VISIT_COMPLETION_BLOCKED` | 422 | The `VisitCompletionPolicy` refused completion (the message gives the reason) |
+| `ATTEND_WRONG_DAY` | 422 | Attend outside the appointment's local date |
+| `ALREADY_ATTENDED` | 409 | The appointment already has an ACTIVE visit |
+| `UNDO_WRONG_DAY` | 422 | Undo attend / undo no-show on another local day |
+| `VISIT_HAS_NOTE` | 422 | Undo attend refused: the doctor has written a note for the visit |
+| `VISIT_VOIDED` | 422 | The visit is already voided |
 | `INVOICE_LOCKED` | 422 | Items/discount can't change: the invoice has (had) payments or is cancelled |
-| `INVOICE_HAS_PAYMENTS` | 422 | Cancel refused: money is still on the invoice (refund it first) |
+| `INVOICE_HAS_PAYMENTS` | 422 | Cancel or undo attend refused: money is still on the invoice (void or refund it first) |
 | `INVOICE_CANCELLED` | 422 | The invoice is cancelled (no payments, no second cancel) |
 | `INVOICE_NEEDS_ITEMS` | 422 | Removing the last item (cancel the invoice instead) |
-| `VISIT_CANCELLED` | 422 | No invoice can be created for a cancelled visit |
 | `DISCOUNT_EXCEEDS_SUBTOTAL` | 422 | The discount would exceed the subtotal (also when items change) |
 | `DISCOUNT_LIMIT_EXCEEDED` | 422 | RECEPTIONIST above `RECEPTIONIST_MAX_DISCOUNT_PERCENT` |
 | `DISCOUNT_PATIENT_MISMATCH` | 422 | Repeating another patient's discount |
-| `NO_PREVIOUS_DISCOUNT` | 404 | The patient has no active discount to repeat |
 | `OVERPAYMENT` | 422 | The payment is more than the remaining balance |
 | `VOID_NOT_ALLOWED` | 422 | Not the same local day, not your payment (RECEPTIONIST), already voided, refunds exist, or the invoice is cancelled |
 | `REFUND_NOT_ALLOWED` | 422 | Refunding a voided payment or a refund |
@@ -179,11 +206,11 @@ Business errors also carry a stable machine-readable `code`:
 | `EXPENSE_DATE_IN_FUTURE` | 422 | Expense dated after today |
 | `EXPENSE_EDIT_NOT_ALLOWED` | 422 | Not the creator on the same local day (and not OWNER), or the expense is voided |
 | `CATEGORY_INACTIVE` / `CATEGORY_NAME_TAKEN` | 422 / 409 | Expense category inactive / name already used |
-| `NOTE_NOT_ALLOWED` | 422 | A note on a visit that is not IN_SESSION or COMPLETED |
-| `NOTE_ALREADY_EXISTS` | 409 | The visit already has a note (edit it instead) |
+| `NOTE_NOT_ALLOWED` | 422 | A note on a VOIDED visit |
 | `NOTE_SIGNED` | 422 | Editing or re-signing a signed note (add an addendum instead) |
 | `NOTE_INCOMPLETE` | 422 | Signing without an assessment or the treatment done |
 | `NOTE_NOT_SIGNED` | 422 | An addendum on a draft |
+| `NOTE_NOT_VISIBLE` | 404 | The visit's note is another doctor's draft |
 | `ATTACHMENT_VISIT_MISMATCH` | 422 | The attachment's `visitId` belongs to another patient |
 | `UNSUPPORTED_FILE_TYPE` | 422 | The upload's content isn't JPG/PNG/WEBP/PDF, or doesn't match its extension (files over 5 MB get 413) |
 | `BACKDATE_LIMIT_EXCEEDED` | 422 | A RECEPTIONIST tried to book (or reschedule) more than `BACKDATE_MAX_DAYS` local days in the past |
@@ -194,8 +221,10 @@ Business errors also carry a stable machine-readable `code`:
 - `POST /auth/login` (email + password) returns an access JWT (`{ sub, role }`, 15 min), an opaque refresh token and the user. Inactive users get 403. Wrong credentials get a generic 401, with equalized timing for unknown emails.
 - `POST /auth/refresh` **rotates** the refresh token: the old one is revoked and points to its replacement (`replaced_by_id`). Presenting an already revoked token is treated as theft. All of that user's tokens are revoked and the event is audited (`REFRESH_TOKEN_REUSE_DETECTED`).
 - `POST /auth/logout` revokes a refresh token and is idempotent. `GET /auth/me` returns the current user.
+- The user in the login response and in `/auth/me` has `doctorId`: the doctor profile id for DOCTOR accounts (for "my schedule" screens), `null` otherwise.
 - Only the SHA-256 of a refresh token is stored.
 - Global `JwtAuthGuard`: everything is protected unless marked `@Public()`. It re-reads the user from the DB on every request, so deactivations and role changes apply immediately.
+- Global `ClinicThrottlerGuard` runs right after it, so limits count per user on authenticated routes and per IP on public ones. Login counts per email + IP: one mistyped password doesn't lock out the colleagues behind the same router.
 - Global `RolesGuard` + `@Roles()`. `@Auth(...roles)` combines `@Roles` with the Swagger docs. `@CurrentUser()` and `@CurrentActor()` (user id + IP, for auditing) are the param decorators.
 
 ### `users` (OWNER only)
@@ -214,7 +243,7 @@ Business errors also carry a stable machine-readable `code`:
   - User create, update, (de)activate and password reset.
   - Every patient, doctor, doctor-service and clinic-service mutation.
 - Updates store only the fields that changed, in `old_values` and `new_values`.
-- `GET /audit-logs` (OWNER) filters by `entityType`, `entityId`, `userId`, `action` and `from`/`to`, newest first. `user_id = NULL` means a public or system action.
+- `GET /audit-logs` (OWNER) filters by `entityType`, `entityId`, `userId`, `action` and `from`/`to` (local dates), newest first. Each row has `user: { id, name, role }`, or `null` for a public or system action.
 
 ### `patients`
 - The phone number is the only unique business key. `normalizeEgyptianMobile()` (`src/common/utils/phone.util.ts`):
@@ -223,7 +252,7 @@ Business errors also carry a stable machine-readable `code`:
   - Only 010/011/012/015 mobiles are valid.
 - Normalization happens in the DTO (before validation) **and again** in the service.
 - Uniqueness is enforced by the DB constraint `uq_patients_phone`. A violation becomes `409` with `details.patientId` of the existing patient. This also applies when a PATCH changes the phone.
-- `GET /patients?search=` matches part of the name (trigram index) or the phone in any format. `GET /patients/lookup?phone=` finds an exact number. `PATCH` changes are audited with old and new values.
+- `GET /patients?search=` matches part of the name (trigram index) or the phone in any format. `GET /patients/lookup?phone=` finds an exact number: `{ patient }`, with `patient: null` when the phone is unknown (the normal case at the desk). `PATCH` changes are audited with old and new values.
 - `PatientsService.findOrCreateByPhone({ name, phone, source, createdBy? }, manager?)` is used by public booking, reception booking and walk-ins:
   - Race-safe: `INSERT … ON CONFLICT (phone) DO NOTHING`, then `SELECT`.
   - Never renames an existing patient. It returns `nameMismatch: true` instead.
@@ -244,6 +273,7 @@ Business errors also carry a stable machine-readable `code`:
 
 ### Time-zone rules (`common/time`)
 - Every timestamp is stored as `timestamptz` (UTC). APIs accept and return **ISO 8601 with an offset**, e.g. `2026-11-05T17:00:00+02:00`. Input without an offset is rejected; `Z` is accepted.
+- List filters take clinic local dates instead (`from=2026-11-01&to=2026-11-30`, inclusive); `ClinicTimeService.dateRange` turns them into instants (start of `from`, start of the day after `to`).
 - Responses are rendered in `CLINIC_TIMEZONE`. Egypt observes DST, so the same wall time is `+02:00` in winter and `+03:00` in summer. **Never hardcode an offset.**
 - Doctor schedules are local wall-clock `time` values plus `day_of_week` (0 = Sunday), converted to UTC **per concrete date** with Luxon (`localToUtc`).
 - **Spring forward** (last Friday of April, 00:00 → 01:00): a wall time inside the skipped hour moves forward with the clock (00:30 → 01:30 +03:00). A 00:00–02:00 range is therefore one real hour long.
@@ -264,10 +294,10 @@ Business errors also carry a stable machine-readable `code`:
 - Slots that overlap time off or active appointments are excluded, as are past slots and slots within `BOOKING_MIN_LEAD_MINUTES`.
 - Dates outside today..today+`BOOKING_MAX_DAYS_AHEAD` return 422.
 - The doctor must be active and offer the service (otherwise 404/422).
-- Reception can pass `includeOutsideSchedule` to see the whole local day, which ignores the schedule, time off and lead time but still excludes booked slots.
+- Reception can pass `includeOutsideSchedule` to see the whole local day, which ignores the schedule, time off and lead time but still excludes booked slots. It also allows past dates and times, to record an appointment that already happened: a RECEPTIONIST back to `BACKDATE_MAX_DAYS` local days, the OWNER any date.
 - Availability is only a hint. **The exclusion constraints are the real guarantee.**
 
-**Double-booking guarantee.** Two exclusion constraints cover the *active* statuses (PENDING, CONFIRMED, CHECKED_IN, COMPLETED): one on `(doctor_id, tstzrange(start_at, end_at, '[)'))` and one on `(patient_id, …)`. A violation (Postgres `23P01`) becomes 409 `SLOT_UNAVAILABLE` or `PATIENT_OVERLAP`. Back-to-back appointments are fine, and CANCELLED, NO_SHOW and RESCHEDULED free the slot. `end_at` is always computed from the service duration; clients can't send it.
+**Double-booking guarantee.** Two exclusion constraints cover the *active* statuses (PENDING, CONFIRMED, ATTENDED): one on `(doctor_id, tstzrange(start_at, end_at, '[)'))` and one on `(patient_id, …)`. A violation (Postgres `23P01`) becomes 409 `SLOT_UNAVAILABLE` or `PATIENT_OVERLAP`. Back-to-back appointments are fine, and CANCELLED, NO_SHOW and RESCHEDULED free the slot. `end_at` is always computed from the service duration; clients can't send it.
 
 **Online booking** (`POST /public/appointments`, `@Public`). In one transaction:
 1. Load the doctor (must be active and public) and the service (must be offered).
@@ -290,98 +320,86 @@ There is no public cancel or lookup endpoint: reception handles changes by phone
 - `allowOutsideSchedule` skips the schedule, time-off and lead-time checks and writes an extra `APPOINTMENT_SCHEDULE_OVERRIDE` audit entry. It **never** skips the overlap constraints.
 - It also allows recording past appointments. A RECEPTIONIST may go back at most `BACKDATE_MAX_DAYS` local days; anything older needs the OWNER (422 `BACKDATE_LIMIT_EXCEEDED`). The same rule applies to reschedule.
 
+**How the desk works.** Online bookings start PENDING. Reception *may* call the patient and confirm, but it is optional: PENDING bookings show up everywhere CONFIRMED ones do and can be rescheduled, attended or marked no-show directly. Reception does everything about attendance; doctors never start or complete anything, they only write and sign the visit's note.
+
 **Status machine.** The only definition is `appointment-state-machine.ts`; any other transition gets 422 `INVALID_STATUS_TRANSITION`.
 
 ```mermaid
 stateDiagram-v2
     [*] --> PENDING: online booking
     [*] --> CONFIRMED: reception booking / reschedule target
-    PENDING --> CONFIRMED: confirm
+    PENDING --> CONFIRMED: confirm (optional)
     PENDING --> CANCELLED: cancel (reason required)
     CONFIRMED --> CANCELLED: cancel (reason required)
-    CONFIRMED --> NO_SHOW: no-show (only after start_at)
+    PENDING --> RESCHEDULED: reschedule
     CONFIRMED --> RESCHEDULED: reschedule
-    PENDING --> CONFIRMED: check-in (first of two steps)
-    CONFIRMED --> CHECKED_IN: check-in
-    CHECKED_IN --> COMPLETED: visit completed
-    CHECKED_IN --> CONFIRMED: undo check-in
-    CHECKED_IN --> CANCELLED: visit cancelled (patient left)
+    PENDING --> NO_SHOW: no-show (after start_at)
+    CONFIRMED --> NO_SHOW: no-show (after start_at)
+    PENDING --> ATTENDED: attend (same local day)
+    CONFIRMED --> ATTENDED: attend (same local day)
+    ATTENDED --> CONFIRMED: undo attend (same day, no note, nothing paid)
+    NO_SHOW --> CONFIRMED: undo no-show (same day)
 ```
 
-Each transition also records **which operation** may perform it (the `AppointmentTrigger`). For example, `CHECKED_IN → CONFIRMED` is only reachable through undo check-in, so `PATCH /appointments/:id/confirm|cancel|no-show` all return 422 on a CHECKED_IN appointment.
+Each transition also records **which operation** may perform it (the `AppointmentTrigger`): `ATTENDED → CONFIRMED` is only reachable through undo attend, and `NO_SHOW → CONFIRMED` only through undo no-show, so `POST /appointments/:id/confirm` returns 422 on both. CANCELLED and RESCHEDULED are final.
 
-- Each change locks the row, validates it with the state machine, updates the status, appends `appointment_status_history` (from, to, changed_by, reason) and writes `audit_logs`, all in **one transaction**.
-- **Reschedule** (`POST /appointments/:id/reschedule`) is one transaction. The old appointment becomes RESCHEDULED first, so it stops blocking. Then a new CONFIRMED appointment is inserted with `rescheduled_from_id`: same patient and service, optionally another doctor. If the new slot is taken, everything rolls back.
+The time and undo rules on top of the transitions live in `appointment-actions.ts`. The same table answers the day list's `allowedActions` and rejects requests, so the two never disagree:
+
+| Action (`allowedActions`) | Endpoint | From | Extra rule |
+|---|---|---|---|
+| `confirm` | `POST /appointments/:id/confirm` | PENDING | – |
+| `cancel` | `POST /appointments/:id/cancel { reason }` | PENDING, CONFIRMED | – |
+| `reschedule` | `POST /appointments/:id/reschedule` | PENDING, CONFIRMED | the new appointment is CONFIRMED |
+| `noShow` | `POST /appointments/:id/no-show` | PENDING, CONFIRMED | start time passed (`NO_SHOW_TOO_EARLY`) |
+| `undoNoShow` | `POST /appointments/:id/undo-no-show` | NO_SHOW | same local day (`UNDO_WRONG_DAY`); 409 if the freed slot was booked meanwhile |
+| `attend` | `POST /appointments/:id/attend` | PENDING, CONFIRMED | appointment's local day (`ATTEND_WRONG_DAY`) |
+| `undoAttend` | `POST /appointments/:id/undo-attend { reason }` | ATTENDED | same local day, no note (`VISIT_HAS_NOTE`), invoice unpaid (`INVOICE_HAS_PAYMENTS`) |
+
+- Each change locks the row, validates it, updates the status, appends `appointment_status_history` (from, to, changed_by, reason) and writes `audit_logs`, all in **one transaction**.
+- **Reschedule** is one transaction. The old appointment becomes RESCHEDULED first, so it stops blocking. Then a new CONFIRMED appointment is inserted with `rescheduled_from_id`: same patient and service, optionally another doctor. If the new slot is taken, everything rolls back.
 
 **Reading:**
-- `GET /appointments` filters by date range, doctor, patient, status and source; it is paginated and sorted by start time.
-- `GET /appointments/day?date=` is the reception day list: patient name + phone, doctor, service, status, `bookedName` and a computed `nameMismatch`.
-- `GET /appointments/:id`, `GET /appointments/by-reference/:code` (case-insensitive, e.g. `APT-7K3Q9X`) and `GET /appointments/:id/history`.
+- `GET /appointments` filters by local date range (`from`/`to`), doctor, patient, status and source; it is paginated and sorted by start time.
+- `GET /appointments/day?date=&status=&doctorId=` is the day list: every appointment of the local day with its visit (if attended) plus the day's walk-ins (`isWalkIn: true`, appointment fields null), ordered by start time (attended time for walk-ins). Each row has patient name + phone, doctor, service, status, `bookedName`, a computed `nameMismatch`, `visitId`, `visitStatus`, `attendedAt`, `noteStatus` and **`allowedActions`**.
+  - `status` takes several values (`?status=PENDING&status=CONFIRMED` or `?status=PENDING,CONFIRMED`); walk-ins count as ATTENDED.
+  - OWNER / RECEPTIONIST rows also carry the billing columns (see Cashier views). A walk-in row's only action is `undoAttend`, done with `POST /visits/:visitId/undo-attend`.
+  - A DOCTOR gets only their own rows (PENDING included; `doctorId` is ignored), **without** billing fields, and `allowedActions` is `writeNote` (ACTIVE visit whose note isn't signed) or `viewNote` (signed note).
+- `GET /appointments/:id`, `GET /appointments/by-reference/:code` (case-insensitive, e.g. `APT-7K3Q9X`; 404 `REFERENCE_NOT_FOUND`) and `GET /appointments/:id/history`.
 - `GET /patients/:id/appointments` lists a patient's appointments across all doctors.
 
 ### `visits`
 
-An **appointment** is a booking; a **visit** is what actually happened when the patient came.
+An **appointment** is a booking; a **visit** is the patient actually attending. Reception creates visits; doctors only write the note.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> WAITING: check-in (appointment) / walk-in
-    WAITING --> IN_SESSION: start (visit's doctor or OWNER)
-    WAITING --> CANCELLED: undo check-in / patient left (reason required)
-    IN_SESSION --> COMPLETED: complete (visit's doctor or OWNER)
+    [*] --> ACTIVE: attend (appointment) / walk-in
+    ACTIVE --> VOIDED: undo attend (same day, no note, nothing paid)
 ```
 
-COMPLETED and CANCELLED are final: visits are never reopened. The visit state machine lives only in `visit-state-machine.ts`; anything else returns 422 `INVALID_VISIT_TRANSITION`.
-
-**Check-in** (`POST /appointments/:id/check-in`, OWNER/RECEPTIONIST):
-- Only allowed on the appointment's local date (`CLINIC_TIMEZONE`); late arrival the same day is fine. Otherwise 422 `CHECK_IN_WRONG_DAY`.
-- A PENDING booking is confirmed on the way: two history rows, PENDING→CONFIRMED and CONFIRMED→CHECKED_IN.
-- One transaction locks the appointment, changes its status, inserts the WAITING visit (patient, doctor and service copied from the appointment), and writes both histories and the audit entries.
-- A second check-in returns 409 `ALREADY_CHECKED_IN`. The guarantee is the partial unique index `uq_visits_appointment_live` on `appointment_id WHERE status <> 'CANCELLED'`. It is partial so that after an undo check-in, the same appointment can be checked in again.
+**Attend** (`POST /appointments/:id/attend`, OWNER/RECEPTIONIST): "the patient entered the doctor".
+- Only on the appointment's local date (`CLINIC_TIMEZONE`); late arrival the same day is fine. Otherwise 422 `ATTEND_WRONG_DAY`. Works from PENDING or CONFIRMED (one history row).
+- One transaction locks the appointment, moves it to ATTENDED, inserts the ACTIVE visit (patient, doctor and service copied from the appointment), **creates the invoice**, and writes the histories and audit entries. The response is the visit plus `invoiceId`. If anything fails (the invoice included), nothing is written.
+- A second attend returns 409 `ALREADY_ATTENDED`. The guarantee is the partial unique index `uq_visits_appointment_active` on `appointment_id WHERE status = 'ACTIVE'`; it is partial so that after an undo, the same appointment can attend again.
 
 **Walk-ins** (`POST /visits/walk-in`):
-- A visit with `appointment_id = NULL`, identified by `patientId` or `name` + `phone` (find-or-create, source RECEPTION). The patient is never renamed.
+- A visit with `appointment_id = NULL`, attended now, with its invoice in the same transaction (`invoiceId` in the response). The patient is identified by `patientId` or `name` + `phone` (find-or-create, source RECEPTION) and never renamed.
 - The doctor must be active and offer the (active) service.
-- Walk-ins **do not block booking slots**; the doctor sees them when free.
+- Walk-ins **do not block booking slots**.
 
-**One open visit per patient, one session per doctor.** These are partial unique indexes, so they also hold under races:
-- `uq_visits_patient_open`: `patient_id WHERE status IN ('WAITING','IN_SESSION')` → 409 `PATIENT_HAS_OPEN_VISIT`.
-- `uq_visits_doctor_in_session`: `doctor_id WHERE status = 'IN_SESSION'` → 409 `DOCTOR_ALREADY_IN_SESSION`.
+**Undo attend** (same local day only, OWNER/RECEPTIONIST, `{ reason }` required):
+- `POST /appointments/:id/undo-attend`: the appointment goes back to CONFIRMED.
+- `POST /visits/:id/undo-attend`: the way to undo a walk-in (for an appointment's visit it does the same as the appointment route).
+- Refused while the doctor has a note for the visit (422 `VISIT_HAS_NOTE`) or the invoice holds money (422 `INVOICE_HAS_PAYMENTS`: void the payments first).
+- Otherwise, in one transaction: the visit becomes VOIDED (`voided_at`, `voided_by`, `void_reason`; CHECK `chk_visits_voided`), its invoice is CANCELLED with the same reason, and the appointment returns to CONFIRMED.
 
-CHECK constraints keep the timestamps consistent: IN_SESSION ⇒ `started_at`; COMPLETED ⇒ `started_at`, `completed_at` and `completed_at >= started_at`; CANCELLED ⇒ `cancelled_at` and `cancel_reason`.
-
-**Undo / cancel** (OWNER/RECEPTIONIST, WAITING only):
-- `POST /visits/:id/undo-check-in { reason }`: checked in by mistake. The visit becomes CANCELLED and the appointment goes back to CONFIRMED.
-- `POST /visits/:id/cancel { reason }`: patient left before being seen. The visit becomes CANCELLED and the appointment CANCELLED with the same reason.
-
-**Doctor actions** (the visit's doctor or OWNER; other doctors get 404, reception 403):
-- `POST /visits/:id/start`: WAITING → IN_SESSION.
-- `POST /visits/:id/complete`: IN_SESSION → COMPLETED. The linked appointment becomes COMPLETED in the same transaction.
-
-**`VisitCompletionPolicy` hook** (`visit-completion-policy.ts`):
-- Consulted inside the completion transaction before anything is written. Returning `{ allowed: false, reason }` answers 422 `VISIT_COMPLETION_BLOCKED` and nothing changes.
-- `VisitsModule` binds `SignedNoteCompletionPolicy` (clinical module): a visit is completed only once its clinical note is SIGNED.
-
-**Domain events** (`visit.events.ts`, via `@nestjs/event-emitter`):
-
-| Event | When |
-|---|---|
-| `visit.checked_in` | Check-in or walk-in |
-| `visit.started` | Session started |
-| `visit.completed` | Visit completed |
-| `visit.cancelled` | Undo check-in or patient left |
-
-- The payload is `{ visitId, appointmentId (null for walk-ins), patientId, doctorId, serviceId, at }`.
-- Events are emitted **only after the transaction commits**: nothing is emitted when it fails, and listeners always see committed data.
-- Billing listens to `visit.checked_in` (automatic invoice) and `visit.cancelled` (cancel an unpaid invoice).
+**Notes** are written by the visit's doctor on ACTIVE visits only, any day after the visit (see `clinical`).
 
 **Reading:**
-- `GET /visits/queue?date=&doctorId=`: the day's WAITING and IN_SESSION visits ordered by check-in. Each row has patient, service, booked start time (null for walk-ins), `checkedInAt` and `waitingMinutes` (minutes since check-in, or minutes waited before the session started once IN_SESSION), plus `hasNote` and `noteStatus` (`DRAFT` / `SIGNED` / null). Doctors always get their own queue.
-- `GET /appointments/day` now also has `visitId`, `visitStatus` and `checkedInAt` per appointment. It includes the day's walk-ins as rows with `isWalkIn: true` and null appointment fields, ordered by start time (check-in time for walk-ins).
-- `GET /visits` filters by check-in date range, doctor, patient, status and `walkIn`; it is paginated, newest first. Doctors see only their own.
+- `GET /visits/queue?date=&doctorId=`: the day's ACTIVE visits in the order they attended, with patient, service, booked start time (null for walk-ins), `attendedAt`, `hasNote` and `noteStatus` (`DRAFT` / `SIGNED` / null). Doctors always get their own queue.
+- `GET /visits` filters by local attended date range (`from`/`to`), doctor, patient, status and `walkIn`; it is paginated, newest first. Doctors see only their own.
 - `GET /visits/:id` and `/visits/:id/history`.
 - `GET /patients/:id/visits` lists every doctor's visits for the patient: metadata only, no clinical data.
-- `GET /visits/open` lists visits still WAITING/IN_SESSION from previous days, i.e. forgotten ones.
 
 ### `billing`
 
@@ -403,33 +421,32 @@ CHECK constraints keep the timestamps consistent: IN_SESSION ⇒ `started_at`; C
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ISSUED: check-in (automatic) / manual invoice
+    [*] --> ISSUED: attend / walk-in / manual invoice
     ISSUED --> PARTIALLY_PAID: payment
     PARTIALLY_PAID --> PAID: payment
     ISSUED --> PAID: payment / 0.00 total
     PAID --> PARTIALLY_PAID: refund / void
     PARTIALLY_PAID --> ISSUED: refund / void back to 0
-    ISSUED --> CANCELLED: cancel (amount_paid = 0) / visit cancelled
+    ISSUED --> CANCELLED: cancel (amount_paid = 0) / undo attend
 ```
 
 - **Status is derived from the amounts**: nothing paid → ISSUED, part → PARTIALLY_PAID, everything (or a 0.00 total) → PAID. It is stored for querying.
-- **Automatic invoice per visit.**
-  - The `visit.checked_in` event (after commit) creates it in its own transaction.
+- **Invoice per visit.**
+  - Created by attend and walk-in **in the same transaction as the visit** (`invoiceId` in the response): there is no visit without its invoice.
   - Pricing comes from the `VisitBillingPolicy` hook. The default is `doctor_services.price_override ?? clinic_services.base_price`, snapshotted into the item, so later catalog changes never touch it.
-  - It is idempotent: a partial unique index on `visit_id` (non-cancelled) makes a replayed event a no-op.
-  - If the listener fails, the visit is untouched and the error is logged with the `visitId`. `POST /visits/:id/invoice` creates the invoice (201) or returns the existing one (200).
-- **Visit cancelled** (`visit.cancelled`): an unpaid invoice is cancelled automatically with the visit's reason. A paid one stays and appears in `GET /billing/attention`.
+  - A partial unique index on `visit_id` (non-cancelled) allows one live invoice per visit.
+- **Undo attend** cancels the visit's invoice with the same reason, and is refused while it holds money.
 - **Manual invoices** (`POST /invoices`): service items take name and base price from the catalog (any client price is ignored); free-text items need a description and a price.
-- **Locking.** Items and the discount change only while the invoice has never had a valid payment (`INVOICE_LOCKED`). Percent discounts are recalculated when items change. An invoice keeps at least one item.
+- **Locking.** Items and the discount change only while the invoice has never had a valid payment (`INVOICE_LOCKED`). `GET /invoices/:id` says so in `isLocked`, and `canCancel` is true while it is not cancelled and nothing is paid. Percent discounts are recalculated when items change. An invoice keeps at least one item.
 - **Cancel** requires `amount_paid = 0`. After a full refund, a locked invoice can still be cancelled.
 - **Hook for packages (Stage 8):** bind a different `VisitBillingPolicy` to `VISIT_BILLING_POLICY` in `BillingModule` (e.g. "covered by package" items at 0.00).
 
 #### Discounts and repeat
-- `POST /invoices/:id/discount` takes `{ type, value, reason }` or `{ repeatFromDiscountId }`. Only one discount is active per invoice. Replacing or removing (`DELETE … { reason }`) keeps the old row, with `removed_at` and `removal_reason`.
+- `POST /invoices/:id/discount` takes `{ type, value, reason }` or `{ repeatFromDiscountId }`. Only one discount is active per invoice. Replacing or removing (`POST /invoices/:id/discount/remove { reason }`) keeps the old row, with `removed_at` and `removal_reason`.
 - PERCENT: `0 < value ≤ 100`. FIXED: `0 < value ≤ subtotal` (`DISCOUNT_EXCEEDS_SUBTOTAL`).
 - RECEPTIONIST cap: the effective percentage (the percent value, or fixed amount ÷ subtotal) must be ≤ `RECEPTIONIST_MAX_DISCOUNT_PERCENT`. The OWNER has no cap.
 - **Repeat flow:**
-  1. `GET /patients/:id/last-discount` returns the patient's most recent discount that is still applied, on a non-cancelled invoice (or 404 `NO_PREVIOUS_DISCOUNT`).
+  1. `GET /patients/:id/last-discount?excludeInvoiceId=` returns the patient's most recent discount that is still applied, on a non-cancelled invoice other than `excludeInvoiceId` (the invoice being edited), or `200 null` when there is none.
   2. `POST /invoices/:new/discount { repeatFromDiscountId }` copies type, value and reason, recomputes the amount on the new subtotal and sets `repeated_from_id`.
   - The source must belong to the same patient (`DISCOUNT_PATIENT_MISMATCH`), and the cap still applies. The old invoice never changes.
 
@@ -443,8 +460,8 @@ stateDiagram-v2
 - `GET /payments/:id/receipt` returns the printable data as JSON: clinic name and phone, receipt and invoice numbers, patient, items, discount with reason, total, this payment, total paid, remaining balance, received by, time.
 
 #### Cashier views
-- `GET /appointments/day` rows include `invoiceId`, `invoiceTotal`, `amountPaid`, `balance` and `paymentStatus` (`NOT_INVOICED | UNPAID | PARTIAL | PAID`).
-- `GET /billing/attention` lists invoices of cancelled visits that still hold money, and invoices with a balance issued before the local day `BILLING_OVERDUE_DAYS` ago.
+- `GET /appointments/day` rows (OWNER / RECEPTIONIST) include `invoiceId`, `invoiceTotal`, `amountPaid`, `balance` and `paymentStatus` (`NOT_INVOICED | UNPAID | PARTIAL | PAID`).
+- `GET /billing/attention` lists invoices of voided visits that still hold money (`voidedVisitsWithPayments`; only data from before undo attend required an unpaid invoice), and invoices with a balance issued before the local day `BILLING_OVERDUE_DAYS` ago.
 - `GET /billing/daily-summary?date=` covers one clinic local day (23, 24 or 25 hours with DST): valid payments and refunds by method, voids made that day, active discounts applied that day (by user), and valid expenses dated that day by method. The OWNER can query any date; a RECEPTIONIST today only.
 
   ```
@@ -455,7 +472,7 @@ stateDiagram-v2
 - Clinic purchases (tea, supplies, maintenance) are **expenses, not patient invoices**. Six default categories are seeded by the migration.
 - `POST /expenses`: the date can't be in the future (`EXPENSE_DATE_IN_FUTURE`). A RECEPTIONIST can backdate at most `BACKDATE_MAX_DAYS`.
 - `PATCH /expenses/:id` and `POST /expenses/:id/void { reason }`: allowed for the creator on the same local day, or the OWNER any time (`EXPENSE_EDIT_NOT_ALLOWED`). Old and new values are audited, and there is no hard delete.
-- `GET /expenses` filters by date range, category, method, status and creator. It is paginated and returns `totalAmount`, the sum of VALID expenses across all pages.
+- `GET /expenses` filters by local date range (`from`/`to`), category, method, status and creator. It is paginated and returns `totalAmount`, the sum of VALID expenses across all pages.
 - **Receipt files:**
   - `POST /expenses/:id/receipt` takes a multipart upload in the `file` field: JPG, PNG, WEBP or PDF, at most 5 MB (413 above that).
   - The type is decided by the file's **magic bytes**, and the name's extension must match (`UNSUPPORTED_FILE_TYPE`).
@@ -480,15 +497,14 @@ A DRAFT note is visible **only to its author**: everyone else (other doctors, th
 
 **Medical info** (`patient_medical_info`, one row per patient, created on the first save):
 - `GET /patients/:id/medical-info` returns empty fields with `updatedAt: null` before the first save.
-- `PUT /patients/:id/medical-info { allergies, chronicConditions, pastSurgeries, currentMedications, notes }` replaces the record: a field left out becomes null. Any doctor with access may update it, and old and new values are audited (`PATIENT_MEDICAL_INFO_UPDATED`).
+- `PUT /patients/:id/medical-info { allergies, chronicConditions, pastSurgeries, currentMedications, notes }` replaces the record: a field left out (or blank) becomes null. Any doctor with access may update it, and old and new values are audited (`PATIENT_MEDICAL_INFO_UPDATED`).
 
 **Session notes** (`clinical_notes`, at most one per visit, enforced by `uq_clinical_notes_visit`):
-- `POST /visits/:id/note` creates a DRAFT. Only the visit's doctor may do this (others get 404), and only while the visit is IN_SESSION or COMPLETED (`NOTE_NOT_ALLOWED`). A second note is 409 `NOTE_ALREADY_EXISTS`.
+- `PUT /visits/:id/note` saves the DRAFT: created on the first save (on an ACTIVE visit, any day after it; `NOTE_NOT_ALLOWED` on a VOIDED one), replaced after (a field left out or blank becomes null). Only the visit's doctor may do this (others get 404). The visit row lock makes parallel first saves create one note.
 - Fields: `chiefComplaint`, `assessment`, `treatmentDone`, `progress`, `plan` (next steps and home exercises) and `painScore` (0–10, DB CHECK).
-- `PATCH /visits/:id/note` edits the draft (fields left out are unchanged; null clears one).
-- `POST /visits/:id/note/sign` needs an assessment or the treatment done (`NOTE_INCOMPLETE`). A SIGNED note is **locked forever** (`NOTE_SIGNED`); the DB CHECK `chk_clinical_notes_signed` requires `signed_at`.
-- `GET /visits/:id/note` returns the note with its addenda.
-- **Completing a visit requires its signed note** (422 `VISIT_COMPLETION_BLOCKED` otherwise).
+- `POST /visits/:id/note/sign` needs an assessment or the treatment done (`NOTE_INCOMPLETE`). Fields sent with it are saved first (like `PUT`), in the same transaction, so a client can save and sign in one call. A SIGNED note is **locked forever** (`NOTE_SIGNED`); the DB CHECK `chk_clinical_notes_signed` requires `signed_at`.
+- `GET /visits/:id/note` returns the note with its addenda, or `200 null` when the visit has none yet. Another doctor's draft is 404 `NOTE_NOT_VISIBLE`.
+- `GET /clinical-notes/needs-attention?doctorId=&page=&limit=` lists ACTIVE visits without a SIGNED note (no note yet, or a DRAFT), oldest first, with patient, service, doctor, visit date and `noteStatus` (`DRAFT` or null). A DOCTOR sees only their own; the OWNER sees all, optionally filtered by `doctorId`.
 
 **Addenda** (`clinical_note_addenda`, never edited or deleted):
 - `POST /clinical-notes/:id/addenda { content }` adds to a SIGNED note (`NOTE_NOT_SIGNED` on a draft). Any doctor with access to the patient may add one, and the author is recorded.
@@ -528,8 +544,8 @@ The full list (and the testing policy) is in [CLAUDE.md](../CLAUDE.md) at the re
 - Wrap cross-referencing entity relations in `Relation<>` (required for ESM circular imports).
 - Business errors that clients branch on: throw `conflict(...)` / `unprocessable(...)` with an `ErrorCode` (`common/errors/app.exception.ts`).
 - Dates and times: accept and return ISO with offset; convert through `ClinicTimeService`, never with a fixed offset.
-- State machines live in one file per aggregate (`appointment-state-machine.ts`, `visit-state-machine.ts`). Every status change writes its history row and audit entry in the same transaction.
-- Cross-module side effects go through domain events emitted **after commit**, never inside the transaction.
+- The appointment state machine lives in one file (`appointment-state-machine.ts`), and the desk rules on top of it in `appointment-actions.ts`. Every status change writes its history row and audit entry in the same transaction.
+- Cross-module writes that must succeed together (visit + invoice) run in the same transaction, by passing the `EntityManager`.
 - Status-history tables default `changed_at` to `clock_timestamp()` (not `now()`), so several rows written in one transaction keep their order.
 - Money: strings + `decimal.js` helpers only; totals computed server-side; DB CHECKs for every amount invariant.
 - Listeners of domain events run their own transaction and must be idempotent (events can be replayed).

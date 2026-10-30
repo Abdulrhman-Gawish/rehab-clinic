@@ -5,6 +5,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
+import { ClinicThrottlerGuard } from '../../common/guards/throttler.guard.js';
 import type { EnvironmentVariables } from '../../config/env.validation.js';
 import { User } from '../users/entities/user.entity.js';
 import { ACCESS_TOKEN_TTL_SECONDS } from './auth.constants.js';
@@ -32,8 +33,10 @@ import { RefreshTokensService } from './refresh-tokens.service.js';
   providers: [
     AuthService,
     RefreshTokensService,
-    // Order matters: authenticate first, then check roles.
+    // Order matters: authenticate first (so rate limits can count per
+    // user), then throttle, then check roles.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: ClinicThrottlerGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
   ],
   exports: [RefreshTokensService],

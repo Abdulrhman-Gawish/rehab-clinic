@@ -6,12 +6,9 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
+import { UserRefDto } from '../../common/dto/user-ref.dto.js';
 import { UserRole } from '../../common/enums/user-role.enum.js';
-import {
-  ErrorCode,
-  notFound,
-  unprocessable,
-} from '../../common/errors/app.exception.js';
+import { ErrorCode, unprocessable } from '../../common/errors/app.exception.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
 import {
@@ -140,9 +137,12 @@ export class DiscountsService {
 
   /**
    * The patient's most recent discount that is still applied, on an invoice
-   * that is not cancelled.
+   * that is not cancelled (and not `excludeInvoiceId`); null if none.
    */
-  async lastForPatient(patientId: string): Promise<LastDiscountDto> {
+  async lastForPatient(
+    patientId: string,
+    excludeInvoiceId?: string,
+  ): Promise<LastDiscountDto | null> {
     if (
       !(await this.dataSource
         .getRepository(Patient)
@@ -150,24 +150,25 @@ export class DiscountsService {
     ) {
       throw new NotFoundException('Patient not found');
     }
-    const discount = await this.dataSource
+    const qb = this.dataSource
       .getRepository(InvoiceDiscount)
       .createQueryBuilder('discount')
       .innerJoinAndSelect('discount.invoice', 'invoice')
+      .innerJoinAndSelect('discount.appliedBy', 'appliedBy')
       .where('discount.patientId = :patientId', { patientId })
       .andWhere('discount.removedAt IS NULL')
       .andWhere('invoice.status <> :cancelled', {
         cancelled: InvoiceStatus.CANCELLED,
       })
       .orderBy('discount.appliedAt', 'DESC')
-      .addOrderBy('discount.createdAt', 'DESC')
-      .getOne();
-    if (!discount?.invoice) {
-      throw notFound(
-        ErrorCode.NO_PREVIOUS_DISCOUNT,
-        'This patient has no previous discount',
-      );
+      .addOrderBy('discount.createdAt', 'DESC');
+    if (excludeInvoiceId) {
+      qb.andWhere('discount.invoiceId <> :excludeInvoiceId', {
+        excludeInvoiceId,
+      });
     }
+    const discount = await qb.getOne();
+    if (!discount?.invoice) return null;
     return {
       id: discount.id,
       invoiceId: discount.invoiceId,
@@ -176,7 +177,7 @@ export class DiscountsService {
       value: discount.value,
       amount: discount.amount,
       reason: discount.reason,
-      appliedById: discount.appliedById,
+      appliedBy: UserRefDto.fromEntity(discount.appliedBy),
       appliedAt: this.time.toIso(discount.appliedAt),
     };
   }

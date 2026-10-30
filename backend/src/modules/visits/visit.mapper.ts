@@ -5,13 +5,10 @@ import type {
 } from './dto/visit.dto.js';
 import type { VisitStatusHistory } from './entities/visit-status-history.entity.js';
 import type { Visit } from './entities/visit.entity.js';
+import { UserRefDto } from '../../common/dto/user-ref.dto.js';
 import type { NoteStatus } from '../clinical/clinical.enums.js';
-import { VisitStatus } from './visit.enums.js';
-import type { VisitEventPayload } from './visit.events.js';
 
 type ToIso = (instant: Date) => string;
-
-const MINUTE_MS = 60_000;
 
 function refs(visit: Visit) {
   const { patient, doctor, service } = visit;
@@ -32,7 +29,8 @@ function refs(visit: Visit) {
 const isoOrNull = (instant: Date | null, toIso: ToIso) =>
   instant ? toIso(instant) : null;
 
-// Requires patient, doctor.user, service (and appointment, if any) loaded.
+// Requires patient, doctor.user, service, attendedBy, voidedBy (and the
+// appointment, if any) loaded.
 export function toVisitResponse(visit: Visit, toIso: ToIso): VisitResponseDto {
   return {
     id: visit.id,
@@ -42,14 +40,11 @@ export function toVisitResponse(visit: Visit, toIso: ToIso): VisitResponseDto {
     appointmentReferenceCode: visit.appointment?.referenceCode ?? null,
     appointmentStartAt: isoOrNull(visit.appointment?.startAt ?? null, toIso),
     ...refs(visit),
-    checkedInAt: toIso(visit.checkedInAt),
-    checkedInById: visit.checkedInById,
-    startedAt: isoOrNull(visit.startedAt, toIso),
-    completedAt: isoOrNull(visit.completedAt, toIso),
-    completedById: visit.completedById,
-    cancelledAt: isoOrNull(visit.cancelledAt, toIso),
-    cancelledById: visit.cancelledById,
-    cancelReason: visit.cancelReason,
+    attendedAt: toIso(visit.attendedAt),
+    attendedBy: UserRefDto.fromEntity(visit.attendedBy),
+    voidedAt: isoOrNull(visit.voidedAt, toIso),
+    voidedBy: UserRefDto.fromNullable(visit.voidedBy),
+    voidReason: visit.voidReason,
     createdAt: visit.createdAt,
     updatedAt: visit.updatedAt,
   };
@@ -58,32 +53,21 @@ export function toVisitResponse(visit: Visit, toIso: ToIso): VisitResponseDto {
 export function toQueueEntry(
   visit: Visit,
   noteStatus: NoteStatus | null,
-  now: Date,
   toIso: ToIso,
 ): QueueEntryDto {
-  // IN_SESSION: the wait ended when the session started.
-  const waitEnd =
-    visit.status === VisitStatus.IN_SESSION && visit.startedAt
-      ? visit.startedAt
-      : now;
   return {
     visitId: visit.id,
-    status: visit.status,
     isWalkIn: visit.appointmentId === null,
     appointmentId: visit.appointmentId,
     appointmentStartAt: isoOrNull(visit.appointment?.startAt ?? null, toIso),
     ...refs(visit),
-    checkedInAt: toIso(visit.checkedInAt),
-    startedAt: isoOrNull(visit.startedAt, toIso),
-    waitingMinutes: Math.max(
-      0,
-      Math.floor((waitEnd.getTime() - visit.checkedInAt.getTime()) / MINUTE_MS),
-    ),
+    attendedAt: toIso(visit.attendedAt),
     hasNote: noteStatus !== null,
     noteStatus,
   };
 }
 
+// Requires `changedBy` to be loaded.
 export function toVisitHistoryEntry(
   entry: VisitStatusHistory,
   toIso: ToIso,
@@ -91,19 +75,8 @@ export function toVisitHistoryEntry(
   return {
     fromStatus: entry.fromStatus,
     toStatus: entry.toStatus,
-    changedById: entry.changedById,
+    changedBy: UserRefDto.fromEntity(entry.changedBy),
     reason: entry.reason,
     changedAt: toIso(entry.changedAt),
-  };
-}
-
-export function toEventPayload(visit: Visit, at: Date): VisitEventPayload {
-  return {
-    visitId: visit.id,
-    appointmentId: visit.appointmentId,
-    patientId: visit.patientId,
-    doctorId: visit.doctorId,
-    serviceId: visit.serviceId,
-    at,
   };
 }

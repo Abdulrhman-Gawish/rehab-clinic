@@ -120,11 +120,8 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
   // appointments: OWNER, RECEPTIONIST W; DOCTOR R own only (else 404)
   { method: 'post', path: '/appointments', allowed: [OWNER, RECEPTIONIST] },
   { method: 'get', path: '/appointments', allowed: STAFF },
-  {
-    method: 'get',
-    path: '/appointments/day?date=2026-11-05',
-    allowed: [OWNER, RECEPTIONIST],
-  },
+  // day list: DOCTOR gets their own rows without billing
+  { method: 'get', path: '/appointments/day?date=2026-11-05', allowed: STAFF },
   {
     method: 'get',
     path: '/appointments/by-reference/APT-AAAAAA',
@@ -133,17 +130,17 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
   { method: 'get', path: `/appointments/${id}`, allowed: STAFF },
   { method: 'get', path: `/appointments/${id}/history`, allowed: STAFF },
   {
-    method: 'patch',
+    method: 'post',
     path: `/appointments/${id}/confirm`,
     allowed: [OWNER, RECEPTIONIST],
   },
   {
-    method: 'patch',
+    method: 'post',
     path: `/appointments/${id}/cancel`,
     allowed: [OWNER, RECEPTIONIST],
   },
   {
-    method: 'patch',
+    method: 'post',
     path: `/appointments/${id}/no-show`,
     allowed: [OWNER, RECEPTIONIST],
   },
@@ -153,27 +150,29 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
     allowed: [OWNER, RECEPTIONIST],
   },
   { method: 'get', path: `/patients/${id}/appointments`, allowed: STAFF },
-  // visits: desk W (check-in/walk-in/undo/cancel); OWNER + own DOCTOR start/complete
   {
     method: 'post',
-    path: `/appointments/${id}/check-in`,
+    path: `/appointments/${id}/undo-no-show`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  // attendance: reception only (doctors never start or complete visits)
+  {
+    method: 'post',
+    path: `/appointments/${id}/attend`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/appointments/${id}/undo-attend`,
     allowed: [OWNER, RECEPTIONIST],
   },
   { method: 'post', path: '/visits/walk-in', allowed: [OWNER, RECEPTIONIST] },
   {
     method: 'post',
-    path: `/visits/${id}/undo-check-in`,
+    path: `/visits/${id}/undo-attend`,
     allowed: [OWNER, RECEPTIONIST],
   },
-  {
-    method: 'post',
-    path: `/visits/${id}/cancel`,
-    allowed: [OWNER, RECEPTIONIST],
-  },
-  { method: 'post', path: `/visits/${id}/start`, allowed: [OWNER, DOCTOR] },
-  { method: 'post', path: `/visits/${id}/complete`, allowed: [OWNER, DOCTOR] },
   { method: 'get', path: '/visits/queue', allowed: STAFF },
-  { method: 'get', path: '/visits/open', allowed: [OWNER, RECEPTIONIST] },
   { method: 'get', path: '/visits', allowed: STAFF },
   { method: 'get', path: `/visits/${id}`, allowed: STAFF },
   { method: 'get', path: `/visits/${id}/history`, allowed: STAFF },
@@ -213,11 +212,6 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
     allowed: [OWNER, RECEPTIONIST],
   },
   {
-    method: 'post',
-    path: `/visits/${id}/invoice`,
-    allowed: [OWNER, RECEPTIONIST],
-  },
-  {
     method: 'get',
     path: `/patients/${id}/last-discount`,
     allowed: [OWNER, RECEPTIONIST],
@@ -228,8 +222,8 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
     allowed: [OWNER, RECEPTIONIST],
   },
   {
-    method: 'delete',
-    path: `/invoices/${id}/discount`,
+    method: 'post',
+    path: `/invoices/${id}/discount/remove`,
     allowed: [OWNER, RECEPTIONIST],
   },
   {
@@ -317,10 +311,14 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
   },
   { method: 'get', path: `/attachments/${id}/file`, allowed: [OWNER, DOCTOR] },
   { method: 'get', path: `/visits/${id}/note`, allowed: [OWNER, DOCTOR] },
-  { method: 'post', path: `/visits/${id}/note`, allowed: [DOCTOR] },
-  { method: 'patch', path: `/visits/${id}/note`, allowed: [DOCTOR] },
+  { method: 'put', path: `/visits/${id}/note`, allowed: [DOCTOR] },
   { method: 'post', path: `/visits/${id}/note/sign`, allowed: [DOCTOR] },
   { method: 'post', path: `/clinical-notes/${id}/addenda`, allowed: [DOCTOR] },
+  {
+    method: 'get',
+    path: '/clinical-notes/needs-attention',
+    allowed: [OWNER, DOCTOR],
+  },
   // public: anyone
   { method: 'get', path: '/public/doctors', allowed: EVERYONE },
   { method: 'get', path: `/public/doctors/${id}`, allowed: EVERYONE },

@@ -1,0 +1,85 @@
+# The whole stack in containers:
+#   docker compose up -d --build
+#
+#   db          PostgreSQL 16 (its own volume; not the dev database of backend/docker-compose.yml)
+#   backend     API on http://localhost:3000/api/v1 — runs migrations + the OWNER seed on start
+#   demo-seed   one-shot: demo staff, services, schedules and a sample day (skipped if already seeded)
+#   playground  throwaway UI on http://localhost:5173
+#
+# Configuration comes from backend/.env (copy backend/.env.example). The DB_* values are overridden
+# below so the containers talk to the `db` service.
+
+name: rehab-clinic
+
+x-db-credentials: &db-credentials
+  DB_HOST: db
+  DB_PORT: '5432'
+  DB_USERNAME: clinic_user
+  DB_PASSWORD: ${DOCKER_DB_PASSWORD:-clinic-docker}
+  DB_DATABASE: clinic_db
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: clinic_db
+      POSTGRES_USER: clinic_user
+      POSTGRES_PASSWORD: ${DOCKER_DB_PASSWORD:-clinic-docker}
+      TZ: UTC
+      PGTZ: UTC
+    # Reachable from the host on 5433, so it doesn't clash with the dev database on 5432.
+    ports:
+      - '127.0.0.1:5433:5432'
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U clinic_user -d clinic_db']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      <<: *db-credentials
+      NODE_ENV: production
+      STORAGE_LOCAL_PATH: /app/storage
+    ports:
+      - '3000:3000'
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+
+  demo-seed:
+    build: ./playground
+    image: rehab-clinic-playground
+    env_file: ./backend/.env
+    environment:
+      API_URL: http://backend:3000/api/v1
+    command: ['npm', 'run', 'seed:demo']
+    restart: 'no'
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  playground:
+    # Built by demo-seed (same image).
+    image: rehab-clinic-playground
+    pull_policy: never
+    restart: unless-stopped
+    # SEED_OWNER_* feed the owner quick-login button.
+    env_file: ./backend/.env
+    ports:
+      - '5173:5173'
+    depends_on:
+      demo-seed:
+        condition: service_completed_successfully
+
+volumes:
+  db_data:
+  storage:

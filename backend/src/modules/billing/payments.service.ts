@@ -6,11 +6,11 @@ import {
   toPaginated,
   type Paginated,
 } from '../../common/dto/pagination.dto.js';
+import { UserRefDto } from '../../common/dto/user-ref.dto.js';
 import { UserRole } from '../../common/enums/user-role.enum.js';
 import { ErrorCode, unprocessable } from '../../common/errors/app.exception.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
-import { isoToDate } from '../../common/time/clinic-time.util.js';
 import {
   addMoney,
   compareMoney,
@@ -233,13 +233,12 @@ export class PaymentsService {
     const qb = this.payments
       .createQueryBuilder('payment')
       .innerJoinAndSelect('payment.invoice', 'invoice')
-      .innerJoinAndSelect('payment.patient', 'patient');
-    if (query.from)
-      qb.andWhere('payment.receivedAt >= :from', {
-        from: isoToDate(query.from),
-      });
-    if (query.to)
-      qb.andWhere('payment.receivedAt < :to', { to: isoToDate(query.to) });
+      .innerJoinAndSelect('payment.patient', 'patient')
+      .innerJoinAndSelect('payment.receivedBy', 'receivedBy')
+      .leftJoinAndSelect('payment.voidedBy', 'voidedBy');
+    const { start, end } = this.time.dateRange(query.from, query.to);
+    if (start) qb.andWhere('payment.receivedAt >= :start', { start });
+    if (end) qb.andWhere('payment.receivedAt < :end', { end });
     if (query.method)
       qb.andWhere('payment.method = :method', { method: query.method });
     if (query.type) qb.andWhere('payment.type = :type', { type: query.type });
@@ -271,7 +270,12 @@ export class PaymentsService {
   async findOne(id: string): Promise<PaymentResponseDto> {
     const payment = await this.payments.findOne({
       where: { id },
-      relations: { invoice: true, patient: true },
+      relations: {
+        invoice: true,
+        patient: true,
+        receivedBy: true,
+        voidedBy: true,
+      },
     });
     if (!payment) throw new NotFoundException('Payment not found');
     return this.toDto(payment);
@@ -452,10 +456,10 @@ export class PaymentsService {
         amountPaid: invoice.amountPaid,
         balance: subMoney(invoice.total, invoice.amountPaid),
       },
-      receivedById: payment.receivedById,
+      receivedBy: UserRefDto.fromEntity(payment.receivedBy),
       receivedAt: toIso(payment.receivedAt),
       voidedAt: payment.voidedAt ? toIso(payment.voidedAt) : null,
-      voidedById: payment.voidedById,
+      voidedBy: UserRefDto.fromNullable(payment.voidedBy),
       voidReason: payment.voidReason,
     };
   }

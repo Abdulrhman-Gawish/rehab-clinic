@@ -27,22 +27,6 @@ export async function createTestApp(
   return { app, dataSource: app.get(DataSource) };
 }
 
-// Waits (max ~5 s) until no other client of this database is running a
-// query or holding an open transaction.
-async function waitForOtherTransactions(dataSource: DataSource): Promise<void> {
-  for (let i = 0; i < 100; i++) {
-    const rows: { busy: string }[] = await dataSource.query(
-      `SELECT count(*) AS busy FROM pg_stat_activity
-        WHERE datname = current_database()
-          AND pid <> pg_backend_pid()
-          AND backend_type = 'client backend'
-          AND state IN ('active', 'idle in transaction')`,
-    );
-    if (Number(rows[0].busy) === 0) return;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-}
-
 // Every table except the migrations bookkeeping, children before parents,
 // so plain DELETEs satisfy the foreign keys (no superuser needed).
 async function tablesInDeleteOrder(dataSource: DataSource): Promise<string[]> {
@@ -81,20 +65,5 @@ export async function resetDatabase(dataSource: DataSource): Promise<void> {
   deleteAll ??= (await tablesInDeleteOrder(dataSource))
     .map((table) => `DELETE FROM "${table}";`)
     .join(' ');
-  // Async event listeners of the previous test (e.g. the automatic invoice)
-  // may still be in a transaction: let them finish first. One starting late
-  // can still deadlock with us, or insert a child row after its table was
-  // emptied (FK violation on the parent); in both cases we simply retry.
-  await waitForOtherTransactions(dataSource);
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await dataSource.query(deleteAll);
-      return;
-    } catch (error) {
-      const code = (error as { driverError?: { code?: string } }).driverError
-        ?.code;
-      const retry = code === '40P01' || code === '23503';
-      if (!retry || attempt >= 5) throw error;
-    }
-  }
+  await dataSource.query(deleteAll);
 }

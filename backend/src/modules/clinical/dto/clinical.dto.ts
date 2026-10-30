@@ -9,22 +9,27 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { Trim } from '../../../common/decorators/transform.decorators.js';
+import {
+  Trim,
+  TrimOrNull,
+} from '../../../common/decorators/transform.decorators.js';
+import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
 import {
   PaginatedResponse,
+  PaginationQueryDto,
   type Paginated,
 } from '../../../common/dto/pagination.dto.js';
 import { NoteStatus } from '../clinical.enums.js';
 
 const MAX_TEXT = 5000;
 
-// Optional clinical text: omitted = unchanged (PATCH) / empty (POST, PUT);
-// null clears it. Blank strings are rejected.
+// Optional clinical text. The PUT endpoints replace the record: a field
+// left out, null or blank (a cleared textarea) becomes null.
 const ClinicalText = (description?: string) =>
   applyDecorators(
     ApiPropertyOptional({ nullable: true, maxLength: MAX_TEXT, description }),
     IsOptional(),
-    Trim(),
+    TrimOrNull(),
     IsString(),
     Length(1, MAX_TEXT),
   );
@@ -101,6 +106,16 @@ export class AttachmentUploadDto {
   visitId?: string;
 }
 
+export class NeedsAttentionQueryDto extends PaginationQueryDto {
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'OWNER only; ignored for doctors (always their own)',
+  })
+  @IsOptional()
+  @IsUUID()
+  doctorId?: string;
+}
+
 // ---------- Outputs ----------
 
 export class ClinicalDoctorDto {
@@ -131,12 +146,11 @@ export class MedicalInfoResponseDto {
   notes: string | null;
 
   @ApiProperty({
-    format: 'uuid',
+    type: UserRefDto,
     nullable: true,
-    type: String,
     description: 'null until the first save',
   })
-  updatedById: string | null;
+  updatedBy: UserRefDto | null;
 
   @ApiProperty({ nullable: true, type: String })
   updatedAt: string | null;
@@ -162,7 +176,7 @@ export class NoteVisitDto {
 
   @ApiProperty({
     example: '2026-11-05T09:50:00+02:00',
-    description: 'Check-in time of the visit',
+    description: 'When the patient attended',
   })
   date: string;
 
@@ -236,8 +250,8 @@ export class AttachmentResponseDto {
   @ApiProperty({ example: 182044 })
   sizeBytes: number;
 
-  @ApiProperty({ format: 'uuid' })
-  uploadedById: string;
+  @ApiProperty({ type: UserRefDto })
+  uploadedBy: UserRefDto;
 
   @ApiProperty()
   createdAt: string;
@@ -260,4 +274,31 @@ export class ClinicalHistoryDto {
     description: "All of the patient's attachments, newest first",
   })
   attachments: AttachmentResponseDto[];
+}
+
+export class NeedsAttentionEntryDto {
+  @ApiProperty({ format: 'uuid' })
+  visitId: string;
+
+  @ApiProperty({
+    example: '2026-11-05T09:50:00+02:00',
+    description: 'When the patient attended',
+  })
+  visitDate: string;
+
+  @ApiProperty({ example: { id: '…', name: 'Ahmed Hassan' } })
+  patient: { id: string; name: string };
+
+  @ApiProperty({ example: { id: '…', name: 'Physiotherapy session' } })
+  service: { id: string; name: string };
+
+  @ApiProperty({ type: ClinicalDoctorDto })
+  doctor: ClinicalDoctorDto;
+
+  @ApiProperty({
+    enum: [NoteStatus.DRAFT],
+    nullable: true,
+    description: 'null = no note yet',
+  })
+  noteStatus: NoteStatus | null;
 }

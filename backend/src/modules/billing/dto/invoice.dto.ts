@@ -16,15 +16,20 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { IsIsoWithOffset } from '../../../common/decorators/date-time.decorators.js';
+import {
+  LocalDateFrom,
+  LocalDateTo,
+} from '../../../common/decorators/date-time.decorators.js';
 import { IsMoney } from '../../../common/decorators/money.decorator.js';
 import {
   OptionalNotNull,
   ToBoolean,
   Trim,
   TrimAndCollapse,
+  TrimOrNull,
 } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
+import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
 import {
   DiscountType,
   InvoiceStatus,
@@ -55,7 +60,7 @@ export class InvoiceItemInputDto {
     description: 'Required for free-text items',
   })
   @IsOptional()
-  @TrimAndCollapse()
+  @TrimOrNull({ collapse: true })
   @IsString()
   @Length(2, 255)
   description?: string;
@@ -87,7 +92,7 @@ export class CreateInvoiceDto {
 
   @ApiPropertyOptional({ maxLength: 2000 })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(2000)
   notes?: string;
@@ -124,20 +129,10 @@ export class ReasonDto {
 }
 
 export class ListInvoicesQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({
-    example: '2026-11-01T00:00:00+02:00',
-    description: 'issued_at >= from',
-  })
-  @IsOptional()
-  @IsIsoWithOffset()
+  @LocalDateFrom('Issued')
   from?: string;
 
-  @ApiPropertyOptional({
-    example: '2026-12-01T00:00:00+02:00',
-    description: 'issued_at < to',
-  })
-  @IsOptional()
-  @IsIsoWithOffset()
+  @LocalDateTo('Issued')
   to?: string;
 
   @ApiPropertyOptional({ format: 'uuid' })
@@ -214,8 +209,8 @@ export class InvoiceDiscountDto {
   @ApiProperty({ format: 'uuid', nullable: true, type: String })
   repeatedFromId: string | null;
 
-  @ApiProperty({ format: 'uuid' })
-  appliedById: string;
+  @ApiProperty({ type: UserRefDto })
+  appliedBy: UserRefDto;
 
   @ApiProperty({ example: '2026-11-05T10:00:00+02:00' })
   appliedAt: string;
@@ -246,8 +241,8 @@ export class InvoicePaymentDto {
   @ApiProperty({ format: 'uuid', nullable: true, type: String })
   refundOfId: string | null;
 
-  @ApiProperty({ format: 'uuid' })
-  receivedById: string;
+  @ApiProperty({ type: UserRefDto })
+  receivedBy: UserRefDto;
 
   @ApiProperty({ example: '2026-11-05T10:05:00+02:00' })
   receivedAt: string;
@@ -293,12 +288,12 @@ export class InvoiceSummaryDto {
   notes: string | null;
 
   @ApiProperty({
-    format: 'uuid',
+    type: UserRefDto,
     nullable: true,
-    type: String,
-    description: 'null = created automatically',
+    description:
+      'null only for invoices created by the system before attend became synchronous',
   })
-  issuedById: string | null;
+  issuedBy: UserRefDto | null;
 
   @ApiProperty({ example: '2026-11-05T10:00:00+02:00' })
   issuedAt: string;
@@ -306,14 +301,25 @@ export class InvoiceSummaryDto {
   @ApiProperty({ nullable: true, type: String })
   cancelledAt: string | null;
 
-  @ApiProperty({ format: 'uuid', nullable: true, type: String })
-  cancelledById: string | null;
+  @ApiProperty({ type: UserRefDto, nullable: true })
+  cancelledBy: UserRefDto | null;
 
   @ApiProperty({ nullable: true, type: String })
   cancelReason: string | null;
 }
 
 export class InvoiceDetailDto extends InvoiceSummaryDto {
+  @ApiProperty({
+    description:
+      'Items and discount can no longer change: cancelled, or it has (ever) had a valid payment',
+  })
+  isLocked: boolean;
+
+  @ApiProperty({
+    description: 'Not cancelled and nothing paid (amountPaid = 0)',
+  })
+  canCancel: boolean;
+
   @ApiProperty({ type: [InvoiceItemDto] })
   items: InvoiceItemDto[];
 

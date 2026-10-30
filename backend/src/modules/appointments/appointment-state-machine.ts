@@ -3,47 +3,47 @@ import { AppointmentStatus as S } from './appointment.enums.js';
 
 /**
  * What triggers a transition. Some transitions are reserved for one
- * operation: e.g. CHECKED_IN -> CONFIRMED only happens through "undo
- * check-in", never through PATCH /appointments/:id/confirm.
+ * operation: e.g. ATTENDED -> CONFIRMED only happens through "undo attend",
+ * never through POST /appointments/:id/confirm.
  */
 export enum AppointmentTrigger {
-  // Direct appointment endpoints (confirm, cancel, no-show, reschedule).
+  // Plain appointment actions (confirm, cancel, no-show, reschedule).
   APPOINTMENT = 'APPOINTMENT',
-  CHECK_IN = 'CHECK_IN',
-  UNDO_CHECK_IN = 'UNDO_CHECK_IN',
-  VISIT_CANCEL = 'VISIT_CANCEL',
-  VISIT_COMPLETE = 'VISIT_COMPLETE',
+  ATTEND = 'ATTEND',
+  UNDO_ATTEND = 'UNDO_ATTEND',
+  UNDO_NO_SHOW = 'UNDO_NO_SHOW',
 }
 
 const T = AppointmentTrigger;
 
 /**
  * The ONLY definition of allowed appointment status transitions, and which
- * operation may perform each of them.
- *
- * Checking in a PENDING booking runs two steps in one transaction:
- * PENDING -> CONFIRMED -> CHECKED_IN (two history rows).
+ * operation may perform each of them. Reception does all of them; time and
+ * undo rules (same day, after the start, no note, no payments) are checked
+ * on top, see appointment-actions.ts.
  */
 const TRANSITIONS: Readonly<
   Record<S, Readonly<Partial<Record<S, readonly AppointmentTrigger[]>>>>
 > = {
   [S.PENDING]: {
-    [S.CONFIRMED]: [T.APPOINTMENT, T.CHECK_IN],
+    [S.CONFIRMED]: [T.APPOINTMENT],
     [S.CANCELLED]: [T.APPOINTMENT],
+    [S.RESCHEDULED]: [T.APPOINTMENT],
+    [S.NO_SHOW]: [T.APPOINTMENT],
+    [S.ATTENDED]: [T.ATTEND],
   },
   [S.CONFIRMED]: {
     [S.CANCELLED]: [T.APPOINTMENT],
-    [S.NO_SHOW]: [T.APPOINTMENT],
     [S.RESCHEDULED]: [T.APPOINTMENT],
-    [S.CHECKED_IN]: [T.CHECK_IN],
+    [S.NO_SHOW]: [T.APPOINTMENT],
+    [S.ATTENDED]: [T.ATTEND],
   },
-  [S.CHECKED_IN]: {
-    [S.COMPLETED]: [T.VISIT_COMPLETE],
-    [S.CONFIRMED]: [T.UNDO_CHECK_IN],
-    [S.CANCELLED]: [T.VISIT_CANCEL],
+  [S.ATTENDED]: {
+    [S.CONFIRMED]: [T.UNDO_ATTEND],
   },
-  [S.COMPLETED]: {},
-  [S.NO_SHOW]: {},
+  [S.NO_SHOW]: {
+    [S.CONFIRMED]: [T.UNDO_NO_SHOW],
+  },
   [S.CANCELLED]: {},
   [S.RESCHEDULED]: {},
 };

@@ -47,7 +47,7 @@ export class MedicalInfoService {
   async load(patientId: string): Promise<MedicalInfoResponseDto> {
     const info = await this.dataSource
       .getRepository(PatientMedicalInfo)
-      .findOneBy({ patientId });
+      .findOne({ where: { patientId }, relations: { updatedBy: true } });
     return toMedicalInfo(patientId, info, (d) => this.time.toIso(d));
   }
 

@@ -13,13 +13,19 @@ import { EgyptianMobile } from '../../../common/decorators/egyptian-mobile.decor
 import {
   IsIsoWithOffset,
   IsLocalDate,
+  LocalDateFrom,
+  LocalDateTo,
 } from '../../../common/decorators/date-time.decorators.js';
 import {
+  ToArray,
   Trim,
-  TrimAndCollapse,
+  TrimOrNull,
 } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
+import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
+import { NoteStatus } from '../../clinical/clinical.enums.js';
 import { PersonNameField } from '../../users/dto/user.dto.js';
+import { VisitStatus } from '../../visits/visit.enums.js';
 import { AppointmentSource, AppointmentStatus } from '../appointment.enums.js';
 
 const START_DOC = {
@@ -48,7 +54,7 @@ export class CreateAppointmentDto {
     description: 'New or existing patient by phone (with phone)',
   })
   @IsOptional()
-  @TrimAndCollapse()
+  @TrimOrNull({ collapse: true })
   @IsString()
   @Length(2, 120)
   name?: string;
@@ -72,7 +78,7 @@ export class CreateAppointmentDto {
 
   @ApiPropertyOptional({ maxLength: 2000, description: 'Administrative only' })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(2000)
   notes?: string;
@@ -139,7 +145,7 @@ export class RescheduleAppointmentDto {
 
   @ApiPropertyOptional({ maxLength: 255 })
   @IsOptional()
-  @Trim()
+  @TrimOrNull()
   @IsString()
   @MaxLength(255)
   reason?: string;
@@ -151,20 +157,10 @@ export class RescheduleAppointmentDto {
 }
 
 export class ListAppointmentsQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({
-    example: '2026-11-01T00:00:00+02:00',
-    description: 'start_at >= from',
-  })
-  @IsOptional()
-  @IsIsoWithOffset()
+  @LocalDateFrom('Starting')
   from?: string;
 
-  @ApiPropertyOptional({
-    example: '2026-12-01T00:00:00+02:00',
-    description: 'start_at < to',
-  })
-  @IsOptional()
-  @IsIsoWithOffset()
+  @LocalDateTo('Starting')
   to?: string;
 
   @ApiPropertyOptional({ format: 'uuid' })
@@ -193,7 +189,21 @@ export class DayListQueryDto {
   @IsLocalDate()
   date: string;
 
-  @ApiPropertyOptional({ format: 'uuid' })
+  @ApiPropertyOptional({
+    enum: AppointmentStatus,
+    isArray: true,
+    description:
+      'One or more statuses (repeat the parameter or comma-separate). Walk-ins count as ATTENDED.',
+  })
+  @IsOptional()
+  @ToArray()
+  @IsEnum(AppointmentStatus, { each: true })
+  status?: AppointmentStatus[];
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Ignored for doctors (always their own)',
+  })
   @IsOptional()
   @IsUUID()
   doctorId?: string;
@@ -268,8 +278,12 @@ export class AppointmentResponseDto {
   @ApiProperty({ type: AppointmentServiceDto })
   service: AppointmentServiceDto;
 
-  @ApiProperty({ format: 'uuid', nullable: true, type: String })
-  bookedById: string | null;
+  @ApiProperty({
+    type: UserRefDto,
+    nullable: true,
+    description: 'null for online bookings',
+  })
+  bookedBy: UserRefDto | null;
 
   @ApiProperty({ format: 'uuid', nullable: true, type: String })
   rescheduledFromId: string | null;
@@ -294,8 +308,12 @@ export class StatusHistoryEntryDto {
   @ApiProperty({ enum: AppointmentStatus })
   toStatus: AppointmentStatus;
 
-  @ApiProperty({ format: 'uuid', nullable: true, type: String })
-  changedById: string | null;
+  @ApiProperty({
+    type: UserRefDto,
+    nullable: true,
+    description: 'null for online (public) actions',
+  })
+  changedBy: UserRefDto | null;
 
   @ApiProperty({ nullable: true, type: String })
   reason: string | null;
@@ -311,8 +329,10 @@ export enum DayPaymentStatus {
   PAID = 'PAID',
 }
 
-// Reception day list row: an appointment (with its visit, if checked in) or
-// a walk-in visit (appointment fields null, isWalkIn true).
+const BILLING = 'Omitted for doctors.';
+
+// Day list row: an appointment (with its visit, if attended) or a walk-in
+// visit (appointment fields null, isWalkIn true).
 export class DayListEntryDto {
   @ApiProperty()
   isWalkIn: boolean;
@@ -366,39 +386,71 @@ export class DayListEntryDto {
   @ApiProperty({ nullable: true, type: String })
   notes: string | null;
 
-  @ApiProperty({ nullable: true, type: String })
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description: 'Appointment cancel reason, or the void reason of a walk-in',
+  })
   cancelReason: string | null;
 
   @ApiProperty({ format: 'uuid', nullable: true, type: String })
   visitId: string | null;
 
-  @ApiProperty({
-    enum: ['WAITING', 'IN_SESSION', 'COMPLETED', 'CANCELLED'],
-    nullable: true,
-  })
-  visitStatus: string | null;
+  @ApiProperty({ enum: VisitStatus, nullable: true })
+  visitStatus: VisitStatus | null;
 
   @ApiProperty({
     nullable: true,
     type: String,
     example: '2026-11-05T16:50:00+02:00',
   })
-  checkedInAt: string | null;
+  attendedAt: string | null;
 
-  @ApiProperty({ format: 'uuid', nullable: true, type: String })
-  invoiceId: string | null;
+  @ApiProperty({ enum: NoteStatus, nullable: true })
+  noteStatus: NoteStatus | null;
 
-  @ApiProperty({ nullable: true, type: String, example: '320.00' })
-  invoiceTotal: string | null;
+  @ApiProperty({
+    type: [String],
+    example: ['cancel', 'reschedule', 'attend'],
+    description:
+      'Desk: confirm, cancel, reschedule, noShow, undoNoShow, attend, undoAttend (a walk-in is undone with POST /visits/:visitId/undo-attend). Doctor: writeNote, viewNote.',
+  })
+  allowedActions: string[];
 
-  @ApiProperty({ nullable: true, type: String, example: '100.00' })
-  amountPaid: string | null;
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    type: String,
+    description: BILLING,
+  })
+  invoiceId?: string | null;
 
-  @ApiProperty({ nullable: true, type: String, example: '220.00' })
-  balance: string | null;
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    example: '320.00',
+    description: BILLING,
+  })
+  invoiceTotal?: string | null;
 
-  @ApiProperty({ enum: DayPaymentStatus })
-  paymentStatus: DayPaymentStatus;
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    example: '100.00',
+    description: BILLING,
+  })
+  amountPaid?: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    example: '220.00',
+    description: BILLING,
+  })
+  balance?: string | null;
+
+  @ApiPropertyOptional({ enum: DayPaymentStatus, description: BILLING })
+  paymentStatus?: DayPaymentStatus;
 }
 
 // What the public website gets back: nothing about the patient record.

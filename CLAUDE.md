@@ -9,7 +9,7 @@ a few staff users and at most a few hundred patients a day. `backend/README.md` 
   after receiving the money at the desk. `reference` is optional free text, never validated against anything.
 - Patients are not users and never log in. Only OWNER, DOCTOR and RECEPTIONIST staff log in.
 - Do not add abstractions, interfaces, generic base classes or new libraries unless the current stage needs them.
-  **Ask before adding a dependency.** The only planned hooks are `VisitCompletionPolicy` and `VisitBillingPolicy`.
+  **Ask before adding a dependency.** The only planned hook is `VisitBillingPolicy` (packages).
 - Plain services and repositories. No CQRS, no repository layers on top of TypeORM, no event sourcing, no caching, no queues.
 - A rule that must never break (uniqueness, overlaps, totals) is enforced by the **database** (unique/partial indexes,
   exclusion constraints, CHECKs). Everything else is enforced in the service. Don't duplicate a DB rule with a
@@ -27,6 +27,7 @@ a few staff users and at most a few hundred patients a day. `backend/README.md` 
 - **Time:** every instant is `timestamptz` (UTC). The API takes and returns ISO 8601 **with offset**, rendered in
   `CLINIC_TIMEZONE` (Africa/Cairo, DST). Use `ClinicTimeService` (`now`, `today`, `dayBounds`, `toIso`) and
   `common/time/clinic-time.util.ts` (`isoToDate`, `addDays`); never hardcode an offset. Tests freeze time via `CLOCK`.
+  List filters are local dates: `@LocalDateFrom`/`@LocalDateTo` in the DTO, `ClinicTimeService.dateRange` in the service.
 - **Money:** decimal strings (`"150.00"`) end to end, `numeric(12,2)`, arithmetic only through `common/utils/money.util.ts`
   (decimal.js). Use `@IsMoney()` / `@IsPositiveMoney()` in DTOs. The server computes totals, and DB CHECKs guard every amount.
 - **Schema:** migrations only (`synchronize: false`). `npm run migration:generate -- src/database/migrations/<Name>`, then
@@ -38,15 +39,21 @@ a few staff users and at most a few hundred patients a day. `backend/README.md` 
   (`isUniqueViolation`/`isExclusionViolation` by constraint name) to 409s in a `catch` **outside** the transaction.
 - **Audit:** `auditService.logAction(actor, action, entityType, entityId, { oldValues, newValues }, manager)` is the default.
   Use `diffValues`/`pickValues` for old/new values. `auditService.log()` is only for entries without an entity (auth).
-- **Errors:** business errors clients branch on use `conflict(...)`/`unprocessable(...)` with an `ErrorCode`, which gives a
-  stable `code` in the error body. Validation errors are `400 { message: 'Validation failed', details: [{ field, errors }] }`.
+- **Errors:** business errors clients branch on use `conflict(...)`/`unprocessable(...)`/`notFound(...)` with an `ErrorCode`,
+  which gives a stable `code` in the error body. A normal "nothing found" is `200 null` (return `orJsonNull(value)`) or a
+  404 with a code. Validation errors are `400 { message: 'Validation failed', details: [{ field, errors }] }`.
 - **Access:** `@Auth(...roles)` on every non-public route, and `@Public()` opts out. A DOCTOR sees only their own data via
   `DoctorAccessService`, and another doctor's data answers **404, not 403**. Clinical data goes through
   `ClinicalAccessService` (a doctor must have an appointment or visit with the patient; RECEPTIONIST never).
 - **Responses:** every input and output is a DTO. Map entities with `static fromEntity()` on the response DTO, or with a
-  `<module>.mapper.ts` when the mapping needs `toIso` or several entities. Don't add a third style.
-- **Events:** cross-module side effects use domain events emitted **only after commit**. Listeners run their own
-  transaction, must be idempotent, and log failures instead of throwing.
+  `<module>.mapper.ts` when the mapping needs `toIso` or several entities. Don't add a third style. "Who did it" is a
+  `UserRefDto` (`{ id, name }`, load the relation), never a bare user id. Every state-changing action is a `POST`.
+- **Inputs:** optional text fields use `@IsOptional()` + `@TrimOrNull()` (blank becomes null).
+- **Cross-module writes:** no domain events or listeners. Writes that must succeed together (attend = appointment +
+  visit + invoice) run in one transaction: the owning service exposes a method that takes the caller's `manager`.
+- **Desk workflow:** reception does all attendance (attend, undo attend, no-show, undo no-show, walk-in); doctors only
+  write and sign notes. Appointment transitions live only in `appointment-state-machine.ts`; the time/undo rules on top
+  (and the day list's `allowedActions`) only in `appointment-actions.ts`.
 - **Patients at the desk:** `assertDeskPatientInput(dto)` + `PatientsService.resolveForDesk(...)` (id, or name + phone
   find-or-create). Phones are normalized to `+201XXXXXXXXX` and unique.
 - **Files:** `FileStorage` (local disk under `STORAGE_LOCAL_PATH`, never served statically). Check uploads with

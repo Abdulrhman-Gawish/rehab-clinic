@@ -122,7 +122,7 @@ describe('Billing: discounts (e2e)', () => {
           amount,
           reason: 'Loyal patient',
           repeatedFromId: null,
-          appliedById: owner.id,
+          appliedBy: { id: owner.id, name: expect.any(String) },
           appliedAt: '2026-11-03T09:00:00+02:00',
         });
       },
@@ -237,12 +237,12 @@ describe('Billing: discounts (e2e)', () => {
       ]);
 
       await request(server)
-        .delete(`/api/v1/invoices/${invoice.id}/discount`)
+        .post(`/api/v1/invoices/${invoice.id}/discount/remove`)
         .set(as(receptionist))
         .send({})
         .expect(400);
       const removed = await request(server)
-        .delete(`/api/v1/invoices/${invoice.id}/discount`)
+        .post(`/api/v1/invoices/${invoice.id}/discount/remove`)
         .set(as(receptionist))
         .send({ reason: 'Applied by mistake' })
         .expect(200);
@@ -252,7 +252,7 @@ describe('Billing: discounts (e2e)', () => {
         total: '100.00',
       });
       await request(server)
-        .delete(`/api/v1/invoices/${invoice.id}/discount`)
+        .post(`/api/v1/invoices/${invoice.id}/discount/remove`)
         .set(as(receptionist))
         .send({ reason: 'Nothing left' })
         .expect(404);
@@ -285,7 +285,7 @@ describe('Billing: discounts (e2e)', () => {
       }).expect(422);
       expect(res.body.code).toBe('INVOICE_LOCKED');
       await request(server)
-        .delete(`/api/v1/invoices/${invoice.id}/discount`)
+        .post(`/api/v1/invoices/${invoice.id}/discount/remove`)
         .set(as(receptionist))
         .send({ reason: 'Too late now' })
         .expect(422);
@@ -362,7 +362,7 @@ describe('Billing: discounts (e2e)', () => {
         amount: '30.00',
         reason: 'Regular patient',
         repeatedFromId: last.body.id,
-        appliedById: receptionist.id,
+        appliedBy: { id: receptionist.id, name: expect.any(String) },
       });
 
       const old = await request(server)
@@ -381,6 +381,14 @@ describe('Billing: discounts (e2e)', () => {
         .set(as(receptionist))
         .expect(200);
       expect(latest.body.invoiceId).toBe(second.id);
+      // While editing `second`, "repeat last" means the one before it.
+      const previous = await request(server)
+        .get(
+          `/api/v1/patients/${patient.id}/last-discount?excludeInvoiceId=${second.id}`,
+        )
+        .set(as(receptionist))
+        .expect(200);
+      expect(previous.body.invoiceId).toBe(first.id);
     });
 
     it("rejects another patient's discount, still enforces the limit, 404 for unknown", async () => {
@@ -418,12 +426,12 @@ describe('Billing: discounts (e2e)', () => {
       }).expect(404);
     });
 
-    it('NO_PREVIOUS_DISCOUNT when there is none, or only removed ones / on cancelled invoices', async () => {
+    it('200 null when there is none, or only removed ones / on cancelled invoices', async () => {
       const none = await request(server)
         .get(`/api/v1/patients/${patient.id}/last-discount`)
         .set(as(receptionist))
-        .expect(404);
-      expect(none.body.code).toBe('NO_PREVIOUS_DISCOUNT');
+        .expect(200);
+      expect(none.body).toBeNull();
 
       const removedOne = await invoiceFor(patient, ['100.00']);
       await discount(removedOne.id, {
@@ -432,7 +440,7 @@ describe('Billing: discounts (e2e)', () => {
         reason: 'Removed later',
       }).expect(200);
       await request(server)
-        .delete(`/api/v1/invoices/${removedOne.id}/discount`)
+        .post(`/api/v1/invoices/${removedOne.id}/discount/remove`)
         .set(as(receptionist))
         .send({ reason: 'Not deserved' })
         .expect(200);
@@ -449,10 +457,12 @@ describe('Billing: discounts (e2e)', () => {
         .send({ reason: 'Duplicate invoice' })
         .expect(200);
 
-      await request(server)
+      const stillNone = await request(server)
         .get(`/api/v1/patients/${patient.id}/last-discount`)
         .set(as(receptionist))
-        .expect(404);
+        .expect(200);
+      expect(stillNone.body).toBeNull();
+      // Unknown patient: still 404.
       await request(server)
         .get(
           '/api/v1/patients/00000000-0000-4000-8000-000000000000/last-discount',

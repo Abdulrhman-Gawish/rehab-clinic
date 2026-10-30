@@ -45,7 +45,18 @@ export class AuthTokensDto {
   refreshTokenExpiresAt: Date;
 }
 
+// The logged-in user, plus the doctor profile id a doctor UI needs.
+export class AuthUserDto extends UserResponseDto {
+  @ApiProperty({
+    format: 'uuid',
+    nullable: true,
+    type: String,
+    description: 'The doctor profile id (DOCTOR accounts); null otherwise',
+  })
+  doctorId: string | null;
+}
+
 export class LoginResponseDto extends AuthTokensDto {
-  @ApiProperty({ type: UserResponseDto })
-  user: UserResponseDto;
+  @ApiProperty({ type: AuthUserDto })
+  user: AuthUserDto;
 }

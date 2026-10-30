@@ -137,7 +137,7 @@ export class PaymentsController {
   @Auth(...DESK)
   @ApiOperation({
     summary:
-      'Invoices to follow up: paid invoices of cancelled visits, overdue balances',
+      'Invoices to follow up: paid invoices of voided visits, overdue balances',
   })
   @ApiOkResponse({ type: AttentionDto })
   attention(): Promise<AttentionDto> {

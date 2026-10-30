@@ -66,7 +66,7 @@ describe('Patients (e2e)', () => {
         dateOfBirth: '1990-05-17',
         gender: 'MALE',
         createdSource: 'RECEPTION',
-        createdById: receptionist.id,
+        createdBy: { id: receptionist.id, name: expect.any(String) },
       });
 
       const log = await ctx.dataSource
@@ -236,22 +236,24 @@ describe('Patients (e2e)', () => {
       expect(res.body.meta.total).toBe(0);
     });
 
-    it('GET /patients/lookup finds by exact phone in any format', async () => {
+    it('GET /patients/lookup finds by exact phone in any format, or answers null', async () => {
       const res = await request(server)
         .get(
           `/api/v1/patients/lookup?phone=${encodeURIComponent('00201012345678')}`,
         )
         .set('Authorization', bearer(doctor))
         .expect(200);
-      expect(res.body).toMatchObject({
+      expect(res.body.patient).toMatchObject({
         name: 'Ahmed Hassan',
         phone: '+201012345678',
       });
 
-      await request(server)
+      // An unknown phone is the normal case at the desk: 200 null.
+      const unknown = await request(server)
         .get('/api/v1/patients/lookup?phone=01500000000')
         .set('Authorization', bearer(doctor))
-        .expect(404);
+        .expect(200);
+      expect(unknown.body).toEqual({ patient: null });
       await request(server)
         .get('/api/v1/patients/lookup?phone=123')
         .set('Authorization', bearer(doctor))

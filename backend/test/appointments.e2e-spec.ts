@@ -22,7 +22,9 @@ import {
 import {
   assignService,
   createLoggedInDoctor,
+  insertAppointment,
   insertDoctor,
+  insertPatient,
   insertService,
   insertWeeklySchedule,
 } from './utils/factories.js';
@@ -118,13 +120,13 @@ describe('Appointments (e2e)', () => {
         ...overrides,
       });
 
-  const patch = (
+  const act = (
     id: string,
     action: string,
     body: Record<string, unknown> = {},
   ) =>
     request(server)
-      .patch(`/api/v1/appointments/${id}/${action}`)
+      .post(`/api/v1/appointments/${id}/${action}`)
       .set('Authorization', bearer(receptionist))
       .send(body);
 
@@ -247,7 +249,7 @@ describe('Appointments (e2e)', () => {
       const one = await ctx.dataSource
         .getRepository(Appointment)
         .findOneByOrFail({ startAt: new Date(at('09:00')) });
-      await patch(one.id, 'cancel', { reason: 'Patient called' }).expect(200);
+      await act(one.id, 'cancel', { reason: 'Patient called' }).expect(200);
       await publicBook({ startAt: at('12:00') }).expect(201);
     });
 
@@ -334,7 +336,7 @@ describe('Appointments (e2e)', () => {
         status: 'CONFIRMED',
         source: 'RECEPTION',
         bookedName: 'Ahmed Hassan',
-        bookedById: receptionist.id,
+        bookedBy: { id: receptionist.id, name: expect.any(String) },
         nameMismatch: false,
         startAt: at('11:00'),
         endAt: at('11:30'),
@@ -445,24 +447,24 @@ describe('Appointments (e2e)', () => {
         .getRepository(Appointment)
         .findOneByOrFail({ referenceCode: booked.body.referenceCode });
 
-      await patch(id, 'confirm')
+      await act(id, 'confirm')
         .expect(200)
         .expect(({ body }) => expect(body.status).toBe('CONFIRMED'));
-      const again = await patch(id, 'confirm').expect(422);
+      const again = await act(id, 'confirm').expect(422);
       expect(again.body).toMatchObject({
         code: 'INVALID_STATUS_TRANSITION',
         details: { from: 'CONFIRMED', to: 'CONFIRMED' },
       });
 
-      await patch(id, 'cancel', {}).expect(400);
-      const cancelled = await patch(id, 'cancel', {
+      await act(id, 'cancel', {}).expect(400);
+      const cancelled = await act(id, 'cancel', {
         reason: 'Patient travelling',
       }).expect(200);
       expect(cancelled.body).toMatchObject({
         status: 'CANCELLED',
         cancelReason: 'Patient travelling',
       });
-      await patch(id, 'confirm').expect(422);
+      await act(id, 'confirm').expect(422);
 
       const history = await request(server)
         .get(`/api/v1/appointments/${id}/history`)
@@ -482,7 +484,7 @@ describe('Appointments (e2e)', () => {
       ]);
       expect(history.body[2]).toMatchObject({
         reason: 'Patient travelling',
-        changedById: receptionist.id,
+        changedBy: { id: receptionist.id, name: expect.any(String) },
       });
 
       const actions = (
@@ -500,25 +502,47 @@ describe('Appointments (e2e)', () => {
       await publicBook({ phone: '01512345678' }).expect(201);
     });
 
-    it('PENDING cannot become NO_SHOW or RESCHEDULED', async () => {
+    it('a PENDING booking can be rescheduled without confirming it first', async () => {
       const booked = await publicBook().expect(201);
       const { id } = await ctx.dataSource
         .getRepository(Appointment)
         .findOneByOrFail({ referenceCode: booked.body.referenceCode });
-      await patch(id, 'no-show').expect(422);
-      await request(server)
+      const moved = await request(server)
         .post(`/api/v1/appointments/${id}/reschedule`)
         .set('Authorization', bearer(receptionist))
         .send({ startAt: at('12:00') })
-        .expect(422)
-        .expect(({ body }) =>
-          expect(body.code).toBe('INVALID_STATUS_TRANSITION'),
-        );
+        .expect(201);
+      expect(moved.body).toMatchObject({
+        status: 'CONFIRMED',
+        rescheduledFromId: id,
+      });
+      expect(await historyOf(id)).toEqual([
+        [null, 'PENDING'],
+        ['PENDING', 'RESCHEDULED'],
+      ]);
+    });
+
+    it('a PENDING booking can be marked NO_SHOW once it has started', async () => {
+      const patient = await insertPatient(
+        ctx.dataSource,
+        'Online Patient',
+        '+201212345678',
+      );
+      const { id } = await insertAppointment(ctx.dataSource, {
+        patientId: patient.id,
+        doctorId: doctorA.doctorId,
+        serviceId,
+        startAt: new Date(at('07:00', '2026-11-02')),
+        status: AppointmentStatus.PENDING,
+      });
+      await act(id, 'no-show')
+        .expect(200)
+        .expect(({ body }) => expect(body.status).toBe('NO_SHOW'));
     });
 
     it('NO_SHOW only after the start time', async () => {
       const future = await staffBook().expect(201);
-      const early = await patch(future.body.id, 'no-show').expect(422);
+      const early = await act(future.body.id, 'no-show').expect(422);
       expect(early.body.code).toBe('NO_SHOW_TOO_EARLY');
 
       // 07:00 today is before "now" (08:00); booked at the desk after the fact.
@@ -527,10 +551,61 @@ describe('Appointments (e2e)', () => {
         startAt: at('07:00', '2026-11-02'),
         allowOutsideSchedule: true,
       }).expect(201);
-      await patch(past.body.id, 'no-show')
+      await act(past.body.id, 'no-show')
         .expect(200)
         .expect(({ body }) => expect(body.status).toBe('NO_SHOW'));
-      await patch(past.body.id, 'cancel', { reason: 'too late' }).expect(422);
+      await act(past.body.id, 'cancel', { reason: 'too late' }).expect(422);
+    });
+
+    describe('undo no-show', () => {
+      async function noShowAt(start: string, phone: string): Promise<string> {
+        const patient = await insertPatient(ctx.dataSource, 'Late', phone);
+        const { id } = await insertAppointment(ctx.dataSource, {
+          patientId: patient.id,
+          doctorId: doctorA.doctorId,
+          serviceId,
+          startAt: new Date(start),
+        });
+        await act(id, 'no-show').expect(200);
+        return id;
+      }
+
+      it('puts a same-day NO_SHOW back to CONFIRMED (history and audit)', async () => {
+        const id = await noShowAt(at('07:00', '2026-11-02'), '+201212345678');
+        await act(id, 'undo-no-show')
+          .expect(200)
+          .expect(({ body }) => expect(body.status).toBe('CONFIRMED'));
+        expect(await historyOf(id)).toEqual([
+          ['CONFIRMED', 'NO_SHOW'],
+          ['NO_SHOW', 'CONFIRMED'],
+        ]);
+        expect(
+          await ctx.dataSource
+            .getRepository(AuditLog)
+            .countBy({ entityId: id, action: 'APPOINTMENT_NO_SHOW_UNDONE' }),
+        ).toBe(1);
+        // Only a NO_SHOW can be undone.
+        const again = await act(id, 'undo-no-show').expect(422);
+        expect(again.body.code).toBe('INVALID_STATUS_TRANSITION');
+      });
+
+      it("only on the appointment's day", async () => {
+        const id = await noShowAt(at('15:00', '2026-11-01'), '+201212345678');
+        const res = await act(id, 'undo-no-show').expect(422);
+        expect(res.body.code).toBe('UNDO_WRONG_DAY');
+      });
+
+      it('409 when the freed slot was booked meanwhile', async () => {
+        const id = await noShowAt(at('07:00', '2026-11-02'), '+201212345678');
+        await staffBook({
+          phone: '01512345678',
+          startAt: at('07:00', '2026-11-02'),
+          allowOutsideSchedule: true,
+        }).expect(201);
+        const res = await act(id, 'undo-no-show').expect(409);
+        expect(res.body.code).toBe('SLOT_UNAVAILABLE');
+        expect((await appointmentRow(id)).status).toBe('NO_SHOW');
+      });
     });
 
     it('a failure after the update leaves no trace (status, history and audit roll back together)', async () => {
@@ -547,7 +622,7 @@ describe('Appointments (e2e)', () => {
           : original(entry, manager),
       );
 
-      await patch(id, 'confirm').expect(500);
+      await act(id, 'confirm').expect(500);
 
       expect((await appointmentRow(id)).status).toBe(AppointmentStatus.PENDING);
       expect(await historyOf(id)).toEqual([[null, 'PENDING']]);
@@ -643,15 +718,28 @@ describe('Appointments (e2e)', () => {
         ),
       ).toEqual([online.body.referenceCode]);
 
+      // from / to are clinic local dates, both inclusive.
+      const wednesday = await staffBook({
+        name: 'Wednesday Patient',
+        phone: '01512345678',
+        startAt: at('11:00', '2026-11-04'),
+      }).expect(201);
       const range = await request(server)
-        .get(
-          `/api/v1/appointments?from=${encodeURIComponent(at('10:00'))}&to=${encodeURIComponent(at('12:00'))}`,
-        )
+        .get('/api/v1/appointments?from=2026-11-04&to=2026-11-04')
         .set('Authorization', bearer(receptionist))
         .expect(200);
       expect(range.body.items.map((x: { id: string }) => x.id)).toEqual([
-        a.body.id,
+        wednesday.body.id,
       ]);
+      const tuesday = await request(server)
+        .get(`/api/v1/appointments?from=${TUESDAY}&to=${TUESDAY}`)
+        .set('Authorization', bearer(receptionist))
+        .expect(200);
+      expect(tuesday.body.meta.total).toBe(3);
+      await request(server)
+        .get(`/api/v1/appointments?from=${encodeURIComponent(at('10:00'))}`)
+        .set('Authorization', bearer(receptionist))
+        .expect(400);
 
       await request(server)
         .get(
@@ -660,6 +748,11 @@ describe('Appointments (e2e)', () => {
         .set('Authorization', bearer(receptionist))
         .expect(200)
         .expect(({ body }) => expect(body.status).toBe('PENDING'));
+      await request(server)
+        .get('/api/v1/appointments/by-reference/APT-NOPE22')
+        .set('Authorization', bearer(receptionist))
+        .expect(404)
+        .expect(({ body }) => expect(body.code).toBe('REFERENCE_NOT_FOUND'));
 
       const history = await request(server)
         .get(`/api/v1/patients/${a.body.patient.id}/appointments`)
