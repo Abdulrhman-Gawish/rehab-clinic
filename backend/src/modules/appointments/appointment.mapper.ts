@@ -8,6 +8,7 @@ import {
 } from '../../common/utils/money.util.js';
 import type { Invoice } from '../billing/entities/invoice.entity.js';
 import type { NoteStatus } from '../clinical/clinical.enums.js';
+import type { PackageSessionDto } from '../packages/dto/package.dto.js';
 import type { Visit } from '../visits/entities/visit.entity.js';
 import {
   DayPaymentStatus,
@@ -96,12 +97,18 @@ function billingColumns(invoice: Invoice | null): BillingColumns {
 
 function visitColumns(
   info: DayVisitInfo | null,
+  session: PackageSessionDto | null,
   allowedActions: string[],
   withBilling: boolean,
   toIso: ToIso,
 ): Pick<
   DayListEntryDto,
-  'visitId' | 'visitStatus' | 'attendedAt' | 'noteStatus' | 'allowedActions'
+  | 'visitId'
+  | 'visitStatus'
+  | 'attendedAt'
+  | 'noteStatus'
+  | 'package'
+  | 'allowedActions'
 > &
   Partial<BillingColumns> {
   return {
@@ -109,16 +116,19 @@ function visitColumns(
     visitStatus: info?.visit.status ?? null,
     attendedAt: info ? toIso(info.visit.attendedAt) : null,
     noteStatus: info?.noteStatus ?? null,
+    package: session,
     allowedActions,
     // Doctors never see billing.
     ...(withBilling && billingColumns(info?.invoice ?? null)),
   };
 }
 
-// `info`: the appointment's visit, if it attended.
+// `info`: the appointment's visit, if it attended. `session`: the package
+// session its visit or its no-show used.
 export function toDayListEntry(
   appointment: Appointment,
   info: DayVisitInfo | null,
+  session: PackageSessionDto | null,
   allowedActions: string[],
   withBilling: boolean,
   toIso: ToIso,
@@ -139,13 +149,14 @@ export function toDayListEntry(
     service: dto.service,
     notes: dto.notes,
     cancelReason: dto.cancelReason,
-    ...visitColumns(info, allowedActions, withBilling, toIso),
+    ...visitColumns(info, session, allowedActions, withBilling, toIso),
   };
 }
 
 // Requires patient, doctor.user and service loaded on the visit.
 export function toWalkInDayListEntry(
   info: DayVisitInfo,
+  session: PackageSessionDto | null,
   allowedActions: string[],
   withBilling: boolean,
   toIso: ToIso,
@@ -173,7 +184,7 @@ export function toWalkInDayListEntry(
     },
     notes: null,
     cancelReason: info.visit.voidReason,
-    ...visitColumns(info, allowedActions, withBilling, toIso),
+    ...visitColumns(info, session, allowedActions, withBilling, toIso),
   };
 }
 

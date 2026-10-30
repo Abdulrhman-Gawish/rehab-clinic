@@ -43,6 +43,11 @@ import type { Invoice } from '../billing/entities/invoice.entity.js';
 import { InvoicesService } from '../billing/invoices.service.js';
 import { ClinicalNote } from '../clinical/entities/clinical-note.entity.js';
 import { DoctorAccessService } from '../doctors/doctor-access.service.js';
+import type { PackageChoiceDto } from '../packages/dto/package.dto.js';
+import {
+  assertPackageChoice,
+  PatientPackagesService,
+} from '../packages/patient-packages.service.js';
 import {
   assertDeskPatientInput,
   PatientsService,
@@ -89,6 +94,7 @@ export class VisitsService {
     private readonly patients: PatientsService,
     private readonly invoices: InvoicesService,
     private readonly access: DoctorAccessService,
+    private readonly packages: PatientPackagesService,
     private readonly auditService: AuditService,
     private readonly time: ClinicTimeService,
   ) {}
@@ -102,8 +108,10 @@ export class VisitsService {
    */
   async attend(
     appointmentId: string,
+    choice: PackageChoiceDto,
     actor: Actor,
   ): Promise<AttendResponseDto> {
+    assertPackageChoice(choice);
     return this.execute(async (manager) => {
       const appointment = await this.lockAppointment(appointmentId, manager);
       // Friendly answer; the unique index is the real guarantee.
@@ -123,12 +131,17 @@ export class VisitsService {
         actor,
         { trigger: AppointmentTrigger.ATTEND },
       );
-      return this.insertVisit(manager, actor, {
-        appointmentId: appointment.id,
-        patientId: appointment.patientId,
-        doctorId: appointment.doctorId,
-        serviceId: appointment.serviceId,
-      });
+      return this.insertVisit(
+        manager,
+        actor,
+        {
+          appointmentId: appointment.id,
+          patientId: appointment.patientId,
+          doctorId: appointment.doctorId,
+          serviceId: appointment.serviceId,
+        },
+        choice,
+      );
     });
   }
 
@@ -136,6 +149,7 @@ export class VisitsService {
   // booking slots.
   walkIn(dto: WalkInDto, actor: Actor): Promise<AttendResponseDto> {
     assertDeskPatientInput(dto);
+    assertPackageChoice(dto);
 
     return this.execute(async (manager) => {
       // Doctor active + offers the active service (404 / 422).
@@ -146,12 +160,17 @@ export class VisitsService {
         manager,
       );
       const patient = await this.patients.resolveForDesk(dto, actor, manager);
-      return this.insertVisit(manager, actor, {
-        appointmentId: null,
-        patientId: patient.id,
-        doctorId: context.doctor.id,
-        serviceId: context.service.id,
-      });
+      return this.insertVisit(
+        manager,
+        actor,
+        {
+          appointmentId: null,
+          patientId: patient.id,
+          doctorId: context.doctor.id,
+          serviceId: context.service.id,
+        },
+        dto,
+      );
     });
   }
 
@@ -339,7 +358,12 @@ export class VisitsService {
     ) => Promise<{ visit: Visit; invoiceId: string }>,
   ): Promise<AttendResponseDto> {
     const { visit, invoiceId } = await this.run(work);
-    return { ...(await this.load(visit.id)), invoiceId };
+    const { byVisit } = await this.packages.activeSessions([visit.id], []);
+    return {
+      ...(await this.load(visit.id)),
+      invoiceId,
+      package: byVisit.get(visit.id) ?? null,
+    };
   }
 
   private async undoAppointmentAttend(
@@ -383,8 +407,8 @@ export class VisitsService {
     return visit;
   }
 
-  // ACTIVE -> VOIDED, and its invoice (locked and checked unpaid by the
-  // caller) cancelled with the same reason.
+  // ACTIVE -> VOIDED, its invoice (locked and checked unpaid by the caller)
+  // cancelled with the same reason, and its package session given back.
   private async voidVisit(
     manager: EntityManager,
     visit: Visit,
@@ -395,6 +419,7 @@ export class VisitsService {
     if (invoice) {
       await this.invoices.cancelForVoidedVisit(manager, invoice, reason, actor);
     }
+    await this.packages.restoreForVisit(manager, visit.id, reason, actor);
 
     visit.status = VisitStatus.VOIDED;
     visit.voidedAt = this.time.now();
@@ -416,10 +441,13 @@ export class VisitsService {
     return visit;
   }
 
+  // The visit, then the package session it uses (if any), then its invoice
+  // (which bills a package session at 0.00).
   private async insertVisit(
     manager: EntityManager,
     actor: Actor,
     data: Pick<Visit, 'appointmentId' | 'patientId' | 'doctorId' | 'serviceId'>,
+    choice: PackageChoiceDto,
   ): Promise<{ visit: Visit; invoiceId: string }> {
     const repository = manager.getRepository(Visit);
     const visit = await repository.save(
@@ -451,6 +479,7 @@ export class VisitsService {
         attendedAt: visit.attendedAt.toISOString(),
       },
     });
+    await this.packages.useForVisit(manager, visit, choice, actor);
     const invoice = await this.invoices.createForVisit(manager, visit, actor);
     return { visit, invoiceId: invoice.id };
   }

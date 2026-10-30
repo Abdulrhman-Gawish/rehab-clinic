@@ -1,4 +1,4 @@
-// Tiny fetch wrapper: adds the access token, refreshes once on 401, publishes errors to the error bar.
+// Tiny fetch wrapper: adds the access token, refreshes once on 401 (one shared refresh), publishes errors to the error bar.
 export const API = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3000/api/v1';
 
 export type Role = 'OWNER' | 'DOCTOR' | 'RECEPTIONIST';
@@ -30,23 +30,46 @@ export class ApiError extends Error {
 
 interface Opts { blob?: boolean; noAuth?: boolean }
 
-async function refresh(): Promise<boolean> {
+// One refresh in flight per tab; every request that got a 401 waits for it.
+let refreshing: Promise<boolean> | null = null;
+function refresh(): Promise<boolean> {
+  refreshing ??= doRefresh().finally(() => { refreshing = null; });
+  return refreshing;
+}
+
+async function doRefresh(): Promise<boolean> {
   const s = getSession();
   if (!s) return false;
   const res = await fetch(`${API}/auth/refresh`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: s.refreshToken }),
   });
-  if (!res.ok) { setSession(null); return false; }
-  const t = await res.json();
-  setSession({ ...s, accessToken: t.accessToken, refreshToken: t.refreshToken });
-  return true;
+  if (res.ok) {
+    const t = await res.json();
+    setSession({ ...s, accessToken: t.accessToken, refreshToken: t.refreshToken });
+    return true;
+  }
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401 && body.code === 'REFRESH_RACE') {
+    // Another tab rotated this token a moment ago. Its new tokens land in localStorage; re-read once.
+    if (getSession()?.refreshToken !== s.refreshToken) return true;
+    await new Promise((r) => setTimeout(r, 1000));
+    return getSession()?.refreshToken !== s.refreshToken;
+  }
+  // Only a real 401 ends the session; 429 / 5xx just fail this request.
+  if (res.status === 401) setSession(null);
+  return false;
 }
+
+// Keep the header in sync when another tab logs in or out (they share localStorage).
+window.addEventListener('storage', (e) => { if (e.key === KEY) window.dispatchEvent(new Event('session')); });
 
 export async function api<T = any>(method: string, path: string, body?: unknown, opts: Opts = {}): Promise<T> {
   if (method !== 'GET') showError(null);
+  let sentToken: string | undefined;
   const send = () => {
     const headers: Record<string, string> = {};
     const s = getSession();
+    sentToken = s?.accessToken;
     if (s && !opts.noAuth) headers.Authorization = `Bearer ${s.accessToken}`;
     let payload: BodyInit | undefined;
     if (body instanceof FormData) payload = body;
@@ -54,7 +77,11 @@ export async function api<T = any>(method: string, path: string, body?: unknown,
     return fetch(API + path, { method, headers, body: payload });
   };
   let res = await send();
-  if (res.status === 401 && !opts.noAuth && getSession() && (await refresh())) res = await send();
+  if (res.status === 401 && !opts.noAuth && getSession()) {
+    // Someone else already refreshed while this request was out: just resend with the new token.
+    const fresh = getSession()?.accessToken !== sentToken || (await refresh());
+    if (fresh) res = await send();
+  }
   if (!res.ok) {
     let data: any;
     try { data = await res.json(); } catch { data = { message: res.statusText }; }

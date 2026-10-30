@@ -62,7 +62,7 @@ export class AuthController {
   @ApiOperation({
     summary: 'Exchange a refresh token for a new token pair (rotation)',
     description:
-      'The presented refresh token is revoked. Re-using a revoked token revokes every session of that user.',
+      'The presented refresh token is revoked and a new one (valid 7 days) is returned. A token rotated less than 30 s ago answers 401 REFRESH_RACE: re-read the newest stored tokens and retry. Re-using an older revoked token revokes every session of that user.',
   })
   @ApiOkResponse({ type: AuthTokensDto })
   @ApiUnauthorizedResponse({ type: ErrorResponseDto })

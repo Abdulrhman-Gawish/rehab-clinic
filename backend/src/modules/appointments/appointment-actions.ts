@@ -17,6 +17,17 @@ export enum DeskAction {
   UNDO_ATTEND = 'undoAttend',
 }
 
+// Not a status change: a NO_SHOW row whose no-show used a package session
+// can give it back (POST /package-usages/:usageId/restore). No time limit.
+export const RESTORE_SESSION = 'restoreSession';
+
+export function packageActions(
+  status: S,
+  usedSession: boolean,
+): (typeof RESTORE_SESSION)[] {
+  return status === S.NO_SHOW && usedSession ? [RESTORE_SESSION] : [];
+}
+
 // What a doctor can do with a row of their own day list.
 export enum DoctorAction {
   WRITE_NOTE = 'writeNote',

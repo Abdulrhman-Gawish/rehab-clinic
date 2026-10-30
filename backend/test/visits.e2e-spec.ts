@@ -235,7 +235,7 @@ describe('Desk workflow: attend, walk-in, undo, day list (e2e)', () => {
 
       const res = await attend(appointment.id).expect(201);
       expect(Object.keys(res.body).sort()).toEqual(
-        [...VISIT_KEYS, 'invoiceId'].sort(),
+        [...VISIT_KEYS, 'invoiceId', 'package'].sort(),
       );
       expect(res.body).toMatchObject({
         status: 'ACTIVE',

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
 import { UserRole } from '../src/common/enums/user-role.enum.js';
@@ -337,6 +338,121 @@ describe('Doctors & clinic services (e2e)', () => {
       });
       expect(log.oldValues).toEqual({ basePrice: '0.10' });
       expect(log.newValues).toEqual({ basePrice: '0.20' });
+    });
+
+    it('creates a service for chosen doctors and shows them; PATCH changes the list', async () => {
+      const { body: mona } = await createDoctor().expect(201);
+      const { body: omar } = await createDoctor({
+        name: 'Dr. Omar Ali',
+        email: 'omar@clinic.com',
+        phone: '01112345678',
+      }).expect(201);
+
+      const { body: service } = await createService({ doctorIds: [omar.id] });
+      expect(service.doctors).toEqual([{ id: omar.id, name: 'Dr. Omar Ali' }]);
+
+      const res = await request(server)
+        .patch(`/api/v1/clinic-services/${service.id}`)
+        .set('Authorization', bearer(owner))
+        .send({ name: 'Rehab session', doctorIds: [mona.id] })
+        .expect(200);
+      expect(res.body).toMatchObject({
+        name: 'Rehab session',
+        doctors: [{ id: mona.id, name: 'Dr. Mona Adel' }],
+      });
+      const list = await request(server)
+        .get('/api/v1/clinic-services')
+        .set('Authorization', bearer(owner))
+        .expect(200);
+      expect(list.body.items[0].doctors).toEqual(res.body.doctors);
+
+      const actions = await ctx.dataSource.getRepository(AuditLog).find({
+        where: { entityType: 'DOCTOR', action: 'DOCTOR_SERVICE_UNASSIGNED' },
+      });
+      expect(actions.map((a) => a.entityId)).toEqual([omar.id]);
+    });
+
+    it('allDoctors assigns every active doctor at that moment', async () => {
+      const { body: mona } = await createDoctor().expect(201);
+      const { body: retired } = await createDoctor({
+        email: 'retired@clinic.com',
+        phone: '01112345678',
+      }).expect(201);
+      await request(server)
+        .patch(`/api/v1/doctors/${retired.id}/deactivate`)
+        .set('Authorization', bearer(owner))
+        .expect(200);
+
+      const { body: service } = await createService({ allDoctors: true });
+      expect(service.doctors.map((d: { id: string }) => d.id)).toEqual([
+        mona.id,
+      ]);
+
+      // A doctor added later is not included.
+      await createDoctor({
+        email: 'new@clinic.com',
+        phone: '01212345678',
+      }).expect(201);
+      const res = await request(server)
+        .get(`/api/v1/clinic-services/${service.id}`)
+        .set('Authorization', bearer(owner))
+        .expect(200);
+      expect(res.body.doctors).toHaveLength(1);
+    });
+
+    it('PUT /clinic-services/:id/doctors replaces the list and keeps price overrides of doctors that stay', async () => {
+      const { body: mona } = await createDoctor().expect(201);
+      const { body: omar } = await createDoctor({
+        name: 'Dr. Omar Ali',
+        email: 'omar@clinic.com',
+        phone: '01112345678',
+      }).expect(201);
+      const { body: service } = await createService();
+      await request(server)
+        .put(`/api/v1/doctors/${mona.id}/services/${service.id}`)
+        .set('Authorization', bearer(owner))
+        .send({ priceOverride: '500' })
+        .expect(200);
+
+      const res = await request(server)
+        .put(`/api/v1/clinic-services/${service.id}/doctors`)
+        .set('Authorization', bearer(owner))
+        .send({ doctorIds: [mona.id, omar.id] })
+        .expect(200);
+      expect(res.body.doctors).toHaveLength(2);
+      const doctor = await request(server)
+        .get(`/api/v1/doctors/${mona.id}`)
+        .set('Authorization', bearer(owner))
+        .expect(200);
+      expect(doctor.body.services[0].priceOverride).toBe('500.00');
+
+      await request(server)
+        .put(`/api/v1/clinic-services/${service.id}/doctors`)
+        .set('Authorization', bearer(owner))
+        .send({ doctorIds: [] })
+        .expect(200)
+        .expect(({ body }) => expect(body.doctors).toEqual([]));
+    });
+
+    it('doctor list input: exactly one of doctorIds / allDoctors, known doctors, active service', async () => {
+      const { body: mona } = await createDoctor().expect(201);
+      const { body: service } = await createService();
+      const put = (body: object) =>
+        request(server)
+          .put(`/api/v1/clinic-services/${service.id}/doctors`)
+          .set('Authorization', bearer(owner))
+          .send(body);
+
+      await put({}).expect(400);
+      await put({ doctorIds: [mona.id], allDoctors: true }).expect(400);
+      await put({ allDoctors: false }).expect(400);
+      await put({ doctorIds: [randomUUID()] }).expect(404);
+
+      await request(server)
+        .patch(`/api/v1/clinic-services/${service.id}/deactivate`)
+        .set('Authorization', bearer(owner))
+        .expect(200);
+      await put({ doctorIds: [mona.id] }).expect(409);
     });
 
     it('deactivates instead of deleting', async () => {

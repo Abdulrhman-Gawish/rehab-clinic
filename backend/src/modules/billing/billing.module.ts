@@ -17,10 +17,8 @@ import {
 import { InvoicesService } from './invoices.service.js';
 import { PaymentsController } from './payments.controller.js';
 import { PaymentsService } from './payments.service.js';
-import {
-  DefaultVisitBillingPolicy,
-  VISIT_BILLING_POLICY,
-} from './visit-billing-policy.js';
+import { PackageVisitBillingPolicy } from '../packages/package-billing-policy.js';
+import { VISIT_BILLING_POLICY } from './visit-billing-policy.js';
 
 @Module({
   imports: [
@@ -45,8 +43,8 @@ import {
     DiscountsService,
     PaymentsService,
     BillingReportsService,
-    // Stage 8 (packages) binds a policy returning covered items at 0.00.
-    { provide: VISIT_BILLING_POLICY, useClass: DefaultVisitBillingPolicy },
+    // Package sessions are billed at 0.00; other visits at the doctor's price.
+    { provide: VISIT_BILLING_POLICY, useClass: PackageVisitBillingPolicy },
   ],
   exports: [DocumentCounterService, InvoicesService, BillingReportsService],
 })

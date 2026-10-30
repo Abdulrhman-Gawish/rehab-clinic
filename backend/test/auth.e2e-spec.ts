@@ -20,6 +20,10 @@ import {
   type TestApp,
 } from './utils/test-app.js';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const sha256 = (token: string) =>
+  createHash('sha256').update(token).digest('hex');
+
 describe('Auth (e2e)', () => {
   let ctx: TestApp;
   let server: App;
@@ -189,7 +193,74 @@ describe('Auth (e2e)', () => {
         .expect(200);
     });
 
-    it('detects reuse of a revoked token and revokes every session of the user', async () => {
+    it('sliding expiry: every refresh returns a token valid for 7 more days', async () => {
+      const user = await insertUser(ctx.dataSource, UserRole.OWNER);
+      const { refreshToken } = await login(ctx.app, user.email);
+      // Unused for almost 7 days: one minute left.
+      await ctx.dataSource
+        .getRepository(RefreshToken)
+        .update(
+          { userId: user.id },
+          { expiresAt: new Date(Date.now() + 60_000) },
+        );
+
+      const res = await request(server)
+        .post('/api/v1/auth/refresh')
+        .send({ refreshToken })
+        .expect(200);
+      const expiresIn =
+        new Date(res.body.refreshTokenExpiresAt).getTime() - Date.now();
+      expect(expiresIn).toBeGreaterThan(7 * DAY_MS - 60_000);
+      expect(expiresIn).toBeLessThanOrEqual(7 * DAY_MS);
+    });
+
+    it('parallel refreshes with the same token: one rotates, the others get REFRESH_RACE and the session survives', async () => {
+      const user = await insertUser(ctx.dataSource, UserRole.OWNER);
+      const { refreshToken } = await login(ctx.app, user.email);
+
+      const responses = await Promise.all(
+        [1, 2, 3].map(() =>
+          request(server).post('/api/v1/auth/refresh').send({ refreshToken }),
+        ),
+      );
+      const ok = responses.filter((r) => r.status === 200);
+      const raced = responses.filter((r) => r.status === 401);
+      expect(ok).toHaveLength(1);
+      expect(raced).toHaveLength(2);
+      for (const r of raced) expect(r.body.code).toBe('REFRESH_RACE');
+
+      await request(server)
+        .post('/api/v1/auth/refresh')
+        .send({ refreshToken: ok[0].body.refreshToken })
+        .expect(200);
+      expect(
+        await ctx.dataSource
+          .getRepository(AuditLog)
+          .countBy({ action: 'REFRESH_TOKEN_REUSE_DETECTED' }),
+      ).toBe(0);
+    });
+
+    it('reusing a token rotated inside the grace window answers REFRESH_RACE without revoking', async () => {
+      const user = await insertUser(ctx.dataSource, UserRole.OWNER);
+      const first = await login(ctx.app, user.email);
+      const rotated = await request(server)
+        .post('/api/v1/auth/refresh')
+        .send({ refreshToken: first.refreshToken })
+        .expect(200);
+
+      const res = await request(server)
+        .post('/api/v1/auth/refresh')
+        .send({ refreshToken: first.refreshToken })
+        .expect(401);
+      expect(res.body.code).toBe('REFRESH_RACE');
+
+      await request(server)
+        .post('/api/v1/auth/refresh')
+        .send({ refreshToken: rotated.body.refreshToken })
+        .expect(200);
+    });
+
+    it('detects reuse of a token rotated outside the grace window and revokes every session of the user', async () => {
       const user = await insertUser(ctx.dataSource, UserRole.OWNER);
       const sessionA = await login(ctx.app, user.email);
       const sessionB = await login(ctx.app, user.email);
@@ -198,12 +269,19 @@ describe('Auth (e2e)', () => {
         .post('/api/v1/auth/refresh')
         .send({ refreshToken: sessionA.refreshToken })
         .expect(200);
+      await ctx.dataSource
+        .getRepository(RefreshToken)
+        .update(
+          { tokenHash: sha256(sessionA.refreshToken) },
+          { revokedAt: new Date(Date.now() - 31_000) },
+        );
 
       // Attacker replays the old token.
-      await request(server)
+      const replay = await request(server)
         .post('/api/v1/auth/refresh')
         .send({ refreshToken: sessionA.refreshToken })
         .expect(401);
+      expect(replay.body.code).toBeUndefined();
 
       // Both the rotated token and the other session are now dead.
       await request(server)

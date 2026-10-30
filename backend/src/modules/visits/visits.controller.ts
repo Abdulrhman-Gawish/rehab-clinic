@@ -45,6 +45,7 @@ import {
   VisitResponseDto,
   WalkInDto,
 } from './dto/visit.dto.js';
+import { PackageChoiceDto } from '../packages/dto/package.dto.js';
 import { VisitsService } from './visits.service.js';
 
 const STAFF = [UserRole.OWNER, UserRole.RECEPTIONIST, UserRole.DOCTOR];
@@ -70,7 +71,7 @@ export class VisitsController {
   @ApiOperation({
     summary: 'Register a walk-in (visit without appointment)',
     description:
-      'patientId OR name + phone (find-or-create). Attended now; the invoice is created in the same transaction (invoiceId). Walk-ins do not block booking slots.',
+      'patientId OR name + phone (find-or-create). Attended now; the invoice is created in the same transaction (invoiceId). Walk-ins do not block booking slots. patientPackageId / usePackage: false as for attend.',
   })
   @ApiCreatedResponse({ type: AttendResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
@@ -162,7 +163,7 @@ export class AttendController {
   @ApiOperation({
     summary: 'The patient entered the doctor (PENDING/CONFIRMED -> ATTENDED)',
     description:
-      "Only on the appointment's local date. Creates the ACTIVE visit and its invoice in one transaction; the response includes invoiceId.",
+      "Only on the appointment's local date. Creates the ACTIVE visit and its invoice in one transaction; the response includes invoiceId. Body (optional): patientPackageId to choose the package, or usePackage: false to bill normally; by default the oldest usable package pays the session (0.00 line).",
   })
   @ApiCreatedResponse({ type: AttendResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
@@ -176,9 +177,10 @@ export class AttendController {
   })
   attend(
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: PackageChoiceDto,
     @CurrentActor() actor: Actor,
   ): Promise<AttendResponseDto> {
-    return this.visits.attend(id, actor);
+    return this.visits.attend(id, dto, actor);
   }
 
   @Post(':id/undo-attend')

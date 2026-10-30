@@ -1,9 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  ArrayMaxSize,
+  ArrayUnique,
+  Equals,
+  IsArray,
   IsBoolean,
   IsInt,
   IsOptional,
   IsString,
+  IsUUID,
   Length,
   Max,
   MaxLength,
@@ -18,9 +23,31 @@ import {
   TrimOrNull,
 } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
+import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
 import type { ClinicService } from '../entities/clinic-service.entity.js';
 
-export class CreateClinicServiceDto {
+// Who offers the service: a list of doctors, or every active doctor at this
+// moment. Exactly one of the two on PUT; optional on create/PATCH.
+export class ServiceDoctorsDto {
+  @ApiPropertyOptional({ type: [String], format: 'uuid' })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @ArrayUnique()
+  @IsUUID('all', { each: true })
+  doctorIds?: string[];
+
+  @ApiPropertyOptional({
+    enum: [true],
+    description:
+      'Every doctor active right now. Doctors added later are not included.',
+  })
+  @IsOptional()
+  @Equals(true)
+  allDoctors?: true;
+}
+
+export class CreateClinicServiceDto extends ServiceDoctorsDto {
   @ApiProperty({ example: 'Physiotherapy session', maxLength: 120 })
   @TrimAndCollapse()
   @IsString()
@@ -45,7 +72,7 @@ export class CreateClinicServiceDto {
   basePrice: string;
 }
 
-export class UpdateClinicServiceDto {
+export class UpdateClinicServiceDto extends ServiceDoctorsDto {
   @ApiPropertyOptional({ example: 'Physiotherapy session', maxLength: 120 })
   @OptionalNotNull()
   @TrimAndCollapse()
@@ -111,6 +138,12 @@ export class ClinicServiceResponseDto {
   @ApiProperty()
   isActive: boolean;
 
+  @ApiProperty({
+    type: [UserRefDto],
+    description: 'Doctors offering the service ({ id: doctor id, name })',
+  })
+  doctors: UserRefDto[];
+
   @ApiProperty()
   createdAt: Date;
 
@@ -120,6 +153,7 @@ export class ClinicServiceResponseDto {
   static fromEntity(
     this: void,
     service: ClinicService,
+    doctors: UserRefDto[],
   ): ClinicServiceResponseDto {
     return {
       id: service.id,
@@ -128,6 +162,7 @@ export class ClinicServiceResponseDto {
       durationMinutes: service.durationMinutes,
       basePrice: service.basePrice,
       isActive: service.isActive,
+      doctors,
       createdAt: service.createdAt,
       updatedAt: service.updatedAt,
     };

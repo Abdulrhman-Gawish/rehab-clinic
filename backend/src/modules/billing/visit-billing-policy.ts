@@ -6,10 +6,9 @@ import { DoctorClinicService } from '../doctors/entities/doctor-clinic-service.e
 import type { Visit } from '../visits/entities/visit.entity.js';
 
 /**
- * Decides what a visit's automatic invoice contains. Stage 8 (packages) will
- * bind a policy returning "covered by package" items at 0.00, without
- * touching InvoicesService: implement VisitBillingPolicy and bind it to
- * VISIT_BILLING_POLICY in BillingModule.
+ * Decides what a visit's automatic invoice contains. BillingModule binds
+ * PackageVisitBillingPolicy (packages module): a visit paid by a package
+ * session gets a 0.00 line, everything else falls back to the default.
  */
 export const VISIT_BILLING_POLICY = Symbol('VISIT_BILLING_POLICY');
 

@@ -6,6 +6,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
 import {
@@ -33,6 +34,7 @@ import {
   CreateClinicServiceDto,
   ListClinicServicesQueryDto,
   PublicClinicServiceDto,
+  ServiceDoctorsDto,
   UpdateClinicServiceDto,
 } from './dto/clinic-service.dto.js';
 
@@ -83,6 +85,23 @@ export class ClinicServicesController {
     @CurrentActor() actor: Actor,
   ): Promise<ClinicServiceResponseDto> {
     return this.clinicServices.update(id, dto, actor);
+  }
+
+  @Put(':id/doctors')
+  @Auth(UserRole.OWNER)
+  @ApiOperation({
+    summary: 'Replace the doctors offering the service',
+    description:
+      'doctorIds, or allDoctors: true (every doctor active now). Doctors that stay keep their price override.',
+  })
+  @ApiOkResponse({ type: ClinicServiceResponseDto })
+  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  setDoctors(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ServiceDoctorsDto,
+    @CurrentActor() actor: Actor,
+  ): Promise<ClinicServiceResponseDto> {
+    return this.clinicServices.setDoctors(id, dto, actor);
   }
 
   @Patch(':id/activate')
