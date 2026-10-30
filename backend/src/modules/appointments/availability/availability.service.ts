@@ -7,7 +7,7 @@ import {
   unprocessable,
 } from '../../../common/errors/app.exception.js';
 import { ClinicTimeService } from '../../../common/time/clinic-time.service.js';
-import { dayOfWeek } from '../../../common/time/clinic-time.util.js';
+import { addDays, dayOfWeek } from '../../../common/time/clinic-time.util.js';
 import type { EnvironmentVariables } from '../../../config/env.validation.js';
 import type { ClinicService } from '../../clinic-services/entities/clinic-service.entity.js';
 import { DoctorClinicService } from '../../doctors/entities/doctor-clinic-service.entity.js';
@@ -133,7 +133,7 @@ export class AvailabilityService {
   // Local dates from today up to today + BOOKING_MAX_DAYS_AHEAD.
   assertDateInRange(date: string): void {
     const today = this.time.today();
-    const last = this.time.addDays(today, this.maxDaysAhead);
+    const last = addDays(today, this.maxDaysAhead);
     if (date < today || date > last) {
       throw unprocessable(
         ErrorCode.DATE_OUT_OF_RANGE,

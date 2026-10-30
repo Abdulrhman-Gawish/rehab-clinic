@@ -101,3 +101,8 @@ export function parseIsoWithOffset(value: string): Date | null {
   const parsed = DateTime.fromISO(value, { setZone: true });
   return parsed.isValid ? parsed.toJSDate() : null;
 }
+
+// For values already validated by @IsIsoWithOffset() in a DTO.
+export function isoToDate(value: string): Date {
+  return parseIsoWithOffset(value) as Date;
+}

@@ -4,6 +4,7 @@ NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, 
 
 - **Who logs in:** `OWNER`, `DOCTOR` and `RECEPTIONIST` staff.
 - **Patients never log in.** A patient is identified only by their phone number, which is unique.
+- **No payment gateway, no online payments.** Every payment is a manual record the receptionist enters after receiving the money at the desk.
 - **Every sensitive change is audited:** who did it, what changed (old and new values), when, and from which IP.
 
 ## Stack
@@ -35,7 +36,7 @@ npm run start:dev             # http://localhost:3000/api/v1
 ```
 
 - Swagger: <http://localhost:3000/api/docs>. Log in with `POST /auth/login`, then click **Authorize** and paste the `accessToken`.
-- Health check: `GET /api/v1/health`, which also checks the database connection.
+- Health check: `GET /api/v1/health` returns `{ "status": "ok", "database": "up" }`, or 503 when the database is unreachable.
 - pgAdmin (optional): `docker compose --profile tools up -d`, then open <http://localhost:5050>.
 
 ## Environment variables
@@ -54,17 +55,14 @@ All variables are validated at startup; the app refuses to start on invalid conf
 | `DB_LOGGING` | `false` | Log SQL |
 | `DB_TEST_DATABASE` | `<DB_DATABASE>_test` | Database used by e2e tests. **It is wiped on every run** and must differ from `DB_DATABASE` |
 | `JWT_ACCESS_SECRET` | — | At least 32 characters |
-| `JWT_ACCESS_TTL_SECONDS` | `900` | Access token lifetime |
-| `JWT_REFRESH_TTL_DAYS` | `7` | Refresh token lifetime |
-| `THROTTLE_ENABLED` | `true` | Global switch (off in e2e) |
-| `THROTTLE_TTL_MS` / `THROTTLE_LIMIT` | `60000` / `120` | Default limit per IP. Login: 5/min; refresh: 20/min; public reads: 30/min; public booking: 5 per 15 min |
+| `THROTTLE_ENABLED` | `true` | Global switch (off in e2e). The limits are fixed per IP: 120/min by default; login 5/min; refresh 20/min; public reads 30/min; public booking 5 per 15 min |
 | `CLINIC_TIMEZONE` | `Africa/Cairo` | IANA zone of the clinic. Schedules are in this zone's wall-clock time; offsets (DST) are resolved per date |
 | `SLOT_INTERVAL_MINUTES` | `15` | Candidate slot starts every N minutes inside a schedule range |
 | `BOOKING_MIN_LEAD_MINUTES` | `60` | Earliest bookable start = now + N minutes (schedule-checked bookings) |
 | `BOOKING_MAX_DAYS_AHEAD` | `30` | Latest bookable local date = today + N days |
 | `BOOKING_MAX_ACTIVE_PER_PHONE` | `3` | Max active future appointments one phone can hold through public booking |
 | `BACKDATE_MAX_DAYS` | `7` | With `allowOutsideSchedule`, a RECEPTIONIST may book up to N local days in the past; older is OWNER only |
-| `RECEPTIONIST_MAX_DISCOUNT_PERCENT` | `100` | Highest effective discount (% of the subtotal) a RECEPTIONIST may give; OWNER has no limit |
+| `RECEPTIONIST_MAX_DISCOUNT_PERCENT` | `100` | Highest effective discount (% of the subtotal) a RECEPTIONIST may give; OWNER has no limit. `100` means no cap, which is intended for now (the clinic didn't ask for one); the owner can lower it later |
 | `BILLING_OVERDUE_DAYS` | `7` | Invoices with a balance issued more than N days ago appear in `GET /billing/attention` |
 | `CLINIC_NAME` / `CLINIC_PHONE` | `Rehab Clinic` / *(empty)* | Printed on receipts |
 | `STORAGE_LOCAL_PATH` | `./storage` | Root folder of the local-disk file storage (expense receipts). Private: never served statically |
@@ -172,7 +170,6 @@ Business errors also carry a stable machine-readable `code`:
 | `DISCOUNT_PATIENT_MISMATCH` | 422 | Repeating another patient's discount |
 | `NO_PREVIOUS_DISCOUNT` | 404 | The patient has no active discount to repeat |
 | `OVERPAYMENT` | 422 | The payment is more than the remaining balance |
-| `IDEMPOTENCY_KEY_REUSED` | 409 | Same `Idempotency-Key` with a different request |
 | `VOID_NOT_ALLOWED` | 422 | Not the same local day, not your payment (RECEPTIONIST), already voided, refunds exist, or the invoice is cancelled |
 | `REFUND_NOT_ALLOWED` | 422 | Refunding a voided payment or a refund |
 | `REFUND_EXCEEDS_PAYMENT` | 422 | Refunds would exceed the payment (`details.refundable`) |
@@ -218,7 +215,7 @@ Business errors also carry a stable machine-readable `code`:
 - Normalization happens in the DTO (before validation) **and again** in the service.
 - Uniqueness is enforced by the DB constraint `uq_patients_phone`. A violation becomes `409` with `details.patientId` of the existing patient. This also applies when a PATCH changes the phone.
 - `GET /patients?search=` matches part of the name (trigram index) or the phone in any format. `GET /patients/lookup?phone=` finds an exact number. `PATCH` changes are audited with old and new values.
-- `PatientsService.findOrCreateByPhone({ name, phone, source, createdBy? }, manager?)` is for the future public booking flow:
+- `PatientsService.findOrCreateByPhone({ name, phone, source, createdBy? }, manager?)` is used by public booking, reception booking and walk-ins:
   - Race-safe: `INSERT … ON CONFLICT (phone) DO NOTHING`, then `SELECT`.
   - Never renames an existing patient. It returns `nameMismatch: true` instead.
 - There is **no public patient endpoint**. `notes` is for administrative notes only, never medical information.
@@ -247,7 +244,7 @@ Business errors also carry a stable machine-readable `code`:
 
 ### `schedules`
 - `doctor_schedules` holds weekly ranges in clinic local time. A day can have several ranges (morning + evening) that must not overlap; touching ranges (09–13, 13–15) are allowed.
-- Overlaps are checked in the service (409 `SCHEDULE_OVERLAP`) **and** by a `btree_gist` exclusion constraint on active rows. Deactivated ranges don't count.
+- Overlaps are decided by a `btree_gist` exclusion constraint on active rows (409 `SCHEDULE_OVERLAP`), which also holds under races. Deactivated ranges don't count.
 - `doctor_time_off` holds absolute periods. Creating or updating time off that overlaps active appointments **still succeeds** and returns `conflictingAppointments`. Appointments are never cancelled automatically.
 - OWNER and RECEPTIONIST manage schedules for every doctor; a DOCTOR can read only their own. Every change is audited.
 
@@ -264,12 +261,11 @@ Business errors also carry a stable machine-readable `code`:
 **Double-booking guarantee.** Two exclusion constraints cover the *active* statuses (PENDING, CONFIRMED, CHECKED_IN, COMPLETED): one on `(doctor_id, tstzrange(start_at, end_at, '[)'))` and one on `(patient_id, …)`. A violation (Postgres `23P01`) becomes 409 `SLOT_UNAVAILABLE` or `PATIENT_OVERLAP`. Back-to-back appointments are fine, and CANCELLED, NO_SHOW and RESCHEDULED free the slot. `end_at` is always computed from the service duration; clients can't send it.
 
 **Online booking** (`POST /public/appointments`, `@Public`). In one transaction:
-1. Run the booking verifier: the CAPTCHA hook, a no-op for now.
-2. Load the doctor (must be active and public) and the service (must be offered).
-3. Check the start is a real slot: schedule, slot grid, time off, lead time, max days ahead. Otherwise 422.
-4. `findOrCreateByPhone` (source ONLINE). An existing phone links to the existing patient, who is **never renamed**.
-5. Lock the patient row and enforce `BOOKING_MAX_ACTIVE_PER_PHONE` (409 `BOOKING_LIMIT_REACHED`). A new phone simply has 0, so the response never reveals whether the phone existed.
-6. Insert a **PENDING / ONLINE** appointment with `booked_name` = the submitted name and `booked_by` = NULL. A status-history row and an audit entry are written in the same transaction.
+1. Load the doctor (must be active and public) and the service (must be offered).
+2. Check the start is a real slot: schedule, slot grid, time off, lead time, max days ahead. Otherwise 422.
+3. `findOrCreateByPhone` (source ONLINE). An existing phone links to the existing patient, who is **never renamed**.
+4. Lock the patient row and enforce `BOOKING_MAX_ACTIVE_PER_PHONE` (409 `BOOKING_LIMIT_REACHED`). A new phone simply has 0, so the response never reveals whether the phone existed.
+5. Insert a **PENDING / ONLINE** appointment with `booked_name` = the submitted name and `booked_by` = NULL. A status-history row and an audit entry are written in the same transaction.
 
 The response is exactly `{ referenceCode, doctorName, serviceName, startAt, endAt, status }`: no patient id or patient data.
 
@@ -277,7 +273,6 @@ Abuse protection:
 - Throttling at 5 requests per 15 minutes per IP.
 - A honeypot field `website` that must stay empty.
 - The per-phone limit.
-- `BookingVerifier` (`booking-verifier.ts`), an interface to bind a CAPTCHA implementation to later.
 
 There is no public cancel or lookup endpoint: reception handles changes by phone, using the reference code.
 
@@ -369,7 +364,7 @@ CHECK constraints keep the timestamps consistent: IN_SESSION ⇒ `started_at`; C
 
 - The payload is `{ visitId, appointmentId (null for walk-ins), patientId, doctorId, serviceId, at }`.
 - Events are emitted **only after the transaction commits**: nothing is emitted when it fails, and listeners always see committed data.
-- There are no listeners yet; billing (Stage 6) will subscribe.
+- Billing listens to `visit.checked_in` (automatic invoice) and `visit.cancelled` (cancel an unpaid invoice).
 
 **Reading:**
 - `GET /visits/queue?date=&doctorId=`: the day's WAITING and IN_SESSION visits ordered by check-in. Each row has patient, service, booked start time (null for walk-ins), `checkedInAt` and `waitingMinutes` (minutes since check-in, or minutes waited before the session started once IN_SESSION). Doctors always get their own queue.
@@ -392,7 +387,7 @@ CHECK constraints keep the timestamps consistent: IN_SESSION ⇒ `started_at`; C
   - the status matches the amounts;
   - `line_total = unit_price × quantity`;
   - discount value ranges per type;
-  - payment shape (refunds point to a payment and have a reason; non-cash payments have a reference; voids are complete).
+  - payment shape (refunds point to a payment and have a reason; voids are complete).
 - Document numbers are gapless per year in clinic local time: `INV-2026-000123`, `RCP-…`, `EXP-…`. They come from `document_counters`, incremented inside the same transaction as the document, so a rollback releases the number.
 
 #### Invoice lifecycle
@@ -430,12 +425,9 @@ stateDiagram-v2
   - The source must belong to the same patient (`DISCOUNT_PATIENT_MISMATCH`), and the cap still applies. The old invoice never changes.
 
 #### Payments: void vs refund
-- `POST /invoices/:id/payments { amount, method, reference? }`. Partial payments are allowed; paying more than the balance gives `OVERPAYMENT` (there is no credit balance). A reference is required for CARD, WALLET and INSTAPAY.
+- `POST /invoices/:id/payments { amount, method, reference? }`. Partial payments are allowed; paying more than the balance gives `OVERPAYMENT` (there is no credit balance). Payments are manual desk records (there is no payment gateway): `reference` is optional free text for any method and is never validated against anything.
 - Every payment, refund and void **locks the invoice row** (`SELECT … FOR UPDATE`), recomputes `amount_paid` (valid payments − valid refunds) and the status, and writes the audit entry in one transaction. Parallel payments can never overpay.
-- **`Idempotency-Key`** header on payments and refunds:
-  - Same key + same body returns the original (header `Idempotent-Replayed: true`).
-  - Same key + another body gives 409 `IDEMPOTENCY_KEY_REUSED`.
-  - The key is checked after taking the lock, and a unique index backs it up.
+- A payment recorded twice by mistake is fixed with a **void** (same day).
 - **VOID = a mistake.** Only on the local day it was recorded. A RECEPTIONIST can void only their own payments; the OWNER any. A reason is required. The row stays with status VOIDED.
 - **REFUND = money returned.** OWNER only, as a new row pointing at a VALID payment of the invoice. Total refunds per payment are capped (`REFUND_EXCEEDS_PAYMENT`). The method defaults to the original payment's.
 - Paid money is never edited or deleted.
@@ -459,7 +451,7 @@ stateDiagram-v2
   - `POST /expenses/:id/receipt` takes a multipart upload in the `file` field: JPG, PNG, WEBP or PDF, at most 5 MB (413 above that).
   - The type is decided by the file's **magic bytes**, and the name's extension must match (`UNSUPPORTED_FILE_TYPE`).
   - `GET /expenses/:id/receipt` streams the file to authorized users only.
-  - Files sit behind the `StorageService` interface (`common/storage`). The default `LocalDiskStorageService` writes under `STORAGE_LOCAL_PATH` with server-generated keys and path-traversal checks, and **nothing is served statically**. To use S3, bind another implementation to `STORAGE_SERVICE`.
+  - Files are stored by `FileStorage` (`common/storage/file-storage.service.ts`) under `STORAGE_LOCAL_PATH`, with server-generated keys and path-traversal checks, and **nothing is served statically**. Add `FileStorage` to a module's providers to reuse it.
 - Categories: the OWNER creates, renames and (de)activates them; the RECEPTIONIST can read them.
 
 ## Project layout
@@ -476,9 +468,11 @@ test/          e2e suites + global setup (test DB reset + migrations) + helpers
 
 ## Conventions for new modules
 
+The full list (and the testing policy) is in [CLAUDE.md](../CLAUDE.md) at the repo root.
+
 - Entities extend `BaseEntity` (uuid `id`, `created_at` / `updated_at` as `timestamptz`). Business data is never hard deleted: use `is_active` or a status column.
 - Name constraints explicitly (`uq_…`, `fk_…`, `chk_…`, `idx_…`). Services catch specific unique violations by name and turn them into 409s.
-- Do multi-step writes in `dataSource.transaction(...)`, pass the `manager` to `AuditService.log`, and throw 409s from a `catch` **outside** the transaction (a failed transaction is aborted).
+- Do multi-step writes in `dataSource.transaction(...)`, pass the `manager` to `AuditService.logAction`, and throw 409s from a `catch` **outside** the transaction (a failed transaction is aborted).
 - Controllers only route. Business logic lives in services, and every input and output is a DTO.
 - Wrap cross-referencing entity relations in `Relation<>` (required for ESM circular imports).
 - Business errors that clients branch on: throw `conflict(...)` / `unprocessable(...)` with an `ErrorCode` (`common/errors/app.exception.ts`).

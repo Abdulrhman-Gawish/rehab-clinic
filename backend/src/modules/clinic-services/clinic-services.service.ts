@@ -154,11 +154,10 @@ export class ClinicServicesService {
     const service = await this.dataSource.transaction(
       async (manager: EntityManager) => {
         const repository = manager.getRepository(ClinicService);
-        const service = await repository
-          .createQueryBuilder('service')
-          .where('service.id = :id', { id })
-          .setLock('pessimistic_write')
-          .getOne();
+        const service = await repository.findOne({
+          where: { id },
+          lock: { mode: 'pessimistic_write' },
+        });
         if (!service) throw new NotFoundException('Service not found');
 
         const before = { ...service };

@@ -2,28 +2,23 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   HttpCode,
   HttpStatus,
   Param,
   ParseUUIDPipe,
   Post,
   Query,
-  Res,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
-  ApiConflictResponse,
   ApiCreatedResponse,
   ApiForbiddenResponse,
-  ApiHeader,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
-import type { Response } from 'express';
 import { Auth } from '../../common/decorators/api-auth.decorator.js';
 import { CurrentActor } from '../../common/decorators/current-user.decorator.js';
 import { ErrorResponseDto } from '../../common/dto/error-response.dto.js';
@@ -45,22 +40,9 @@ import {
   RecordPaymentDto,
   RefundPaymentDto,
 } from './dto/payment.dto.js';
-import { PaymentsService, type PaymentResult } from './payments.service.js';
+import { PaymentsService } from './payments.service.js';
 
 const DESK = [UserRole.OWNER, UserRole.RECEPTIONIST];
-
-const IDEMPOTENCY_HEADER = {
-  name: 'Idempotency-Key',
-  required: false,
-  description:
-    'Retry-safe key (1-100 chars). Same key + same body returns the original (header Idempotent-Replayed: true); same key + other body -> 409 IDEMPOTENCY_KEY_REUSED.',
-};
-
-function respond(res: Response, result: PaymentResult): PaymentResponseDto {
-  if (result.replayed) res.setHeader('Idempotent-Replayed', 'true');
-  res.status(HttpStatus.CREATED);
-  return result.payment;
-}
 
 @ApiTags('Billing: payments')
 @Controller()
@@ -73,50 +55,40 @@ export class PaymentsController {
 
   @Post('invoices/:id/payments')
   @Auth(...DESK)
-  @ApiOperation({ summary: 'Record a (partial) payment' })
-  @ApiHeader(IDEMPOTENCY_HEADER)
+  @ApiOperation({
+    summary: 'Record a (partial) payment received at the desk',
+    description:
+      'A manual record of money already received; there is no payment gateway.',
+  })
   @ApiCreatedResponse({ type: PaymentResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
-  @ApiConflictResponse({
-    type: ErrorResponseDto,
-    description: 'IDEMPOTENCY_KEY_REUSED',
-  })
   @ApiUnprocessableEntityResponse({
     type: ErrorResponseDto,
     description: 'OVERPAYMENT or INVOICE_CANCELLED',
   })
-  async record(
+  record(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RecordPaymentDto,
-    @Headers('idempotency-key') key: string | undefined,
     @CurrentActor() actor: Actor,
-    @Res({ passthrough: true }) res: Response,
   ): Promise<PaymentResponseDto> {
-    return respond(res, await this.payments.record(id, dto, key, actor));
+    return this.payments.record(id, dto, actor);
   }
 
   @Post('payments/:id/refund')
   @Auth(UserRole.OWNER)
   @ApiOperation({ summary: 'Return money for a valid payment (OWNER)' })
-  @ApiHeader(IDEMPOTENCY_HEADER)
   @ApiCreatedResponse({ type: PaymentResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
-  @ApiConflictResponse({
-    type: ErrorResponseDto,
-    description: 'IDEMPOTENCY_KEY_REUSED',
-  })
   @ApiUnprocessableEntityResponse({
     type: ErrorResponseDto,
     description: 'REFUND_EXCEEDS_PAYMENT or REFUND_NOT_ALLOWED',
   })
-  async refund(
+  refund(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RefundPaymentDto,
-    @Headers('idempotency-key') key: string | undefined,
     @CurrentActor() actor: Actor,
-    @Res({ passthrough: true }) res: Response,
   ): Promise<PaymentResponseDto> {
-    return respond(res, await this.payments.refund(id, dto, key, actor));
+    return this.payments.refund(id, dto, actor);
   }
 
   @Post('payments/:id/void')

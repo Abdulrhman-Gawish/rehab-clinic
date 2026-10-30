@@ -21,7 +21,7 @@ import {
 import { ErrorCode, unprocessable } from '../../common/errors/app.exception.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
-import { parseIsoWithOffset } from '../../common/time/clinic-time.util.js';
+import { isoToDate } from '../../common/time/clinic-time.util.js';
 import {
   isZeroMoney,
   lineTotal,
@@ -75,7 +75,6 @@ import {
   type VisitBillingPolicy,
 } from './visit-billing-policy.js';
 
-const toDate = (value: string) => parseIsoWithOffset(value) as Date;
 const SYSTEM: Actor = { userId: null, ip: null };
 
 export interface VisitInvoiceResult {
@@ -343,9 +342,11 @@ export class InvoicesService {
   ): Promise<Paginated<InvoiceSummaryDto>> {
     const qb = this.summaryQuery();
     if (query.from)
-      qb.andWhere('invoice.issuedAt >= :from', { from: toDate(query.from) });
+      qb.andWhere('invoice.issuedAt >= :from', {
+        from: isoToDate(query.from),
+      });
     if (query.to)
-      qb.andWhere('invoice.issuedAt < :to', { to: toDate(query.to) });
+      qb.andWhere('invoice.issuedAt < :to', { to: isoToDate(query.to) });
     if (query.patientId) {
       qb.andWhere('invoice.patientId = :patientId', {
         patientId: query.patientId,
@@ -400,12 +401,10 @@ export class InvoicesService {
   // ---------- Shared with discounts / payments ----------
 
   async lockInvoice(id: string, manager: EntityManager): Promise<Invoice> {
-    const invoice = await manager
-      .getRepository(Invoice)
-      .createQueryBuilder('invoice')
-      .where('invoice.id = :id', { id })
-      .setLock('pessimistic_write')
-      .getOne();
+    const invoice = await manager.findOne(Invoice, {
+      where: { id },
+      lock: { mode: 'pessimistic_write' },
+    });
     if (!invoice) throw new NotFoundException('Invoice not found');
     return invoice;
   }
@@ -730,8 +729,7 @@ export class InvoicesService {
   private summaryQuery(): SelectQueryBuilder<Invoice> {
     return this.invoices
       .createQueryBuilder('invoice')
-      .innerJoinAndSelect('invoice.patient', 'patient')
-      .where('TRUE');
+      .innerJoinAndSelect('invoice.patient', 'patient');
   }
 
   private async paginate(

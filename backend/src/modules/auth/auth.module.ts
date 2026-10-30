@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
 import type { EnvironmentVariables } from '../../config/env.validation.js';
 import { User } from '../users/entities/user.entity.js';
+import { ACCESS_TOKEN_TTL_SECONDS } from './auth.constants.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
@@ -20,7 +21,7 @@ import { RefreshTokensService } from './refresh-tokens.service.js';
       useFactory: (config: ConfigService<EnvironmentVariables, true>) => ({
         secret: config.get('JWT_ACCESS_SECRET', { infer: true }),
         signOptions: {
-          expiresIn: config.get('JWT_ACCESS_TTL_SECONDS', { infer: true }),
+          expiresIn: ACCESS_TOKEN_TTL_SECONDS,
           algorithm: 'HS256',
         },
         verifyOptions: { algorithms: ['HS256'] },

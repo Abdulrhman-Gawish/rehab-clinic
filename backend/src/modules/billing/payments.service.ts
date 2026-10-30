@@ -1,9 +1,4 @@
-import { createHash } from 'node:crypto';
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
@@ -12,14 +7,10 @@ import {
   type Paginated,
 } from '../../common/dto/pagination.dto.js';
 import { UserRole } from '../../common/enums/user-role.enum.js';
-import {
-  conflict,
-  ErrorCode,
-  unprocessable,
-} from '../../common/errors/app.exception.js';
+import { ErrorCode, unprocessable } from '../../common/errors/app.exception.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
-import { parseIsoWithOffset } from '../../common/time/clinic-time.util.js';
+import { isoToDate } from '../../common/time/clinic-time.util.js';
 import {
   addMoney,
   compareMoney,
@@ -28,14 +19,12 @@ import {
   toMoney,
   ZERO,
 } from '../../common/utils/money.util.js';
-import { isUniqueViolation } from '../../common/utils/pg-errors.js';
 import type { EnvironmentVariables } from '../../config/env.validation.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
 import {
   DocumentScope,
   InvoiceStatus,
-  PaymentMethod,
   PaymentStatus,
   PaymentType,
 } from './billing.enums.js';
@@ -49,25 +38,8 @@ import type {
 } from './dto/payment.dto.js';
 import { InvoiceItem } from './entities/invoice-item.entity.js';
 import type { Invoice } from './entities/invoice.entity.js';
-import {
-  Payment,
-  PAYMENT_IDEMPOTENCY_UNIQUE,
-} from './entities/payment.entity.js';
-import { balanceOf } from './invoice-math.js';
+import { Payment } from './entities/payment.entity.js';
 import { InvoicesService } from './invoices.service.js';
-
-const toDate = (value: string) => parseIsoWithOffset(value) as Date;
-
-export interface PaymentResult {
-  payment: PaymentResponseDto;
-  // true when an Idempotency-Key replay returned the original payment.
-  replayed: boolean;
-}
-
-interface Idempotency {
-  key: string;
-  hash: string;
-}
 
 @Injectable()
 export class PaymentsService {
@@ -91,37 +63,21 @@ export class PaymentsService {
    * Records money received. The invoice row is locked, so parallel payments
    * are serialized and amount_paid can never exceed the total.
    */
-  record(
+  async record(
     invoiceId: string,
     dto: RecordPaymentDto,
-    idempotencyKey: string | undefined,
     actor: Actor,
-  ): Promise<PaymentResult> {
-    const amount = this.positiveAmount(dto.amount);
-    const reference =
-      dto.method === PaymentMethod.CASH
-        ? (dto.reference ?? null)
-        : dto.reference;
-    const idempotency = this.idempotency(idempotencyKey, {
-      kind: PaymentType.PAYMENT,
-      target: invoiceId,
-      amount,
-      method: dto.method,
-      reference: reference ?? null,
-    });
-
-    return this.run(idempotency, async (manager) => {
+  ): Promise<PaymentResponseDto> {
+    const amount = toMoney(dto.amount);
+    const id = await this.dataSource.transaction(async (manager) => {
       const invoice = await this.invoices.lockInvoice(invoiceId, manager);
-      const replay = await this.findReplay(idempotency, manager);
-      if (replay) return replay;
-
       if (invoice.status === InvoiceStatus.CANCELLED) {
         throw unprocessable(
           ErrorCode.INVOICE_CANCELLED,
           'The invoice is cancelled',
         );
       }
-      const balance = balanceOf(invoice.total, invoice.amountPaid);
+      const balance = subMoney(invoice.total, invoice.amountPaid);
       if (compareMoney(amount, balance) > 0) {
         throw unprocessable(
           ErrorCode.OVERPAYMENT,
@@ -130,11 +86,11 @@ export class PaymentsService {
         );
       }
 
-      const payment = await this.insert(manager, invoice, actor, idempotency, {
+      const payment = await this.insert(manager, invoice, actor, {
         type: PaymentType.PAYMENT,
         amount,
         method: dto.method,
-        reference: reference ?? null,
+        reference: dto.reference ?? null,
         reason: null,
         refundOfId: null,
       });
@@ -148,35 +104,24 @@ export class PaymentsService {
       );
       return payment.id;
     });
+    return this.findOne(id);
   }
 
   /**
    * Money returned (OWNER only, enforced by the route). Refunds point at a
    * VALID payment of the same invoice and can never exceed it in total.
    */
-  refund(
+  async refund(
     paymentId: string,
     dto: RefundPaymentDto,
-    idempotencyKey: string | undefined,
     actor: Actor,
-  ): Promise<PaymentResult> {
-    const amount = this.positiveAmount(dto.amount);
-    const idempotency = this.idempotency(idempotencyKey, {
-      kind: PaymentType.REFUND,
-      target: paymentId,
-      amount,
-      method: dto.method ?? null,
-      reason: dto.reason,
-    });
-
-    return this.run(idempotency, async (manager) => {
+  ): Promise<PaymentResponseDto> {
+    const amount = toMoney(dto.amount);
+    const id = await this.dataSource.transaction(async (manager) => {
       const { payment: original, invoice } = await this.lockPayment(
         paymentId,
         manager,
       );
-      const replay = await this.findReplay(idempotency, manager);
-      if (replay) return replay;
-
       if (
         original.type !== PaymentType.PAYMENT ||
         original.status !== PaymentStatus.VALID
@@ -196,7 +141,7 @@ export class PaymentsService {
         );
       }
 
-      const refund = await this.insert(manager, invoice, actor, idempotency, {
+      const refund = await this.insert(manager, invoice, actor, {
         type: PaymentType.REFUND,
         amount,
         method: dto.method ?? original.method,
@@ -214,6 +159,7 @@ export class PaymentsService {
       );
       return refund.id;
     });
+    return this.findOne(id);
   }
 
   /**
@@ -287,12 +233,13 @@ export class PaymentsService {
     const qb = this.payments
       .createQueryBuilder('payment')
       .innerJoinAndSelect('payment.invoice', 'invoice')
-      .innerJoinAndSelect('payment.patient', 'patient')
-      .where('TRUE');
+      .innerJoinAndSelect('payment.patient', 'patient');
     if (query.from)
-      qb.andWhere('payment.receivedAt >= :from', { from: toDate(query.from) });
+      qb.andWhere('payment.receivedAt >= :from', {
+        from: isoToDate(query.from),
+      });
     if (query.to)
-      qb.andWhere('payment.receivedAt < :to', { to: toDate(query.to) });
+      qb.andWhere('payment.receivedAt < :to', { to: isoToDate(query.to) });
     if (query.method)
       qb.andWhere('payment.method = :method', { method: query.method });
     if (query.type) qb.andWhere('payment.type = :type', { type: query.type });
@@ -382,91 +329,16 @@ export class PaymentsService {
       reference: payment.reference,
       amount: payment.amount,
       totalPaid: invoice.amountPaid,
-      remainingBalance: balanceOf(invoice.total, invoice.amountPaid),
+      remainingBalance: subMoney(invoice.total, invoice.amountPaid),
     };
   }
 
   // ---------- Internals ----------
 
-  /**
-   * Runs the booking transaction; a parallel request with the same key that
-   * loses on the unique index resolves to the original (or 409).
-   */
-  private async run(
-    idempotency: Idempotency | null,
-    work: (manager: EntityManager) => Promise<string | Payment>,
-  ): Promise<PaymentResult> {
-    try {
-      const result = await this.dataSource.transaction(work);
-      return typeof result === 'string'
-        ? { payment: await this.findOne(result), replayed: false }
-        : { payment: await this.findOne(result.id), replayed: true };
-    } catch (error) {
-      if (!idempotency || !isUniqueViolation(error, PAYMENT_IDEMPOTENCY_UNIQUE))
-        throw error;
-      const original = await this.findReplay(
-        idempotency,
-        this.dataSource.manager,
-      );
-      if (!original) throw error;
-      return { payment: await this.findOne(original.id), replayed: true };
-    }
-  }
-
-  // Same key + same body -> the original; same key + other body -> 409.
-  private async findReplay(
-    idempotency: Idempotency | null,
-    manager: EntityManager,
-  ): Promise<Payment | null> {
-    if (!idempotency) return null;
-    const existing = await manager
-      .getRepository(Payment)
-      .findOneBy({ idempotencyKey: idempotency.key });
-    if (!existing) return null;
-    if (existing.idempotencyHash !== idempotency.hash) {
-      throw conflict(
-        ErrorCode.IDEMPOTENCY_KEY_REUSED,
-        'This Idempotency-Key was already used for a different request',
-      );
-    }
-    return existing;
-  }
-
-  private idempotency(
-    key: string | undefined,
-    body: Record<string, unknown>,
-  ): Idempotency | null {
-    if (key === undefined) return null;
-    const trimmed = key.trim();
-    if (trimmed.length < 1 || trimmed.length > 100) {
-      throw new BadRequestException(
-        'Idempotency-Key must be 1 to 100 characters',
-      );
-    }
-    const hash = createHash('sha256')
-      .update(JSON.stringify(body))
-      .digest('hex');
-    return { key: trimmed, hash };
-  }
-
-  private positiveAmount(value: string): string {
-    const amount = toMoney(value);
-    if (!isPositiveMoney(amount)) {
-      throw new BadRequestException({
-        message: 'Validation failed',
-        details: [
-          { field: 'amount', errors: ['amount must be greater than 0'] },
-        ],
-      });
-    }
-    return amount;
-  }
-
   private async insert(
     manager: EntityManager,
     invoice: Invoice,
     actor: Actor,
-    idempotency: Idempotency | null,
     data: Pick<
       Payment,
       'type' | 'amount' | 'method' | 'reference' | 'reason' | 'refundOfId'
@@ -485,8 +357,6 @@ export class PaymentsService {
         invoiceId: invoice.id,
         patientId: invoice.patientId,
         status: PaymentStatus.VALID,
-        idempotencyKey: idempotency?.key ?? null,
-        idempotencyHash: idempotency?.hash ?? null,
         receivedById: actor.userId as string,
         receivedAt,
         voidedAt: null,
@@ -506,12 +376,10 @@ export class PaymentsService {
       .findOneBy({ id: paymentId });
     if (!found) throw new NotFoundException('Payment not found');
     const invoice = await this.invoices.lockInvoice(found.invoiceId, manager);
-    const payment = await manager
-      .getRepository(Payment)
-      .createQueryBuilder('payment')
-      .where('payment.id = :paymentId', { paymentId })
-      .setLock('pessimistic_write')
-      .getOneOrFail();
+    const payment = await manager.findOneOrFail(Payment, {
+      where: { id: paymentId },
+      lock: { mode: 'pessimistic_write' },
+    });
     return { payment, invoice };
   }
 
@@ -582,7 +450,7 @@ export class PaymentsService {
         status: invoice.status,
         total: invoice.total,
         amountPaid: invoice.amountPaid,
-        balance: balanceOf(invoice.total, invoice.amountPaid),
+        balance: subMoney(invoice.total, invoice.amountPaid),
       },
       receivedById: payment.receivedById,
       receivedAt: toIso(payment.receivedAt),

@@ -10,7 +10,7 @@ import type {
   AuthenticatedUser,
 } from '../../common/interfaces/authenticated-request.interface.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
-import { parseIsoWithOffset } from '../../common/time/clinic-time.util.js';
+import { isoToDate } from '../../common/time/clinic-time.util.js';
 import { diffValues } from '../audit/audit-diff.util.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -34,11 +34,6 @@ const TIME_OFF_AUDIT_FIELDS = [
   'endAt',
   'reason',
 ] as const satisfies readonly (keyof DoctorTimeOff)[];
-
-function toDate(value: string): Date {
-  // DTO validation already guarantees the format.
-  return parseIsoWithOffset(value) as Date;
-}
 
 @Injectable()
 export class DoctorTimeOffService {
@@ -67,8 +62,8 @@ export class DoctorTimeOffService {
       .where('off.doctorId = :doctorId', { doctorId })
       .orderBy('off.startAt', 'ASC');
     if (query.from)
-      qb.andWhere('off.endAt > :from', { from: toDate(query.from) });
-    if (query.to) qb.andWhere('off.startAt < :to', { to: toDate(query.to) });
+      qb.andWhere('off.endAt > :from', { from: isoToDate(query.from) });
+    if (query.to) qb.andWhere('off.startAt < :to', { to: isoToDate(query.to) });
 
     return (await qb.getMany()).map((row) => this.toDto(row));
   }
@@ -83,8 +78,8 @@ export class DoctorTimeOffService {
     actor: Actor,
   ): Promise<TimeOffMutationResponseDto> {
     await this.assertDoctorExists(doctorId);
-    const startAt = toDate(dto.startAt);
-    const endAt = toDate(dto.endAt);
+    const startAt = isoToDate(dto.startAt);
+    const endAt = isoToDate(dto.endAt);
     this.assertPeriod(startAt, endAt);
 
     const saved = await this.dataSource.transaction(async (manager) => {
@@ -126,16 +121,15 @@ export class DoctorTimeOffService {
   ): Promise<TimeOffMutationResponseDto> {
     const saved = await this.dataSource.transaction(async (manager) => {
       const repository = manager.getRepository(DoctorTimeOff);
-      const row = await repository
-        .createQueryBuilder('off')
-        .where('off.id = :id AND off.doctorId = :doctorId', { id, doctorId })
-        .setLock('pessimistic_write')
-        .getOne();
+      const row = await repository.findOne({
+        where: { id, doctorId },
+        lock: { mode: 'pessimistic_write' },
+      });
       if (!row) throw new NotFoundException('Time off not found');
 
       const before = { ...row };
-      if (dto.startAt !== undefined) row.startAt = toDate(dto.startAt);
-      if (dto.endAt !== undefined) row.endAt = toDate(dto.endAt);
+      if (dto.startAt !== undefined) row.startAt = isoToDate(dto.startAt);
+      if (dto.endAt !== undefined) row.endAt = isoToDate(dto.endAt);
       if (dto.reason !== undefined) row.reason = dto.reason;
       this.assertPeriod(row.startAt, row.endAt);
 

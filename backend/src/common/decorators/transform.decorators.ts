@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
 import { ValidateIf } from 'class-validator';
+import { normalizePersonName } from '../utils/person-name.util.js';
 
 // Like @IsOptional() but only for `undefined`: an explicit null is still
 // validated (and rejected) by the other decorators. Use for PATCH fields
@@ -10,7 +11,7 @@ export const OptionalNotNull = () =>
 // Trims strings and collapses inner whitespace ("  Ahmed   Ali " -> "Ahmed Ali").
 export const TrimAndCollapse = () =>
   Transform(({ value }: { value: unknown }) =>
-    typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : value,
+    typeof value === 'string' ? normalizePersonName(value) : value,
   );
 
 export const Trim = () =>

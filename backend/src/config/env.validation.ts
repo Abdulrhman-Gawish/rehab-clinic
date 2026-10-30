@@ -27,12 +27,8 @@ export interface EnvironmentVariables extends DatabaseEnv {
   SWAGGER_ENABLED: boolean;
 
   JWT_ACCESS_SECRET: string;
-  JWT_ACCESS_TTL_SECONDS: number;
-  JWT_REFRESH_TTL_DAYS: number;
 
   THROTTLE_ENABLED: boolean;
-  THROTTLE_TTL_MS: number;
-  THROTTLE_LIMIT: number;
 
   CLINIC_TIMEZONE: string;
   SLOT_INTERVAL_MINUTES: number;
@@ -75,12 +71,8 @@ export const envSchema = Joi.object<EnvironmentVariables>({
   SWAGGER_ENABLED: Joi.boolean().default(true),
 
   JWT_ACCESS_SECRET: Joi.string().min(32).required(),
-  JWT_ACCESS_TTL_SECONDS: Joi.number().integer().positive().default(900),
-  JWT_REFRESH_TTL_DAYS: Joi.number().integer().positive().default(7),
 
   THROTTLE_ENABLED: Joi.boolean().default(true),
-  THROTTLE_TTL_MS: Joi.number().integer().positive().default(60_000),
-  THROTTLE_LIMIT: Joi.number().integer().positive().default(120),
 
   // IANA zone of the clinic. Egypt observes DST: never assume a fixed offset.
   CLINIC_TIMEZONE: Joi.string()

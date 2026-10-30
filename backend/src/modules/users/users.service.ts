@@ -20,11 +20,13 @@ import { diffValues, pickValues } from '../audit/audit-diff.util.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
 import { RefreshTokensService } from '../auth/refresh-tokens.service.js';
-import type { CreateUserDto } from './dto/create-user.dto.js';
-import type { ListUsersQueryDto } from './dto/list-users-query.dto.js';
-import type { ResetPasswordDto } from './dto/reset-password.dto.js';
-import type { UpdateUserDto } from './dto/update-user.dto.js';
-import { UserResponseDto } from './dto/user-response.dto.js';
+import {
+  UserResponseDto,
+  type CreateUserDto,
+  type ListUsersQueryDto,
+  type ResetPasswordDto,
+  type UpdateUserDto,
+} from './dto/user.dto.js';
 import { User, USER_EMAIL_UNIQUE } from './entities/user.entity.js';
 
 // Fields recorded in audit entries. Never includes passwordHash.
@@ -247,12 +249,10 @@ export class UsersService {
     id: string,
     manager: EntityManager,
   ): Promise<User> {
-    const user = await manager
-      .getRepository(User)
-      .createQueryBuilder('user')
-      .where('user.id = :id', { id })
-      .setLock('pessimistic_write')
-      .getOne();
+    const user = await manager.findOne(User, {
+      where: { id },
+      lock: { mode: 'pessimistic_write' },
+    });
     if (!user) throw new NotFoundException('User not found');
     return user;
   }

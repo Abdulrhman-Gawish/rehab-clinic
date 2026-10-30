@@ -4,9 +4,3 @@ export enum UserRole {
   DOCTOR = 'DOCTOR',
   RECEPTIONIST = 'RECEPTIONIST',
 }
-
-export const ALL_STAFF_ROLES = [
-  UserRole.OWNER,
-  UserRole.DOCTOR,
-  UserRole.RECEPTIONIST,
-] as const;

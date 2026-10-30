@@ -69,10 +69,6 @@ export function deriveInvoiceStatus(
     : InvoiceStatus.PARTIALLY_PAID;
 }
 
-export function balanceOf(total: string, amountPaid: string): string {
-  return subMoney(total, amountPaid);
-}
-
 // Items and discount change only while nothing is paid and not cancelled.
 export function assertEditable(invoice: {
   status: InvoiceStatus;

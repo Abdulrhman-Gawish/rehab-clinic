@@ -213,11 +213,11 @@ export class DiscountsService {
       };
     }
 
+    // value > 0 is checked by the DTO; the upper bound depends on the type.
     const rule = { type: dto.type as DiscountType, value: dto.value as string };
-    const value = dec(rule.value);
     if (
-      value.lessThanOrEqualTo(0) ||
-      (rule.type === DiscountType.PERCENT && value.greaterThan(100))
+      rule.type === DiscountType.PERCENT &&
+      dec(rule.value).greaterThan(100)
     ) {
       throw new BadRequestException({
         message: 'Validation failed',
@@ -225,9 +225,7 @@ export class DiscountsService {
           {
             field: 'value',
             errors: [
-              rule.type === DiscountType.PERCENT
-                ? 'A percent discount must be greater than 0 and at most 100'
-                : 'A fixed discount must be greater than 0',
+              'A percent discount must be greater than 0 and at most 100',
             ],
           },
         ],

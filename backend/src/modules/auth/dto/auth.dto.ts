@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsEmail, IsString, Length, MaxLength } from 'class-validator';
 import { ToLowerCaseTrimmed } from '../../../common/decorators/transform.decorators.js';
-import { UserResponseDto } from '../../users/dto/user-response.dto.js';
+import { UserResponseDto } from '../../users/dto/user.dto.js';
 
 export class LoginDto {
   @ApiProperty({ example: 'owner@clinic.local' })

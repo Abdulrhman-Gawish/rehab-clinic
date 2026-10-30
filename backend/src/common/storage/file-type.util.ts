@@ -1,8 +1,17 @@
 // Detects an uploaded file's real type from its first bytes ("magic bytes"):
 // the client's file name and Content-Type are not trusted.
 
+const TYPES = {
+  jpg: { mimeType: 'image/jpeg', names: ['jpg', 'jpeg'] },
+  png: { mimeType: 'image/png', names: ['png'] },
+  webp: { mimeType: 'image/webp', names: ['webp'] },
+  pdf: { mimeType: 'application/pdf', names: ['pdf'] },
+} as const;
+
+type Extension = keyof typeof TYPES;
+
 export interface DetectedType {
-  extension: 'jpg' | 'png' | 'webp' | 'pdf';
+  extension: Extension;
   mimeType: string;
 }
 
@@ -12,31 +21,25 @@ const startsWith = (buffer: Buffer, bytes: number[], offset = 0) =>
 
 const ascii = (text: string) => [...text].map((c) => c.charCodeAt(0));
 
-export function detectFileType(buffer: Buffer): DetectedType | null {
-  if (startsWith(buffer, [0xff, 0xd8, 0xff])) {
-    return { extension: 'jpg', mimeType: 'image/jpeg' };
-  }
+function detectExtension(buffer: Buffer): Extension | null {
+  if (startsWith(buffer, [0xff, 0xd8, 0xff])) return 'jpg';
   if (startsWith(buffer, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
-    return { extension: 'png', mimeType: 'image/png' };
+    return 'png';
   }
   if (
     startsWith(buffer, ascii('RIFF')) &&
     startsWith(buffer, ascii('WEBP'), 8)
   ) {
-    return { extension: 'webp', mimeType: 'image/webp' };
+    return 'webp';
   }
-  if (startsWith(buffer, ascii('%PDF-'))) {
-    return { extension: 'pdf', mimeType: 'application/pdf' };
-  }
+  if (startsWith(buffer, ascii('%PDF-'))) return 'pdf';
   return null;
 }
 
-const EXTENSIONS: Record<DetectedType['extension'], string[]> = {
-  jpg: ['jpg', 'jpeg'],
-  png: ['png'],
-  webp: ['webp'],
-  pdf: ['pdf'],
-};
+export function detectFileType(buffer: Buffer): DetectedType | null {
+  const extension = detectExtension(buffer);
+  return extension && { extension, mimeType: TYPES[extension].mimeType };
+}
 
 // The name's extension (if any) must agree with the detected content.
 export function extensionMatches(
@@ -45,14 +48,11 @@ export function extensionMatches(
 ): boolean {
   const dot = fileName.lastIndexOf('.');
   if (dot < 0) return true;
-  return EXTENSIONS[detected.extension].includes(
-    fileName.slice(dot + 1).toLowerCase(),
-  );
+  const name = fileName.slice(dot + 1).toLowerCase();
+  return (TYPES[detected.extension].names as readonly string[]).includes(name);
 }
 
-export const MIME_BY_EXTENSION: Record<string, string> = {
-  jpg: 'image/jpeg',
-  png: 'image/png',
-  webp: 'image/webp',
-  pdf: 'application/pdf',
-};
+// Mime type of a stored file, from the extension we gave its key.
+export function mimeTypeOf(extension: string): string {
+  return TYPES[extension as Extension]?.mimeType ?? 'application/octet-stream';
+}

@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { conflict, ErrorCode } from '../../common/errors/app.exception.js';
 import type {
   Actor,
@@ -36,13 +36,6 @@ const SCHEDULE_AUDIT_FIELDS = [
 // 'HH:mm' or 'HH:mm:ss' -> 'HH:mm:ss' so values compare as strings.
 const normalizeTime = (time: string) =>
   time.length === 5 ? `${time}:00` : time;
-
-const overlapError = (details?: unknown) =>
-  conflict(
-    ErrorCode.SCHEDULE_OVERLAP,
-    'This range overlaps another active range of the doctor on the same day',
-    details,
-  );
 
 @Injectable()
 export class DoctorSchedulesService {
@@ -81,12 +74,6 @@ export class DoctorSchedulesService {
 
     return this.withOverlapMapping(() =>
       this.dataSource.transaction(async (manager) => {
-        await this.assertNoOverlap(manager, {
-          doctorId,
-          dayOfWeek: dto.dayOfWeek,
-          startTime,
-          endTime,
-        });
         const repository = manager.getRepository(DoctorSchedule);
         const saved = await repository.save(
           repository.create({
@@ -164,14 +151,10 @@ export class DoctorSchedulesService {
     return this.withOverlapMapping(() =>
       this.dataSource.transaction(async (manager) => {
         const repository = manager.getRepository(DoctorSchedule);
-        const schedule = await repository
-          .createQueryBuilder('schedule')
-          .where('schedule.id = :id AND schedule.doctorId = :doctorId', {
-            id,
-            doctorId,
-          })
-          .setLock('pessimistic_write')
-          .getOne();
+        const schedule = await repository.findOne({
+          where: { id, doctorId },
+          lock: { mode: 'pessimistic_write' },
+        });
         if (!schedule) throw new NotFoundException('Schedule not found');
 
         const before = { ...schedule };
@@ -181,9 +164,6 @@ export class DoctorSchedulesService {
         const changes = diffValues(before, schedule, SCHEDULE_AUDIT_FIELDS);
         if (!changes) return ScheduleResponseDto.fromEntity(schedule);
 
-        if (schedule.isActive) {
-          await this.assertNoOverlap(manager, schedule, schedule.id);
-        }
         const saved = await repository.save(schedule);
         await this.auditService.logAction(
           actor,
@@ -209,37 +189,17 @@ export class DoctorSchedulesService {
     }
   }
 
-  // Friendly pre-check; the exclusion constraint is the real guarantee.
-  private async assertNoOverlap(
-    manager: EntityManager,
-    range: Pick<
-      DoctorSchedule,
-      'doctorId' | 'dayOfWeek' | 'startTime' | 'endTime'
-    >,
-    excludeId?: string,
-  ): Promise<void> {
-    const qb = manager
-      .getRepository(DoctorSchedule)
-      .createQueryBuilder('schedule')
-      .where('schedule.doctorId = :doctorId', { doctorId: range.doctorId })
-      .andWhere('schedule.dayOfWeek = :day', { day: range.dayOfWeek })
-      .andWhere('schedule.isActive = true')
-      .andWhere('schedule.startTime < :end AND schedule.endTime > :start', {
-        start: range.startTime,
-        end: range.endTime,
-      });
-    if (excludeId) qb.andWhere('schedule.id <> :excludeId', { excludeId });
-
-    const clash = await qb.getOne();
-    if (clash) throw overlapError({ conflictingScheduleId: clash.id });
-  }
-
+  // The exclusion constraint on active ranges decides overlaps (also under
+  // races); its violation becomes 409 SCHEDULE_OVERLAP.
   private async withOverlapMapping<T>(run: () => Promise<T>): Promise<T> {
     try {
       return await run();
     } catch (error) {
       if (isExclusionViolation(error, SCHEDULE_OVERLAP_EXCLUSION)) {
-        throw overlapError();
+        throw conflict(
+          ErrorCode.SCHEDULE_OVERLAP,
+          'This range overlaps another active range of the doctor on the same day',
+        );
       }
       throw error;
     }

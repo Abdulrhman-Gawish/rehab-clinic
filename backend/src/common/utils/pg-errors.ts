@@ -5,8 +5,6 @@ export const PgErrorCode = {
   ForeignKeyViolation: '23503',
   CheckViolation: '23514',
   ExclusionViolation: '23P01',
-  NotNullViolation: '23502',
-  InvalidTextRepresentation: '22P02',
 } as const;
 
 export interface PgDriverError {

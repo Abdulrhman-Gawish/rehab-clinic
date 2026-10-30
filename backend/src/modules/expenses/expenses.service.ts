@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
-  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -13,22 +12,19 @@ import { UserRole } from '../../common/enums/user-role.enum.js';
 import { ErrorCode, unprocessable } from '../../common/errors/app.exception.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
 import {
+  FileStorage,
+  type StoredFile,
+} from '../../common/storage/file-storage.service.js';
+import {
   detectFileType,
   extensionMatches,
-  MIME_BY_EXTENSION,
+  mimeTypeOf,
 } from '../../common/storage/file-type.util.js';
-import {
-  STORAGE_SERVICE,
-  type StorageService,
-  type StoredFile,
-} from '../../common/storage/storage.service.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
-import {
-  isPositiveMoney,
-  toMoney,
-  ZERO,
-} from '../../common/utils/money.util.js';
+import { addDays } from '../../common/time/clinic-time.util.js';
+import { toMoney, ZERO } from '../../common/utils/money.util.js';
 import type { EnvironmentVariables } from '../../config/env.validation.js';
+import { diffValues } from '../audit/audit-diff.util.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
 import { DocumentScope } from '../billing/billing.enums.js';
@@ -76,7 +72,7 @@ export class ExpensesService {
     private readonly counters: DocumentCounterService,
     private readonly auditService: AuditService,
     private readonly time: ClinicTimeService,
-    @Inject(STORAGE_SERVICE) private readonly storage: StorageService,
+    private readonly storage: FileStorage,
     config: ConfigService<EnvironmentVariables, true>,
   ) {
     this.backdateMaxDays = config.get('BACKDATE_MAX_DAYS', { infer: true });
@@ -87,7 +83,7 @@ export class ExpensesService {
     actor: Actor,
   ): Promise<ExpenseResponseDto> {
     this.assertExpenseDate(dto.expenseDate, actor);
-    const amount = this.positiveAmount(dto.amount);
+    const amount = toMoney(dto.amount);
 
     const id = await this.dataSource.transaction(async (manager) => {
       await this.assertActiveCategory(dto.categoryId, manager);
@@ -147,26 +143,29 @@ export class ExpensesService {
       const before = this.values(expense);
       if (dto.categoryId !== undefined) expense.categoryId = dto.categoryId;
       if (dto.description !== undefined) expense.description = dto.description;
-      if (dto.amount !== undefined)
-        expense.amount = this.positiveAmount(dto.amount);
+      if (dto.amount !== undefined) expense.amount = toMoney(dto.amount);
       if (dto.expenseDate !== undefined) expense.expenseDate = dto.expenseDate;
       if (dto.vendorName !== undefined) expense.vendorName = dto.vendorName;
       if (dto.paymentMethod !== undefined)
         expense.paymentMethod = dto.paymentMethod;
       if (dto.reference !== undefined) expense.reference = dto.reference;
 
-      const after = this.values(expense);
-      const changed = EXPENSE_AUDIT_FIELDS.filter(
-        (key) => before[key] !== after[key],
+      const changes = diffValues(
+        before,
+        this.values(expense),
+        EXPENSE_AUDIT_FIELDS,
       );
-      if (changed.length === 0) return;
+      if (!changes) return;
       // Relation object would override categoryId on save.
       delete expense.category;
       await manager.getRepository(Expense).save(expense);
-      await this.audit(manager, actor, AuditAction.EXPENSE_UPDATED, expense, {
-        oldValues: Object.fromEntries(changed.map((k) => [k, before[k]])),
-        newValues: Object.fromEntries(changed.map((k) => [k, after[k]])),
-      });
+      await this.audit(
+        manager,
+        actor,
+        AuditAction.EXPENSE_UPDATED,
+        expense,
+        changes,
+      );
     });
     return this.findOne(id);
   }
@@ -203,12 +202,7 @@ export class ExpensesService {
   ): Promise<ExpenseResponseDto> {
     if (!file)
       throw new BadRequestException('A file is required (field "file")');
-    if (file.size > MAX_RECEIPT_BYTES) {
-      throw unprocessable(
-        ErrorCode.FILE_TOO_LARGE,
-        'The file is larger than 5 MB',
-      );
-    }
+    // Size: the upload interceptor already answered 413 above MAX_RECEIPT_BYTES.
     const detected = detectFileType(file.buffer);
     if (!detected || !extensionMatches(file.originalname, detected)) {
       throw unprocessable(
@@ -253,7 +247,7 @@ export class ExpensesService {
     );
     return {
       ...(await this.storage.get(expense.receiptFileKey)),
-      mimeType: MIME_BY_EXTENSION[extension] ?? 'application/octet-stream',
+      mimeType: mimeTypeOf(extension),
       fileName: `${expense.expenseNumber}.${extension}`,
     };
   }
@@ -270,8 +264,7 @@ export class ExpensesService {
   async list(query: ListExpensesQueryDto): Promise<ExpenseListDto> {
     const qb = this.expenses
       .createQueryBuilder('expense')
-      .innerJoinAndSelect('expense.category', 'category')
-      .where('TRUE');
+      .innerJoinAndSelect('expense.category', 'category');
     if (query.from)
       qb.andWhere('expense.expenseDate >= :from', { from: query.from });
     if (query.to) qb.andWhere('expense.expenseDate <= :to', { to: query.to });
@@ -324,7 +317,7 @@ export class ExpensesService {
         'The expense date cannot be in the future',
       );
     }
-    const earliestDate = this.time.addDays(today, -this.backdateMaxDays);
+    const earliestDate = addDays(today, -this.backdateMaxDays);
     if (actor.role !== UserRole.OWNER && date < earliestDate) {
       throw unprocessable(
         ErrorCode.BACKDATE_LIMIT_EXCEEDED,
@@ -340,12 +333,10 @@ export class ExpensesService {
     actor: Actor,
     manager: EntityManager,
   ): Promise<Expense> {
-    const expense = await manager
-      .getRepository(Expense)
-      .createQueryBuilder('expense')
-      .where('expense.id = :id', { id })
-      .setLock('pessimistic_write')
-      .getOne();
+    const expense = await manager.findOne(Expense, {
+      where: { id },
+      lock: { mode: 'pessimistic_write' },
+    });
     if (!expense) throw new NotFoundException('Expense not found');
 
     const refuse = (message: string) =>
@@ -381,19 +372,6 @@ export class ExpensesService {
         'The expense category is inactive',
       );
     }
-  }
-
-  private positiveAmount(value: string): string {
-    const amount = toMoney(value);
-    if (!isPositiveMoney(amount)) {
-      throw new BadRequestException({
-        message: 'Validation failed',
-        details: [
-          { field: 'amount', errors: ['amount must be greater than 0'] },
-        ],
-      });
-    }
-    return amount;
   }
 
   private values(

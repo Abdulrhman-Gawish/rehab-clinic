@@ -2,7 +2,6 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { EnvironmentVariables } from '../../config/env.validation.js';
 import {
-  addDays,
   localDateOf,
   localDayBounds,
   localToUtc,
@@ -51,9 +50,5 @@ export class ClinicTimeService {
 
   dayBounds(date: string): { start: Date; end: Date } {
     return localDayBounds(date, this.zone);
-  }
-
-  addDays(date: string, days: number): string {
-    return addDays(date, days);
   }
 }

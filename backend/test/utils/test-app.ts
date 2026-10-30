@@ -43,27 +43,58 @@ async function waitForOtherTransactions(dataSource: DataSource): Promise<void> {
   }
 }
 
-// Empties every table except the migrations bookkeeping.
-export async function resetDatabase(dataSource: DataSource): Promise<void> {
-  const tables: { tablename: string }[] = await dataSource.query(
-    `SELECT tablename FROM pg_tables
+// Every table except the migrations bookkeeping, children before parents,
+// so plain DELETEs satisfy the foreign keys (no superuser needed).
+async function tablesInDeleteOrder(dataSource: DataSource): Promise<string[]> {
+  const tables: { name: string }[] = await dataSource.query(
+    `SELECT tablename AS name FROM pg_tables
       WHERE schemaname = 'public' AND tablename <> 'migrations'`,
   );
-  if (tables.length === 0) return;
-  const list = tables.map(({ tablename }) => `"${tablename}"`).join(', ');
+  const edges: { child: string; parent: string }[] = await dataSource.query(
+    `SELECT conrelid::regclass::text AS child, confrelid::regclass::text AS parent
+       FROM pg_constraint
+      WHERE contype = 'f' AND connamespace = 'public'::regnamespace
+        AND conrelid <> confrelid`,
+  );
+  const ordered: string[] = [];
+  const remaining = new Set(tables.map((t) => t.name));
+  while (remaining.size > 0) {
+    // A table can go once no remaining table references it.
+    const ready = [...remaining].filter(
+      (table) =>
+        !edges.some((e) => e.parent === table && remaining.has(e.child)),
+    );
+    if (ready.length === 0) throw new Error('Foreign key cycle between tables');
+    for (const table of ready) {
+      ordered.push(table);
+      remaining.delete(table);
+    }
+  }
+  return ordered;
+}
+
+let deleteAll: string | undefined;
+
+// Empties every table except the migrations bookkeeping. DELETE is much
+// faster than TRUNCATE for the handful of rows a test writes.
+export async function resetDatabase(dataSource: DataSource): Promise<void> {
+  deleteAll ??= (await tablesInDeleteOrder(dataSource))
+    .map((table) => `DELETE FROM "${table}";`)
+    .join(' ');
   // Async event listeners of the previous test (e.g. the automatic invoice)
-  // may still be in a transaction: let them finish first. TRUNCATE can
-  // still deadlock with one starting late; Postgres then aborts one side
-  // and we just try again.
+  // may still be in a transaction: let them finish first. One starting late
+  // can still deadlock with us, or insert a child row after its table was
+  // emptied (FK violation on the parent); in both cases we simply retry.
   await waitForOtherTransactions(dataSource);
   for (let attempt = 1; ; attempt++) {
     try {
-      await dataSource.query(`TRUNCATE ${list} RESTART IDENTITY CASCADE`);
+      await dataSource.query(deleteAll);
       return;
     } catch (error) {
       const code = (error as { driverError?: { code?: string } }).driverError
         ?.code;
-      if (code !== '40P01' || attempt >= 5) throw error;
+      const retry = code === '40P01' || code === '23503';
+      if (!retry || attempt >= 5) throw error;
     }
   }
 }

@@ -110,14 +110,11 @@ describe('Billing: payments (e2e)', () => {
     invoiceId: string,
     body: Record<string, unknown>,
     by: TestUser = receptionist,
-    key?: string,
-  ) => {
-    const req = request(server)
+  ) =>
+    request(server)
       .post(`/api/v1/invoices/${invoiceId}/payments`)
-      .set(as(by));
-    if (key) req.set('Idempotency-Key', key);
-    return req.send(body);
-  };
+      .set(as(by))
+      .send(body);
 
   const refund = (
     paymentId: string,
@@ -199,14 +196,20 @@ describe('Billing: payments (e2e)', () => {
       await pay(invoiceId, { amount: '0.01', method: 'CASH' }).expect(422);
     });
 
-    it('validates amount, method and reference', async () => {
+    it('validates amount and method; the reference is optional for every method', async () => {
       const invoiceId = await newInvoice();
-      await pay(invoiceId, { amount: '0', method: 'CASH' }).expect(400);
+      const zero = await pay(invoiceId, { amount: '0', method: 'CASH' }).expect(
+        400,
+      );
+      expect(zero.body.details).toEqual([
+        { field: 'amount', errors: ['amount must be greater than 0'] },
+      ]);
       await pay(invoiceId, { amount: '-5', method: 'CASH' }).expect(400);
       await pay(invoiceId, { amount: '10.001', method: 'CASH' }).expect(400);
       await pay(invoiceId, { amount: '10', method: 'BITCOIN' }).expect(400);
-      for (const method of ['CARD', 'WALLET', 'INSTAPAY']) {
-        await pay(invoiceId, { amount: '10', method }).expect(400);
+      for (const method of ['CASH', 'CARD', 'WALLET', 'INSTAPAY']) {
+        const res = await pay(invoiceId, { amount: '10', method }).expect(201);
+        expect(res.body.reference).toBeNull();
       }
       await pay(invoiceId, {
         amount: '10',
@@ -285,60 +288,6 @@ describe('Billing: payments (e2e)', () => {
     });
   });
 
-  describe('Idempotency-Key', () => {
-    it('same key + same body returns the original; other body is 409', async () => {
-      const invoiceId = await newInvoice();
-      const first = await pay(
-        invoiceId,
-        { amount: '50', method: 'CASH' },
-        receptionist,
-        'key-1',
-      ).expect(201);
-      const again = await pay(
-        invoiceId,
-        { amount: '50.00', method: 'CASH' },
-        receptionist,
-        'key-1',
-      ).expect(201);
-      expect(again.headers['idempotent-replayed']).toBe('true');
-      expect(again.body.id).toBe(first.body.id);
-      expect(await ctx.dataSource.getRepository(Payment).count()).toBe(1);
-
-      const reused = await pay(
-        invoiceId,
-        { amount: '60', method: 'CASH' },
-        receptionist,
-        'key-1',
-      ).expect(409);
-      expect(reused.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
-      const otherInvoice = await newInvoice();
-      await pay(
-        otherInvoice,
-        { amount: '50', method: 'CASH' },
-        receptionist,
-        'key-1',
-      ).expect(409);
-    });
-
-    it('parallel requests with the same key create exactly one payment', async () => {
-      const invoiceId = await newInvoice(['300.00']);
-      const results = await Promise.all(
-        Array.from({ length: 5 }, () =>
-          pay(
-            invoiceId,
-            { amount: '300.00', method: 'CASH' },
-            receptionist,
-            'same-key',
-          ),
-        ),
-      );
-      expect(results.every((r) => r.status === 201)).toBe(true);
-      expect(new Set(results.map((r) => r.body.id)).size).toBe(1);
-      expect(await ctx.dataSource.getRepository(Payment).count()).toBe(1);
-      expect((await invoiceRow(invoiceId)).amountPaid).toBe('300.00');
-    });
-  });
-
   describe('void vs refund', () => {
     it('void: same day; receptionists only their own; owner any; not the next day', async () => {
       const invoiceId = await newInvoice(['300.00']);
@@ -387,11 +336,6 @@ describe('Billing: payments (e2e)', () => {
         reference: 'VF-1',
       }).expect(201);
 
-      await refund(
-        paid.body.id,
-        { amount: '50', reason: 'Partial refund' },
-        receptionist,
-      ).expect(403);
       await refund(paid.body.id, { amount: '50' }).expect(400);
 
       const r1 = await refund(paid.body.id, {
@@ -779,8 +723,6 @@ describe('Billing: payments (e2e)', () => {
       method: 'CASH' as never,
       reference: null,
       reason: null,
-      idempotencyKey: null,
-      idempotencyHash: null,
       receivedById: owner.id,
       receivedAt: new Date(),
       voidedAt: null,
@@ -791,7 +733,6 @@ describe('Billing: payments (e2e)', () => {
     for (const bad of [
       { amount: '0.00' },
       { type: 'REFUND' as never },
-      { method: 'CARD' as never },
       { status: 'VOIDED' as never },
     ]) {
       await expect(

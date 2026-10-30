@@ -9,7 +9,7 @@ import type { InvoiceDiscount } from './entities/invoice-discount.entity.js';
 import type { InvoiceItem } from './entities/invoice-item.entity.js';
 import type { Payment } from './entities/payment.entity.js';
 import type { Invoice } from './entities/invoice.entity.js';
-import { balanceOf } from './invoice-math.js';
+import { subMoney } from '../../common/utils/money.util.js';
 
 type ToIso = (instant: Date) => string;
 
@@ -30,7 +30,7 @@ export function toInvoiceSummary(
     discountTotal: invoice.discountTotal,
     total: invoice.total,
     amountPaid: invoice.amountPaid,
-    balance: balanceOf(invoice.total, invoice.amountPaid),
+    balance: subMoney(invoice.total, invoice.amountPaid),
     notes: invoice.notes,
     issuedById: invoice.issuedById,
     issuedAt: toIso(invoice.issuedAt),

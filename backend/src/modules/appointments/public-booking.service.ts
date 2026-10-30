@@ -1,10 +1,10 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { conflict, ErrorCode } from '../../common/errors/app.exception.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
-import { parseIsoWithOffset } from '../../common/time/clinic-time.util.js';
+import { isoToDate } from '../../common/time/clinic-time.util.js';
 import { normalizePersonName } from '../../common/utils/person-name.util.js';
 import type { EnvironmentVariables } from '../../config/env.validation.js';
 import { Patient, PatientSource } from '../patients/entities/patient.entity.js';
@@ -16,7 +16,6 @@ import {
   AppointmentStatus,
 } from './appointment.enums.js';
 import { AvailabilityService } from './availability/availability.service.js';
-import { BOOKING_VERIFIER, type BookingVerifier } from './booking-verifier.js';
 import type {
   PublicBookingDto,
   PublicBookingResponseDto,
@@ -37,7 +36,6 @@ export class PublicBookingService {
     private readonly patients: PatientsService,
     private readonly writer: AppointmentWriter,
     private readonly time: ClinicTimeService,
-    @Inject(BOOKING_VERIFIER) private readonly verifier: BookingVerifier,
     config: ConfigService<EnvironmentVariables, true>,
   ) {
     this.maxActivePerPhone = config.get('BOOKING_MAX_ACTIVE_PER_PHONE', {
@@ -49,9 +47,7 @@ export class PublicBookingService {
     dto: PublicBookingDto,
     ip: string | null,
   ): Promise<PublicBookingResponseDto> {
-    await this.verifier.verify({ ip, token: dto.captchaToken });
-    // DTO validation already guarantees the format.
-    const startAt = parseIsoWithOffset(dto.startAt) as Date;
+    const startAt = isoToDate(dto.startAt);
     const actor = { userId: null, ip };
 
     return this.writer.runBooking(() =>
@@ -116,13 +112,11 @@ export class PublicBookingService {
     patientId: string,
     manager: EntityManager,
   ): Promise<void> {
-    await manager
-      .getRepository(Patient)
-      .createQueryBuilder('patient')
-      .select('patient.id')
-      .where('patient.id = :patientId', { patientId })
-      .setLock('pessimistic_write')
-      .getOne();
+    await manager.findOne(Patient, {
+      where: { id: patientId },
+      select: { id: true },
+      lock: { mode: 'pessimistic_write' },
+    });
 
     const active = await manager
       .getRepository(Appointment)

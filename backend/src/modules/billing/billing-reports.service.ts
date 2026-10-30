@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 import { UserRole } from '../../common/enums/user-role.enum.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
+import { addDays } from '../../common/time/clinic-time.util.js';
 import {
   addMoney,
   subMoney,
@@ -95,7 +96,7 @@ export class BillingReportsService {
       .getMany();
 
     const cutoff = this.time.dayBounds(
-      this.time.addDays(this.time.today(), -this.overdueDays),
+      addDays(this.time.today(), -this.overdueDays),
     ).start;
     const overdue = await base()
       .andWhere('invoice.amountPaid < invoice.total')

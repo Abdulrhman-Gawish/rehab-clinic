@@ -7,8 +7,10 @@ import {
 } from '../../common/dto/pagination.dto.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
 import type { AuditAction, AuditEntityType } from './audit.constants.js';
-import { AuditLogResponseDto } from './dto/audit-log-response.dto.js';
-import type { ListAuditLogsQueryDto } from './dto/list-audit-logs-query.dto.js';
+import {
+  AuditLogResponseDto,
+  type ListAuditLogsQueryDto,
+} from './dto/audit.dto.js';
 import { AuditLog, type AuditValues } from './entities/audit-log.entity.js';
 
 export interface AuditEntry {
@@ -31,6 +33,7 @@ export class AuditService {
   /**
    * Writes an audit entry. Pass the transaction's EntityManager so the entry
    * is committed (or rolled back) together with the change it describes.
+   * Prefer logAction(); use log() only for entries without an entity (auth).
    */
   async log(entry: AuditEntry, manager?: EntityManager): Promise<void> {
     const repository = manager
@@ -51,7 +54,7 @@ export class AuditService {
     });
   }
 
-  // Convenience for the common "actor did X to entity Y" case.
+  // The default: "actor did X to entity Y", in the caller's transaction.
   logAction(
     actor: Actor,
     action: AuditAction,

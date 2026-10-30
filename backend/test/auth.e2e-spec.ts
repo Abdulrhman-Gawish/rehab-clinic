@@ -133,19 +133,6 @@ describe('Auth (e2e)', () => {
         .set('Authorization', 'Bearer not-a-jwt')
         .expect(401);
     });
-
-    it('stops accepting the access token once the user is deactivated', async () => {
-      const user = await insertUser(ctx.dataSource, UserRole.RECEPTIONIST);
-      const { accessToken } = await login(ctx.app, user.email);
-      await ctx.dataSource
-        .getRepository('User')
-        .update(user.id, { isActive: false });
-
-      await request(server)
-        .get('/api/v1/auth/me')
-        .set('Authorization', `Bearer ${accessToken}`)
-        .expect(401);
-    });
   });
 
   describe('POST /auth/refresh', () => {

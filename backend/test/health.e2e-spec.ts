@@ -17,10 +17,7 @@ describe('Health & app foundation (e2e)', () => {
       .get('/api/v1/health')
       .expect(200);
 
-    expect(res.body).toMatchObject({
-      status: 'ok',
-      info: { database: { status: 'up' } },
-    });
+    expect(res.body).toEqual({ status: 'ok', database: 'up' });
   });
 
   it('echoes a request id header', async () => {

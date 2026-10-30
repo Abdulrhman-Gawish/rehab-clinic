@@ -181,11 +181,8 @@ describe('Users & audit logs (e2e)', () => {
     });
 
     it('deactivation signs the user out and blocks login; activation restores it', async () => {
-      const staff = await createLoggedInUser(
-        ctx.app,
-        ctx.dataSource,
-        UserRole.RECEPTIONIST,
-      );
+      const user = await insertUser(ctx.dataSource, UserRole.RECEPTIONIST);
+      const staff = { ...user, ...(await login(ctx.app, user.email)) };
 
       await request(server)
         .patch(`/api/v1/users/${staff.id}/deactivate`)
@@ -244,11 +241,8 @@ describe('Users & audit logs (e2e)', () => {
 
   describe('POST /users/:id/reset-password', () => {
     it('sets the new password and revokes existing sessions', async () => {
-      const staff = await createLoggedInUser(
-        ctx.app,
-        ctx.dataSource,
-        UserRole.DOCTOR,
-      );
+      const user = await insertUser(ctx.dataSource, UserRole.DOCTOR);
+      const staff = { ...user, ...(await login(ctx.app, user.email)) };
 
       await request(server)
         .post(`/api/v1/users/${staff.id}/reset-password`)
@@ -299,13 +293,14 @@ describe('Users & audit logs (e2e)', () => {
     });
 
     it('filters by acting user and date range', async () => {
+      await login(ctx.app, owner.email);
       const res = await request(server)
         .get(
           `/api/v1/audit-logs?userId=${owner.id}&from=2000-01-01T00:00:00Z&to=2999-01-01T00:00:00Z`,
         )
         .set('Authorization', bearer(owner))
         .expect(200);
-      // The owner's own LOGIN from the beforeEach.
+      // The owner's own LOGIN above.
       expect(res.body.items.map((l: { action: string }) => l.action)).toEqual([
         'LOGIN',
       ]);
