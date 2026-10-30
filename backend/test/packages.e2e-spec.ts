@@ -134,6 +134,10 @@ describe('Packages (e2e)', () => {
         .patch(`/api/v1${path}`)
         .set('Authorization', bearer(user))
         .send(body),
+    delete: (path: string) =>
+      request(server)
+        .delete(`/api/v1${path}`)
+        .set('Authorization', bearer(user)),
   });
 
   async function createPackage(overrides: Record<string, unknown> = {}) {
@@ -353,6 +357,40 @@ describe('Packages (e2e)', () => {
         .post(`/patients/${patient.id}/packages`, { packageId: pkg.id })
         .expect(422);
       expect(sale.body.code).toBe('PACKAGE_INACTIVE');
+    });
+
+    it('deactivate stops sales for a while; DELETE removes the package for good, sold ones keep working', async () => {
+      const pkg = await createPackage();
+      const sold = await sell(pkg.id);
+
+      // Deactivating works even when the service itself is off.
+      await as(owner)
+        .patch(`/clinic-services/${physioId}/deactivate`)
+        .expect(200);
+      await as(owner).patch(`/packages/${pkg.id}/deactivate`).expect(200);
+      await as(owner)
+        .patch(`/clinic-services/${physioId}/activate`)
+        .expect(200);
+      await as(owner).patch(`/packages/${pkg.id}/activate`).expect(200);
+
+      await as(owner).delete(`/packages/${pkg.id}`).expect(204);
+      await as(owner).get(`/packages/${pkg.id}`).expect(404);
+      await as(owner).patch(`/packages/${pkg.id}/activate`).expect(404);
+      await as(owner)
+        .patch(`/packages/${pkg.id}`, { name: 'Back' })
+        .expect(404);
+      expect(
+        (await as(receptionist).get('/packages').expect(200)).body.items,
+      ).toEqual([]);
+      expect(
+        (await request(server).get('/api/v1/public/packages').expect(200)).body,
+      ).toEqual([]);
+      await as(receptionist)
+        .post(`/patients/${patient.id}/packages`, { packageId: pkg.id })
+        .expect(404);
+
+      const res = await attend((await appointment(doctorA)).id).expect(201);
+      expect(res.body.package?.patientPackageId).toBe(sold.id);
     });
 
     it('GET /public/packages: active and public only, with safe fields', async () => {

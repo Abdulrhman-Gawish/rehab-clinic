@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -13,6 +14,7 @@ import {
 import {
   ApiBadRequestResponse,
   ApiCreatedResponse,
+  ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -118,6 +120,23 @@ export class PackagesController {
     @CurrentActor() actor: Actor,
   ): Promise<PackageResponseDto> {
     return this.packages.update(id, dto, actor);
+  }
+
+  @Delete(':id')
+  @Auth(OWNER)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Delete for good (deactivate stops sales only for a while)',
+    description:
+      'Gone from every list and never sold again; patients who bought it keep their sessions.',
+  })
+  @ApiNoContentResponse()
+  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentActor() actor: Actor,
+  ): Promise<void> {
+    return this.packages.remove(id, actor);
   }
 
   @Patch(':id/activate')

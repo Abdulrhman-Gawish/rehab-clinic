@@ -24,6 +24,10 @@ import { PackageDoctor } from './package-doctor.entity.js';
 @Check('chk_packages_sessions_positive', '"sessions_count" > 0')
 @Check('chk_packages_price_non_negative', '"price" >= 0')
 @Check(
+  'chk_packages_deleted_inactive',
+  '"deleted_at" IS NULL OR "is_active" = false',
+)
+@Check(
   'chk_packages_offer',
   `("offer_type" IS NULL AND "offer_value" IS NULL AND "offer_starts_on" IS NULL AND "offer_ends_on" IS NULL)
    OR ("offer_type" IS NOT NULL AND "offer_value" > 0
@@ -76,8 +80,14 @@ export class Package extends BaseEntity {
   @Column({ type: 'boolean', default: true })
   isPublic: boolean;
 
+  // Not sold any more while false; can be switched back on.
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
+
+  // Deleted for good: gone from every list, never active again. Sold
+  // packages keep working (they keep pointing here).
+  @Column({ type: 'timestamptz', nullable: true })
+  deletedAt: Date | null;
 
   @OneToMany(() => PackageDoctor, (link) => link.package)
   doctors?: Relation<PackageDoctor>[];

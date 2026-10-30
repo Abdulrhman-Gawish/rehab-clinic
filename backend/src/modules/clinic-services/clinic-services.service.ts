@@ -5,19 +5,22 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, IsNull, Repository } from 'typeorm';
 import {
   toPaginated,
   type Paginated,
 } from '../../common/dto/pagination.dto.js';
 import type { UserRefDto } from '../../common/dto/user-ref.dto.js';
+import { ErrorCode, unprocessable } from '../../common/errors/app.exception.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
+import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
 import { escapeLike } from '../../common/utils/sql.util.js';
 import { diffValues, pickValues } from '../audit/audit-diff.util.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
 import { DoctorClinicService } from '../doctors/entities/doctor-clinic-service.entity.js';
 import { Doctor } from '../doctors/entities/doctor.entity.js';
+import { Package } from '../packages/entities/package.entity.js';
 import {
   ClinicServiceResponseDto,
   PublicClinicServiceDto,
@@ -58,6 +61,7 @@ export class ClinicServicesService {
     private readonly services: Repository<ClinicService>,
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly auditService: AuditService,
+    private readonly time: ClinicTimeService,
   ) {}
 
   async create(
@@ -99,6 +103,7 @@ export class ClinicServicesService {
   ): Promise<Paginated<ClinicServiceResponseDto>> {
     const qb = this.services
       .createQueryBuilder('service')
+      .where('service.deletedAt IS NULL')
       .orderBy('service.name', 'ASC')
       .addOrderBy('service.id', 'ASC')
       .skip(query.skip)
@@ -123,9 +128,45 @@ export class ClinicServicesService {
   }
 
   async findOne(id: string): Promise<ClinicServiceResponseDto> {
-    const service = await this.services.findOneBy({ id });
+    const service = await this.services.findOneBy({ id, deletedAt: IsNull() });
     if (!service) throw new NotFoundException('Service not found');
     return this.toResponse(service);
+  }
+
+  /**
+   * Deleted for good (the row stays: visits and invoices point at it): out
+   * of every list, never active again, no doctor offers it any more.
+   * Refused while it still has packages (delete those first).
+   */
+  async remove(id: string, actor: Actor): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const service = await manager.findOne(ClinicService, {
+        where: { id, deletedAt: IsNull() },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!service) throw new NotFoundException('Service not found');
+      if (
+        await manager.existsBy(Package, { serviceId: id, deletedAt: IsNull() })
+      ) {
+        throw unprocessable(
+          ErrorCode.SERVICE_HAS_PACKAGES,
+          'The service still has packages; delete them first',
+        );
+      }
+      await this.replaceDoctors(service, { doctorIds: [] }, actor, manager);
+      const wasActive = service.isActive;
+      service.isActive = false;
+      service.deletedAt = this.time.now();
+      await manager.getRepository(ClinicService).save(service);
+      await this.auditService.logAction(
+        actor,
+        AuditAction.CLINIC_SERVICE_DELETED,
+        AuditEntityType.CLINIC_SERVICE,
+        id,
+        { oldValues: { isActive: wasActive }, newValues: { deleted: true } },
+        manager,
+      );
+    });
   }
 
   async findPublic(): Promise<PublicClinicServiceDto[]> {
@@ -205,7 +246,7 @@ export class ClinicServicesService {
       async (manager: EntityManager) => {
         const repository = manager.getRepository(ClinicService);
         const service = await repository.findOne({
-          where: { id },
+          where: { id, deletedAt: IsNull() },
           lock: { mode: 'pessimistic_write' },
         });
         if (!service) throw new NotFoundException('Service not found');

@@ -455,17 +455,67 @@ describe('Doctors & clinic services (e2e)', () => {
       await put({ doctorIds: [mona.id] }).expect(409);
     });
 
-    it('deactivates instead of deleting', async () => {
+    it('deactivate hides a service for a while; DELETE removes it for good', async () => {
+      const { body: doctor } = await createDoctor().expect(201);
+      const { body: service } = await createService({
+        doctorIds: [doctor.id],
+      });
+      const as = (method: 'get' | 'patch' | 'delete', path: string) =>
+        request(server)
+          [method](`/api/v1/clinic-services${path}`)
+          .set('Authorization', bearer(owner));
+
+      await as('patch', `/${service.id}/deactivate`)
+        .expect(200)
+        .expect(({ body }) => expect(body.isActive).toBe(false));
+      await as('patch', `/${service.id}/activate`)
+        .expect(200)
+        .expect(({ body }) => expect(body.isActive).toBe(true));
+
+      await as('delete', `/${service.id}`).expect(204);
+      await as('get', `/${service.id}`).expect(404);
+      await as('patch', `/${service.id}/activate`).expect(404);
+      await as('delete', `/${service.id}`).expect(404);
+      const list = await as('get', '').expect(200);
+      expect(list.body.items).toEqual([]);
+      const profile = await request(server)
+        .get(`/api/v1/doctors/${doctor.id}`)
+        .set('Authorization', bearer(owner))
+        .expect(200);
+      expect(profile.body.services).toEqual([]);
+      await ctx.dataSource.getRepository(AuditLog).findOneByOrFail({
+        action: 'CLINIC_SERVICE_DELETED',
+        entityId: service.id,
+      });
+    });
+
+    it('a service with packages cannot be deleted', async () => {
       const { body: service } = await createService();
+      const pkg = await request(server)
+        .post('/api/v1/packages')
+        .set('Authorization', bearer(owner))
+        .send({
+          name: 'Pack',
+          serviceId: service.id,
+          sessionsCount: 5,
+          price: '1000.00',
+          allDoctors: true,
+        })
+        .expect(201);
+      const res = await request(server)
+        .delete(`/api/v1/clinic-services/${service.id}`)
+        .set('Authorization', bearer(owner))
+        .expect(422);
+      expect(res.body.code).toBe('SERVICE_HAS_PACKAGES');
+
+      await request(server)
+        .delete(`/api/v1/packages/${pkg.body.id}`)
+        .set('Authorization', bearer(owner))
+        .expect(204);
       await request(server)
         .delete(`/api/v1/clinic-services/${service.id}`)
         .set('Authorization', bearer(owner))
-        .expect(404);
-      await request(server)
-        .patch(`/api/v1/clinic-services/${service.id}/deactivate`)
-        .set('Authorization', bearer(owner))
-        .expect(200)
-        .expect(({ body }) => expect(body.isActive).toBe(false));
+        .expect(204);
     });
   });
 

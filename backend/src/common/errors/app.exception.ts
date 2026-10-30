@@ -47,6 +47,7 @@ export enum ErrorCode {
   PACKAGE_CANCELLED = 'PACKAGE_CANCELLED',
   PACKAGE_INVOICE = 'PACKAGE_INVOICE',
   RESTORE_NOT_ALLOWED = 'RESTORE_NOT_ALLOWED',
+  SERVICE_HAS_PACKAGES = 'SERVICE_HAS_PACKAGES',
 }
 
 // HttpException carrying a stable `code` (and optional details) that the

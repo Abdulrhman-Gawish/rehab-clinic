@@ -1,7 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -12,10 +15,12 @@ import {
 import {
   ApiBadRequestResponse,
   ApiCreatedResponse,
+  ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
+  ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import { Auth } from '../../common/decorators/api-auth.decorator.js';
 import { CurrentActor } from '../../common/decorators/current-user.decorator.js';
@@ -102,6 +107,27 @@ export class ClinicServicesController {
     @CurrentActor() actor: Actor,
   ): Promise<ClinicServiceResponseDto> {
     return this.clinicServices.setDoctors(id, dto, actor);
+  }
+
+  @Delete(':id')
+  @Auth(UserRole.OWNER)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Delete for good (deactivate hides it only for a while)',
+    description:
+      'The row stays for history (visits, invoices), but it is gone from every list and can never be activated again. Its doctor assignments are removed. 422 SERVICE_HAS_PACKAGES while packages of it exist.',
+  })
+  @ApiNoContentResponse()
+  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  @ApiUnprocessableEntityResponse({
+    type: ErrorResponseDto,
+    description: 'SERVICE_HAS_PACKAGES',
+  })
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentActor() actor: Actor,
+  ): Promise<void> {
+    return this.clinicServices.remove(id, actor);
   }
 
   @Patch(':id/activate')

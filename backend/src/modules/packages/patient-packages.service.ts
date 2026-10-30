@@ -98,7 +98,7 @@ export class PatientPackagesService {
         throw new NotFoundException('Patient not found');
       }
       const pkg = await manager.findOne(Package, {
-        where: { id: dto.packageId },
+        where: { id: dto.packageId, deletedAt: IsNull() },
         relations: { service: true },
       });
       if (!pkg) throw new NotFoundException('Package not found');

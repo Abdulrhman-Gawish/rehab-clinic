@@ -65,6 +65,7 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
   { method: 'post', path: '/clinic-services', allowed: [OWNER] },
   { method: 'patch', path: `/clinic-services/${id}`, allowed: [OWNER] },
   { method: 'put', path: `/clinic-services/${id}/doctors`, allowed: [OWNER] },
+  { method: 'delete', path: `/clinic-services/${id}`, allowed: [OWNER] },
   {
     method: 'patch',
     path: `/clinic-services/${id}/activate`,
@@ -338,6 +339,7 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
   { method: 'get', path: `/packages/${id}`, allowed: [OWNER, RECEPTIONIST] },
   { method: 'post', path: '/packages', allowed: [OWNER] },
   { method: 'patch', path: `/packages/${id}`, allowed: [OWNER] },
+  { method: 'delete', path: `/packages/${id}`, allowed: [OWNER] },
   { method: 'patch', path: `/packages/${id}/activate`, allowed: [OWNER] },
   { method: 'patch', path: `/packages/${id}/deactivate`, allowed: [OWNER] },
   {

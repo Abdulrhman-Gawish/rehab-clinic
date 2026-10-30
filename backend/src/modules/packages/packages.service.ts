@@ -8,6 +8,7 @@ import {
   DataSource,
   EntityManager,
   In,
+  IsNull,
   Repository,
   type SelectQueryBuilder,
 } from 'typeorm';
@@ -180,6 +181,30 @@ export class PackagesService {
     return this.findOne(id);
   }
 
+  // Deleted for good: gone from every list and never sold again. Sold
+  // packages keep their sessions and doctor list.
+  async remove(id: string, actor: Actor): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const pkg = await manager.findOne(Package, {
+        where: { id, deletedAt: IsNull() },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!pkg) throw new NotFoundException('Package not found');
+      const wasActive = pkg.isActive;
+      pkg.isActive = false;
+      pkg.deletedAt = this.time.now();
+      await manager.getRepository(Package).save(pkg);
+      await this.auditService.logAction(
+        actor,
+        AuditAction.PACKAGE_DELETED,
+        AuditEntityType.PACKAGE,
+        id,
+        { oldValues: { isActive: wasActive }, newValues: { deleted: true } },
+        manager,
+      );
+    });
+  }
+
   async findAll(
     query: ListPackagesQueryDto,
   ): Promise<Paginated<PackageResponseDto>> {
@@ -201,7 +226,9 @@ export class PackagesService {
   }
 
   async findOne(id: string): Promise<PackageResponseDto> {
-    const pkg = await this.detailQuery().where('pkg.id = :id', { id }).getOne();
+    const pkg = await this.detailQuery()
+      .andWhere('pkg.id = :id', { id })
+      .getOne();
     if (!pkg) throw new NotFoundException('Package not found');
     return toPackageResponse(pkg, this.time.today());
   }
@@ -236,7 +263,7 @@ export class PackagesService {
     await this.dataSource.transaction(async (manager) => {
       const repository = manager.getRepository(Package);
       const pkg = await repository.findOne({
-        where: { id },
+        where: { id, deletedAt: IsNull() },
         lock: { mode: 'pessimistic_write' },
       });
       if (!pkg) throw new NotFoundException('Package not found');
@@ -247,7 +274,8 @@ export class PackagesService {
 
       const newIds = change(pkg);
       const doctorIds = pkg.allDoctors ? [] : (newIds ?? currentIds);
-      await this.assertValid(pkg, doctorIds, manager);
+      // Only a package that can be sold must be valid (activating re-checks).
+      if (pkg.isActive) await this.assertValid(pkg, doctorIds, manager);
 
       await repository.save(pkg);
       if (newIds !== undefined || pkg.allDoctors) {
@@ -365,7 +393,8 @@ export class PackagesService {
       .innerJoinAndSelect('pkg.service', 'service')
       .leftJoinAndSelect('pkg.doctors', 'link')
       .leftJoinAndSelect('link.doctor', 'doctor')
-      .leftJoinAndSelect('doctor.user', 'doctorUser');
+      .leftJoinAndSelect('doctor.user', 'doctorUser')
+      .where('pkg.deletedAt IS NULL');
   }
 }
 

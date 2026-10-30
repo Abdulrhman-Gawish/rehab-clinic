@@ -227,6 +227,7 @@ Business errors also carry a stable machine-readable `code`:
 | `PACKAGE_NOT_USABLE` | 422 | The chosen `patientPackageId` can't pay this session: cancelled, no sessions left, other service, or the doctor isn't covered |
 | `PACKAGE_CANCELLED` | 422 | Cancelling a package twice |
 | `PACKAGE_INVOICE` | 422 | Editing the items of a package sale's invoice, or cancelling it while the package isn't cancelled |
+| `SERVICE_HAS_PACKAGES` | 422 | Deleting a service that still has packages (delete them first) |
 | `RESTORE_NOT_ALLOWED` | 422 | Restoring an ATTENDED usage (undo the attendance instead) or one already restored |
 
 ## Modules
@@ -290,7 +291,8 @@ Business errors also carry a stable machine-readable `code`:
   - They expose only `id, name, specialty, bio, photoUrl, services[{id, name, description, durationMinutes, price}]`.
 
 ### `clinic-services`
-- OWNER can create, update, activate and deactivate services; there is no hard delete. Staff can read them.
+- OWNER can create, update, activate and deactivate services. Staff can read them.
+- **Deactivate vs delete:** `PATCH /clinic-services/:id/deactivate` hides a service for a while (not bookable, not public) and `activate` brings it back. `DELETE /clinic-services/:id` (204) removes it **for good**: `deleted_at` is set, it is out of every list, and GET / PATCH / activate answer 404. Its doctor assignments are removed (audited). The row itself stays, because visits and invoices point at it (CHECK: a deleted service is never active). Refused with 422 `SERVICE_HAS_PACKAGES` while it still has packages that aren't deleted.
 - **Doctors offering a service:** `POST /clinic-services` and `PATCH /clinic-services/:id` accept `doctorIds: uuid[]` **or** `allDoctors: true` (every doctor active at that moment; doctors added later are not included). `PUT /clinic-services/:id/doctors { doctorIds | allDoctors }` replaces the list (exactly one of the two, 400 otherwise). These write the same `doctor_services` rows as `PUT/DELETE /doctors/:id/services/:serviceId`: doctors that stay keep their `priceOverride`, new ones get none, and each added or removed doctor is audited (`DOCTOR_SERVICE_ASSIGNED` / `_UNASSIGNED`). An unknown doctor id is 404, adding doctors to an inactive service is 409.
 - Every service response has `doctors: [{ id, name }]` (doctor id, sorted by name).
 - `GET /public/services` returns active services only.
@@ -626,7 +628,8 @@ Draft notes never appear, for anyone (not even their author): a note shows up wh
 A package is **N sessions of one service for a total price**. Patients pay at the desk like any invoice (manual records; no online payments).
 
 **Catalog** (`packages`, `package_doctors`; OWNER writes, RECEPTIONIST reads):
-- `POST /packages { name, serviceId, sessionsCount, price, doctorIds | allDoctors: true, offer?, isPublic? }`, `PATCH /packages/:id` (same fields, all optional; `offer: null` removes it), `PATCH /packages/:id/activate|deactivate`. Every change is audited (`PACKAGE_*`).
+- `POST /packages { name, serviceId, sessionsCount, price, doctorIds | allDoctors: true, offer?, isPublic? }`, `PATCH /packages/:id` (same fields, all optional; `offer: null` removes it), `PATCH /packages/:id/activate|deactivate`, `DELETE /packages/:id`. Every change is audited (`PACKAGE_*`).
+- **Deactivate vs delete:** deactivate stops sales for a while (and hides it from `/public/packages`); activate re-checks the package (service active, doctors offer it). `DELETE` (204) removes it **for good**: out of every list, never sold or activated again (404). Patients who bought it keep their sessions, and its doctor list keeps applying to them.
 - **Doctors:** `allDoctors: true` means every doctor, including doctors added later. Otherwise every listed doctor must offer the package's service (422 `SERVICE_NOT_OFFERED`, `details.doctorIds`). The service must be active.
 - **Offer:** `{ type: PERCENT | FIXED, value, startsOn?, endsOn? }` (local dates, inclusive, open-ended when null). While it is active, selling price = price − offer. PERCENT is at most 100 (400), FIXED at most the price (422 `OFFER_EXCEEDS_PRICE`); CHECK `chk_packages_offer` guards both.
 - `GET /packages` (paginated, `isActive` filter) and `GET /packages/:id` return the doctors, the offer, `offerActive` and today's `sellingPrice`.
