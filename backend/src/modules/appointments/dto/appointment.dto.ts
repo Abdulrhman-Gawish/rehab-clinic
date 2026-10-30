@@ -15,11 +15,14 @@ import {
   IsLocalDate,
 } from '../../../common/decorators/date-time.decorators.js';
 import {
+  ToArray,
   Trim,
   TrimAndCollapse,
 } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
+import { NoteStatus } from '../../clinical/clinical.enums.js';
 import { PersonNameField } from '../../users/dto/user.dto.js';
+import { VisitStatus } from '../../visits/visit.enums.js';
 import { AppointmentSource, AppointmentStatus } from '../appointment.enums.js';
 
 const START_DOC = {
@@ -193,7 +196,21 @@ export class DayListQueryDto {
   @IsLocalDate()
   date: string;
 
-  @ApiPropertyOptional({ format: 'uuid' })
+  @ApiPropertyOptional({
+    enum: AppointmentStatus,
+    isArray: true,
+    description:
+      'One or more statuses (repeat the parameter or comma-separate). Walk-ins count as ATTENDED.',
+  })
+  @IsOptional()
+  @ToArray()
+  @IsEnum(AppointmentStatus, { each: true })
+  status?: AppointmentStatus[];
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Ignored for doctors (always their own)',
+  })
   @IsOptional()
   @IsUUID()
   doctorId?: string;
@@ -311,8 +328,10 @@ export enum DayPaymentStatus {
   PAID = 'PAID',
 }
 
-// Reception day list row: an appointment (with its visit, if checked in) or
-// a walk-in visit (appointment fields null, isWalkIn true).
+const BILLING = 'Omitted for doctors.';
+
+// Day list row: an appointment (with its visit, if attended) or a walk-in
+// visit (appointment fields null, isWalkIn true).
 export class DayListEntryDto {
   @ApiProperty()
   isWalkIn: boolean;
@@ -366,39 +385,71 @@ export class DayListEntryDto {
   @ApiProperty({ nullable: true, type: String })
   notes: string | null;
 
-  @ApiProperty({ nullable: true, type: String })
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description: 'Appointment cancel reason, or the void reason of a walk-in',
+  })
   cancelReason: string | null;
 
   @ApiProperty({ format: 'uuid', nullable: true, type: String })
   visitId: string | null;
 
-  @ApiProperty({
-    enum: ['WAITING', 'IN_SESSION', 'COMPLETED', 'CANCELLED'],
-    nullable: true,
-  })
-  visitStatus: string | null;
+  @ApiProperty({ enum: VisitStatus, nullable: true })
+  visitStatus: VisitStatus | null;
 
   @ApiProperty({
     nullable: true,
     type: String,
     example: '2026-11-05T16:50:00+02:00',
   })
-  checkedInAt: string | null;
+  attendedAt: string | null;
 
-  @ApiProperty({ format: 'uuid', nullable: true, type: String })
-  invoiceId: string | null;
+  @ApiProperty({ enum: NoteStatus, nullable: true })
+  noteStatus: NoteStatus | null;
 
-  @ApiProperty({ nullable: true, type: String, example: '320.00' })
-  invoiceTotal: string | null;
+  @ApiProperty({
+    type: [String],
+    example: ['cancel', 'reschedule', 'attend'],
+    description:
+      'Desk: confirm, cancel, reschedule, noShow, undoNoShow, attend, undoAttend (a walk-in is undone with POST /visits/:visitId/undo-attend). Doctor: writeNote, viewNote.',
+  })
+  allowedActions: string[];
 
-  @ApiProperty({ nullable: true, type: String, example: '100.00' })
-  amountPaid: string | null;
+  @ApiPropertyOptional({
+    format: 'uuid',
+    nullable: true,
+    type: String,
+    description: BILLING,
+  })
+  invoiceId?: string | null;
 
-  @ApiProperty({ nullable: true, type: String, example: '220.00' })
-  balance: string | null;
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    example: '320.00',
+    description: BILLING,
+  })
+  invoiceTotal?: string | null;
 
-  @ApiProperty({ enum: DayPaymentStatus })
-  paymentStatus: DayPaymentStatus;
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    example: '100.00',
+    description: BILLING,
+  })
+  amountPaid?: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    type: String,
+    example: '220.00',
+    description: BILLING,
+  })
+  balance?: string | null;
+
+  @ApiPropertyOptional({ enum: DayPaymentStatus, description: BILLING })
+  paymentStatus?: DayPaymentStatus;
 }
 
 // What the public website gets back: nothing about the patient record.

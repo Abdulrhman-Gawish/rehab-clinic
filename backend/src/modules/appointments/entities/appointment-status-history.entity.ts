@@ -61,7 +61,7 @@ export class AppointmentStatusHistory {
   reason: string | null;
 
   // clock_timestamp(), not now(): several rows written in one transaction
-  // (e.g. PENDING -> CONFIRMED -> CHECKED_IN) must keep their order.
+  // must keep their order.
   @Column({ type: 'timestamptz', default: () => 'clock_timestamp()' })
   changedAt: Date;
 }

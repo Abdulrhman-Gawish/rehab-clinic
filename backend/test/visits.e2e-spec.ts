@@ -1,4 +1,3 @@
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
 import { UserRole } from '../src/common/enums/user-role.enum.js';
@@ -9,12 +8,9 @@ import {
 } from '../src/modules/appointments/appointment.enums.js';
 import { AppointmentStatusHistory } from '../src/modules/appointments/entities/appointment-status-history.entity.js';
 import { Appointment } from '../src/modules/appointments/entities/appointment.entity.js';
-import { AuditAction } from '../src/modules/audit/audit.constants.js';
-import {
-  AuditService,
-  type AuditEntry,
-} from '../src/modules/audit/audit.service.js';
 import { AuditLog } from '../src/modules/audit/entities/audit-log.entity.js';
+import { Invoice } from '../src/modules/billing/entities/invoice.entity.js';
+import { InvoicesService } from '../src/modules/billing/invoices.service.js';
 import { Doctor } from '../src/modules/doctors/entities/doctor.entity.js';
 import {
   Patient,
@@ -22,11 +18,6 @@ import {
 } from '../src/modules/patients/entities/patient.entity.js';
 import { VisitStatusHistory } from '../src/modules/visits/entities/visit-status-history.entity.js';
 import { Visit } from '../src/modules/visits/entities/visit.entity.js';
-import { VISIT_COMPLETION_POLICY } from '../src/modules/visits/visit-completion-policy.js';
-import {
-  VisitEvent,
-  type VisitEventPayload,
-} from '../src/modules/visits/visit.events.js';
 import {
   bearer,
   createLoggedInUser,
@@ -54,27 +45,24 @@ const VISIT_KEYS = [
   'appointmentId',
   'appointmentReferenceCode',
   'appointmentStartAt',
-  'cancelReason',
-  'cancelledAt',
-  'cancelledById',
-  'checkedInAt',
-  'checkedInById',
-  'completedAt',
-  'completedById',
+  'attendedAt',
+  'attendedById',
   'createdAt',
   'doctor',
   'id',
   'isWalkIn',
   'patient',
   'service',
-  'startedAt',
   'status',
   'updatedAt',
+  'voidReason',
+  'voidedAt',
+  'voidedById',
 ];
 
 type DoctorUser = TestUser & { doctorId: string };
 
-describe('Visits (e2e)', () => {
+describe('Desk workflow: attend, walk-in, undo, day list (e2e)', () => {
   let ctx: TestApp;
   let server: App;
   let owner: TestUser;
@@ -87,14 +75,8 @@ describe('Visits (e2e)', () => {
   let p3: Patient;
 
   beforeAll(async () => {
-    // These tests are about the visit lifecycle; "a signed note is required
-    // to complete" is tested in clinical.e2e-spec.ts.
     ctx = await createTestApp((builder) =>
-      builder
-        .overrideProvider(CLOCK)
-        .useValue({ now: () => clock.current })
-        .overrideProvider(VISIT_COMPLETION_POLICY)
-        .useValue({ check: () => Promise.resolve({ allowed: true }) }),
+      builder.overrideProvider(CLOCK).useValue({ now: () => clock.current }),
     );
     server = ctx.app.getHttpServer();
   });
@@ -176,10 +158,25 @@ describe('Visits (e2e)', () => {
     );
   }
 
-  const checkIn = (appointmentId: string, as: TestUser = receptionist) =>
+  const attend = (appointmentId: string, as: TestUser = receptionist) =>
     request(server)
-      .post(`/api/v1/appointments/${appointmentId}/check-in`)
+      .post(`/api/v1/appointments/${appointmentId}/attend`)
       .set('Authorization', bearer(as));
+
+  const undoAttend = (
+    appointmentId: string,
+    body: Record<string, unknown> = { reason: 'Sent in by mistake' },
+  ) =>
+    request(server)
+      .post(`/api/v1/appointments/${appointmentId}/undo-attend`)
+      .set('Authorization', bearer(receptionist))
+      .send(body);
+
+  const undoVisit = (visitId: string, reason = 'Registered by mistake') =>
+    request(server)
+      .post(`/api/v1/visits/${visitId}/undo-attend`)
+      .set('Authorization', bearer(receptionist))
+      .send({ reason });
 
   const walkIn = (body: Record<string, unknown>, as: TestUser = receptionist) =>
     request(server)
@@ -187,16 +184,25 @@ describe('Visits (e2e)', () => {
       .set('Authorization', bearer(as))
       .send({ doctorId: doctorA.doctorId, serviceId, ...body });
 
-  const act = (
-    visitId: string,
-    action: 'start' | 'complete' | 'cancel' | 'undo-check-in',
-    as: TestUser,
-    body: Record<string, unknown> = {},
-  ) =>
+  const dayList = (as: TestUser = receptionist, query = '') =>
     request(server)
-      .post(`/api/v1/visits/${visitId}/${action}`)
+      .get(`/api/v1/appointments/day?date=${TODAY}${query}`)
       .set('Authorization', bearer(as))
-      .send(body);
+      .expect(200);
+
+  const writeNote = (visitId: string, as: DoctorUser) =>
+    request(server)
+      .post(`/api/v1/visits/${visitId}/note`)
+      .set('Authorization', bearer(as))
+      .send({ assessment: 'Seen' })
+      .expect(201);
+
+  const pay = (invoiceId: string, amount = '100') =>
+    request(server)
+      .post(`/api/v1/invoices/${invoiceId}/payments`)
+      .set('Authorization', bearer(receptionist))
+      .send({ amount, method: 'CASH' })
+      .expect(201);
 
   const appointmentStatus = async (id: string) =>
     (await ctx.dataSource.getRepository(Appointment).findOneByOrFail({ id }))
@@ -218,72 +224,65 @@ describe('Visits (e2e)', () => {
       })
     ).map((h) => [h.fromStatus, h.toStatus]);
 
-  // Test listeners are tracked and removed after each test, leaving the
-  // application's own listeners (billing) in place.
-  const added: [string, (payload: VisitEventPayload) => void][] = [];
-  function listen(name: string, handler: (payload: VisitEventPayload) => void) {
-    ctx.app.get(EventEmitter2).on(name, handler);
-    added.push([name, handler]);
-  }
+  const invoiceOf = (id: string) =>
+    ctx.dataSource.getRepository(Invoice).findOneByOrFail({ id });
 
-  function captureEvents(): { name: string; payload: VisitEventPayload }[] {
-    const seen: { name: string; payload: VisitEventPayload }[] = [];
-    for (const name of Object.values(VisitEvent)) {
-      listen(name, (payload) => seen.push({ name, payload }));
-    }
-    return seen;
-  }
+  // ---------- attend ----------
 
-  afterEach(() => {
-    const emitter = ctx.app.get(EventEmitter2);
-    for (const [name, handler] of added.splice(0)) emitter.off(name, handler);
-  });
-
-  // ---------- check-in ----------
-
-  describe('check-in', () => {
-    it('from CONFIRMED: creates a WAITING visit and moves the appointment to CHECKED_IN', async () => {
+  describe('attend', () => {
+    it('from CONFIRMED: appointment ATTENDED, ACTIVE visit and its invoice, in one go', async () => {
       const appointment = await insertAppointment(p1, doctorA, local('09:30'));
 
-      const res = await checkIn(appointment.id).expect(201);
-      expect(Object.keys(res.body).sort()).toEqual(VISIT_KEYS);
+      const res = await attend(appointment.id).expect(201);
+      expect(Object.keys(res.body).sort()).toEqual(
+        [...VISIT_KEYS, 'invoiceId'].sort(),
+      );
       expect(res.body).toMatchObject({
-        status: 'WAITING',
+        status: 'ACTIVE',
         isWalkIn: false,
         appointmentId: appointment.id,
         appointmentStartAt: iso('09:30'),
         patient: { id: p1.id, name: 'Patient One' },
         doctor: { id: doctorA.doctorId },
         service: { id: serviceId },
-        checkedInAt: iso('09:00'),
-        checkedInById: receptionist.id,
-        startedAt: null,
+        attendedAt: iso('09:00'),
+        attendedById: receptionist.id,
+        voidedAt: null,
+        invoiceId: expect.any(String),
+      });
+      expect(await invoiceOf(res.body.invoiceId)).toMatchObject({
+        visitId: res.body.id,
+        patientId: p1.id,
+        status: 'ISSUED',
       });
 
-      expect(await appointmentStatus(appointment.id)).toBe('CHECKED_IN');
+      expect(await appointmentStatus(appointment.id)).toBe('ATTENDED');
       expect(await appointmentHistory(appointment.id)).toEqual([
-        ['CONFIRMED', 'CHECKED_IN'],
+        ['CONFIRMED', 'ATTENDED'],
       ]);
-      expect(await visitHistory(res.body.id)).toEqual([[null, 'WAITING']]);
+      expect(await visitHistory(res.body.id)).toEqual([[null, 'ACTIVE']]);
       const actions = (await ctx.dataSource.getRepository(AuditLog).find()).map(
         (l) => l.action,
       );
       expect(actions).toEqual(
-        expect.arrayContaining(['APPOINTMENT_CHECKED_IN', 'VISIT_CHECKED_IN']),
+        expect.arrayContaining([
+          'APPOINTMENT_ATTENDED',
+          'VISIT_ATTENDED',
+          'INVOICE_CREATED',
+        ]),
       );
     });
 
-    it('from PENDING: confirms on the way with two history rows', async () => {
+    it('from PENDING directly (confirming is optional)', async () => {
       const appointment = await insertAppointment(
         p1,
         doctorA,
         local('09:30'),
         AppointmentStatus.PENDING,
       );
-      await checkIn(appointment.id).expect(201);
+      await attend(appointment.id).expect(201);
       expect(await appointmentHistory(appointment.id)).toEqual([
-        ['PENDING', 'CONFIRMED'],
-        ['CONFIRMED', 'CHECKED_IN'],
+        ['PENDING', 'ATTENDED'],
       ]);
     });
 
@@ -293,110 +292,97 @@ describe('Visits (e2e)', () => {
         doctorA,
         local('09:30', '2026-11-04'),
       );
-      const res = await checkIn(tomorrow.id).expect(422);
-      expect(res.body).toMatchObject({
-        code: 'CHECK_IN_WRONG_DAY',
-        details: { appointmentDate: '2026-11-04', today: TODAY },
-      });
+      const res = await attend(tomorrow.id).expect(422);
+      expect(res.body.code).toBe('ATTEND_WRONG_DAY');
       const yesterday = await insertAppointment(
         p2,
         doctorA,
         local('09:30', '2026-11-02'),
       );
-      await checkIn(yesterday.id).expect(422);
+      await attend(yesterday.id).expect(422);
 
       const late = await insertAppointment(p3, doctorA, local('07:00'));
-      await checkIn(late.id).expect(201);
+      await attend(late.id).expect(201);
     });
 
-    it('5 parallel check-ins of one appointment create exactly one visit', async () => {
+    it('cancelled, rescheduled or no-show appointments cannot attend', async () => {
+      for (const [patient, status] of [
+        [p1, AppointmentStatus.CANCELLED],
+        [p2, AppointmentStatus.RESCHEDULED],
+        [p3, AppointmentStatus.NO_SHOW],
+      ] as const) {
+        const appointment = await insertAppointment(
+          patient,
+          doctorA,
+          local('08:00'),
+          status,
+        );
+        const res = await attend(appointment.id).expect(422);
+        expect(res.body.code).toBe('INVALID_STATUS_TRANSITION');
+      }
+      expect(await ctx.dataSource.getRepository(Visit).count()).toBe(0);
+    });
+
+    it('5 parallel attends of one appointment create exactly one visit and one invoice', async () => {
       const appointment = await insertAppointment(p1, doctorA, local('09:30'));
       const results = await Promise.all(
-        Array.from({ length: 5 }, () => checkIn(appointment.id)),
+        Array.from({ length: 5 }, () => attend(appointment.id)),
       );
       expect(results.filter((r) => r.status === 201)).toHaveLength(1);
       const rejected = results.filter((r) => r.status === 409);
       expect(rejected).toHaveLength(4);
-      for (const r of rejected) expect(r.body.code).toBe('ALREADY_CHECKED_IN');
+      for (const r of rejected) expect(r.body.code).toBe('ALREADY_ATTENDED');
       expect(
         await ctx.dataSource
           .getRepository(Visit)
           .countBy({ appointmentId: appointment.id }),
       ).toBe(1);
+      expect(await ctx.dataSource.getRepository(Invoice).count()).toBe(1);
     });
 
-    it('cancelled or no-show appointments cannot be checked in', async () => {
-      const cancelled = await insertAppointment(
-        p1,
-        doctorA,
-        local('09:30'),
-        AppointmentStatus.CANCELLED,
-      );
-      const res = await checkIn(cancelled.id).expect(422);
-      expect(res.body.code).toBe('INVALID_STATUS_TRANSITION');
-      const noShow = await insertAppointment(
-        p2,
-        doctorA,
-        local('08:00'),
-        AppointmentStatus.NO_SHOW,
-      );
-      await checkIn(noShow.id).expect(422);
-      expect(await ctx.dataSource.getRepository(Visit).count()).toBe(0);
-    });
-
-    it('a patient with an open visit cannot be checked in elsewhere', async () => {
-      await walkIn({ patientId: p1.id }).expect(201);
-      const appointment = await insertAppointment(p1, doctorB, local('09:30'));
-
-      const res = await checkIn(appointment.id).expect(409);
-      expect(res.body.code).toBe('PATIENT_HAS_OPEN_VISIT');
-      expect(await appointmentStatus(appointment.id)).toBe('CONFIRMED');
-      expect(await appointmentHistory(appointment.id)).toEqual([]);
-    });
-
-    it('atomicity: a failure after the visit insert rolls back everything (and emits nothing)', async () => {
+    it('the invoice is part of the transaction: if it fails, nothing persists (attend and walk-in)', async () => {
       const appointment = await insertAppointment(p1, doctorA, local('09:30'));
-      const events = captureEvents();
-      const audit = ctx.app.get(AuditService);
-      const original = audit.log.bind(audit);
-      vi.spyOn(audit, 'log').mockImplementation((entry: AuditEntry, manager) =>
-        entry.action === AuditAction.VISIT_CHECKED_IN
-          ? Promise.reject(new Error('simulated failure'))
-          : original(entry, manager),
-      );
+      vi.spyOn(
+        ctx.app.get(InvoicesService),
+        'createForVisit',
+      ).mockRejectedValue(new Error('billing is down'));
 
-      await checkIn(appointment.id).expect(500);
+      await attend(appointment.id).expect(500);
+      await walkIn({ patientId: p2.id }).expect(500);
 
       expect(await appointmentStatus(appointment.id)).toBe('CONFIRMED');
-      expect(await ctx.dataSource.getRepository(Visit).count()).toBe(0);
       expect(await appointmentHistory(appointment.id)).toEqual([]);
+      expect(await ctx.dataSource.getRepository(Visit).count()).toBe(0);
       expect(
         await ctx.dataSource.getRepository(VisitStatusHistory).count(),
       ).toBe(0);
+      expect(await ctx.dataSource.getRepository(Invoice).count()).toBe(0);
       expect(
-        await ctx.dataSource
-          .getRepository(AuditLog)
-          .countBy({ action: 'APPOINTMENT_CHECKED_IN' }),
+        await ctx.dataSource.getRepository(AuditLog).countBy({
+          action: 'VISIT_ATTENDED',
+        }),
       ).toBe(0);
-      expect(events).toEqual([]);
     });
   });
 
   // ---------- walk-in ----------
 
   describe('walk-in', () => {
-    it('with a new phone creates the patient (RECEPTION) and a WAITING visit without appointment', async () => {
+    it('with a new phone creates the patient and an ACTIVE visit with its invoice', async () => {
       const res = await walkIn({
         name: 'New Person',
         phone: '0155 555 5555',
       }).expect(201);
       expect(res.body).toMatchObject({
-        status: 'WAITING',
+        status: 'ACTIVE',
         isWalkIn: true,
         appointmentId: null,
         appointmentStartAt: null,
+        attendedAt: iso('09:00'),
         patient: { name: 'New Person', phone: '+201555555555' },
+        invoiceId: expect.any(String),
       });
+      expect((await invoiceOf(res.body.invoiceId)).visitId).toBe(res.body.id);
       const patient = await ctx.dataSource
         .getRepository(Patient)
         .findOneByOrFail({ phone: '+201555555555' });
@@ -453,247 +439,355 @@ describe('Visits (e2e)', () => {
         })
         .expect(201);
     });
-
-    it('parallel walk-ins of one patient with two doctors: exactly one succeeds', async () => {
-      const [a, b] = await Promise.all([
-        walkIn({ patientId: p1.id, doctorId: doctorA.doctorId }),
-        walkIn({ patientId: p1.id, doctorId: doctorB.doctorId }),
-      ]);
-      expect([a.status, b.status].sort()).toEqual([201, 409]);
-      expect((a.status === 409 ? a : b).body.code).toBe(
-        'PATIENT_HAS_OPEN_VISIT',
-      );
-      expect(
-        await ctx.dataSource.getRepository(Visit).countBy({ patientId: p1.id }),
-      ).toBe(1);
-    });
   });
 
-  // ---------- doctor actions ----------
+  // ---------- undo attend ----------
 
-  describe('start / complete', () => {
-    it('full flow: WAITING -> IN_SESSION -> COMPLETED, appointment COMPLETED, events after commit', async () => {
-      const events = captureEvents();
-      const seenCommitted: boolean[] = [];
-      listen(VisitEvent.CHECKED_IN, (payload: VisitEventPayload) => {
-        // Read through another connection: only visible if committed.
-        void ctx.dataSource
-          .getRepository(Visit)
-          .existsBy({ id: payload.visitId })
-          .then((exists) => seenCommitted.push(exists));
-      });
-
+  describe('undo attend', () => {
+    async function attended(): Promise<{
+      appointment: Appointment;
+      visitId: string;
+      invoiceId: string;
+    }> {
       const appointment = await insertAppointment(p1, doctorA, local('09:30'));
-      const visit = (await checkIn(appointment.id).expect(201)).body;
-
-      clock.current = local('09:20');
-      const started = await act(visit.id, 'start', doctorA).expect(200);
-      expect(started.body).toMatchObject({
-        status: 'IN_SESSION',
-        startedAt: iso('09:20'),
-      });
-
-      clock.current = local('09:50');
-      const completed = await act(visit.id, 'complete', doctorA).expect(200);
-      expect(completed.body).toMatchObject({
-        status: 'COMPLETED',
-        completedAt: iso('09:50'),
-        completedById: doctorA.id,
-      });
-
-      expect(await appointmentStatus(appointment.id)).toBe('COMPLETED');
-      expect(await appointmentHistory(appointment.id)).toEqual([
-        ['CONFIRMED', 'CHECKED_IN'],
-        ['CHECKED_IN', 'COMPLETED'],
-      ]);
-      expect(await visitHistory(visit.id)).toEqual([
-        [null, 'WAITING'],
-        ['WAITING', 'IN_SESSION'],
-        ['IN_SESSION', 'COMPLETED'],
-      ]);
-
-      expect(events.map((e) => e.name)).toEqual([
-        'visit.checked_in',
-        'visit.started',
-        'visit.completed',
-      ]);
-      expect(events[2].payload).toEqual({
-        visitId: visit.id,
-        appointmentId: appointment.id,
-        patientId: p1.id,
-        doctorId: doctorA.doctorId,
-        serviceId,
-        at: local('09:50'),
-      });
-      await vi.waitFor(() => expect(seenCommitted).toEqual([true]));
-    });
-
-    it('forbidden transitions answer 422 INVALID_VISIT_TRANSITION; nothing is reopened', async () => {
-      const visit = (await walkIn({ patientId: p1.id }).expect(201)).body;
-
-      const expectInvalid = async (
-        action: 'start' | 'complete' | 'cancel' | 'undo-check-in',
-        as: TestUser,
-      ) => {
-        const res = await act(visit.id, action, as, {
-          reason: 'some reason',
-        }).expect(422);
-        expect(res.body.code).toBe('INVALID_VISIT_TRANSITION');
+      const res = await attend(appointment.id).expect(201);
+      return {
+        appointment,
+        visitId: res.body.id,
+        invoiceId: res.body.invoiceId,
       };
+    }
 
-      await expectInvalid('complete', doctorA); // WAITING -> COMPLETED
-      await act(visit.id, 'start', doctorA).expect(200);
-      await expectInvalid('start', doctorA); // IN_SESSION -> IN_SESSION
-      await expectInvalid('cancel', receptionist); // IN_SESSION -> CANCELLED
-      await expectInvalid('undo-check-in', receptionist);
-      await act(visit.id, 'complete', doctorA).expect(200);
-      await expectInvalid('start', doctorA); // COMPLETED -> ...
-      await expectInvalid('complete', doctorA);
-      await expectInvalid('cancel', receptionist);
+    it('voids the visit, cancels the unpaid invoice and puts the appointment back to CONFIRMED', async () => {
+      const { appointment, visitId, invoiceId } = await attended();
 
-      const other = (await walkIn({ patientId: p2.id }).expect(201)).body;
-      await act(other.id, 'cancel', receptionist, { reason: 'Left' }).expect(
-        200,
-      );
-      for (const action of [
-        'start',
-        'complete',
-        'cancel',
-        'undo-check-in',
-      ] as const) {
-        const res = await act(
-          other.id,
-          action,
-          action === 'start' || action === 'complete' ? doctorA : receptionist,
-          { reason: 'again' },
-        );
-        expect(res.status).toBe(422);
-      }
-    });
-
-    it('one session per doctor (parallel starts): exactly one succeeds until it completes', async () => {
-      const visits: { id: string }[] = [];
-      for (const patient of [p1, p2, p3]) {
-        visits.push((await walkIn({ patientId: patient.id }).expect(201)).body);
-      }
-      const results = await Promise.all(
-        visits.map((v) => act(v.id, 'start', doctorA)),
-      );
-      expect(results.filter((r) => r.status === 200)).toHaveLength(1);
-      const rejected = results.filter((r) => r.status === 409);
-      expect(rejected).toHaveLength(2);
-      for (const r of rejected)
-        expect(r.body.code).toBe('DOCTOR_ALREADY_IN_SESSION');
-
-      // Completing the session frees the doctor.
-      const winner = visits[results.findIndex((r) => r.status === 200)];
-      await act(winner.id, 'complete', doctorA).expect(200);
-      const next = visits.find((v) => v !== winner) as { id: string };
-      await act(next.id, 'start', doctorA).expect(200);
-    });
-
-    it("only the visit's doctor or the owner: other doctors get 404", async () => {
-      const visit = (await walkIn({ patientId: p1.id }).expect(201)).body;
-      await act(visit.id, 'start', doctorB).expect(404);
-      await act(visit.id, 'start', owner).expect(200);
-      await act(visit.id, 'complete', doctorB).expect(404);
-      await act(visit.id, 'complete', owner).expect(200);
-    });
-  });
-
-  // ---------- undo / cancel ----------
-
-  describe('undo check-in vs cancel', () => {
-    it('undo: visit CANCELLED, appointment back to CONFIRMED, and it can be checked in again', async () => {
-      const events = captureEvents();
-      const appointment = await insertAppointment(p1, doctorA, local('09:30'));
-      const visit = (await checkIn(appointment.id).expect(201)).body;
-
-      await act(visit.id, 'undo-check-in', receptionist, {}).expect(400);
-      const res = await act(visit.id, 'undo-check-in', receptionist, {
-        reason: 'Wrong patient selected',
+      await undoAttend(appointment.id, {}).expect(400); // reason required
+      clock.current = local('09:10');
+      const res = await undoAttend(appointment.id, {
+        reason: 'Wrong patient sent in',
       }).expect(200);
       expect(res.body).toMatchObject({
+        id: visitId,
+        status: 'VOIDED',
+        voidedAt: iso('09:10'),
+        voidedById: receptionist.id,
+        voidReason: 'Wrong patient sent in',
+      });
+      expect(await invoiceOf(invoiceId)).toMatchObject({
         status: 'CANCELLED',
-        cancelReason: 'Wrong patient selected',
+        cancelReason: 'Wrong patient sent in',
         cancelledById: receptionist.id,
       });
       expect(await appointmentStatus(appointment.id)).toBe('CONFIRMED');
       expect(await appointmentHistory(appointment.id)).toEqual([
-        ['CONFIRMED', 'CHECKED_IN'],
-        ['CHECKED_IN', 'CONFIRMED'],
+        ['CONFIRMED', 'ATTENDED'],
+        ['ATTENDED', 'CONFIRMED'],
       ]);
-      await ctx.dataSource.getRepository(AuditLog).findOneByOrFail({
-        action: 'APPOINTMENT_CHECK_IN_UNDONE',
-        entityId: appointment.id,
-      });
+      expect(await visitHistory(visitId)).toEqual([
+        [null, 'ACTIVE'],
+        ['ACTIVE', 'VOIDED'],
+      ]);
+      const actions = (await ctx.dataSource.getRepository(AuditLog).find()).map(
+        (l) => l.action,
+      );
+      expect(actions).toEqual(
+        expect.arrayContaining([
+          'APPOINTMENT_ATTEND_UNDONE',
+          'VISIT_VOIDED',
+          'INVOICE_CANCELLED',
+        ]),
+      );
 
-      // The appointment can be checked in again (the cancelled visit doesn't count).
-      await checkIn(appointment.id).expect(201);
-      expect(events.map((e) => e.name)).toEqual([
-        'visit.checked_in',
-        'visit.cancelled',
-        'visit.checked_in',
-      ]);
+      // It can attend again: a new visit and a new invoice.
+      const again = await attend(appointment.id).expect(201);
+      expect(again.body.id).not.toBe(visitId);
+      expect(again.body.invoiceId).not.toBe(invoiceId);
     });
 
-    it('cancel (patient left): visit and appointment CANCELLED with the same reason', async () => {
-      const appointment = await insertAppointment(p1, doctorA, local('09:30'));
-      const visit = (await checkIn(appointment.id).expect(201)).body;
-
-      await act(visit.id, 'cancel', receptionist, {
-        reason: 'Patient left',
-      }).expect(200);
-      const stored = await ctx.dataSource
-        .getRepository(Appointment)
-        .findOneByOrFail({ id: appointment.id });
-      expect(stored).toMatchObject({
-        status: 'CANCELLED',
-        cancelReason: 'Patient left',
-      });
-      await checkIn(appointment.id).expect(422);
+    it('blocked once the doctor has written a note', async () => {
+      const { appointment, visitId } = await attended();
+      await writeNote(visitId, doctorA);
+      const res = await undoAttend(appointment.id).expect(422);
+      expect(res.body.code).toBe('VISIT_HAS_NOTE');
+      expect(await appointmentStatus(appointment.id)).toBe('ATTENDED');
     });
 
-    it('the plain appointment endpoints cannot change a CHECKED_IN appointment', async () => {
-      const appointment = await insertAppointment(p1, doctorA, local('09:30'));
-      await checkIn(appointment.id).expect(201);
-      for (const [path, body] of [
-        ['confirm', {}],
-        ['cancel', { reason: 'nope nope' }],
-        ['no-show', {}],
-      ] as const) {
-        await request(server)
-          .patch(`/api/v1/appointments/${appointment.id}/${path}`)
-          .set('Authorization', bearer(receptionist))
-          .send(body)
-          .expect(422);
-      }
-      expect(await appointmentStatus(appointment.id)).toBe('CHECKED_IN');
+    it('blocked while the invoice has payments; allowed after voiding them', async () => {
+      const { appointment, invoiceId } = await attended();
+      const payment = await pay(invoiceId);
+      const res = await undoAttend(appointment.id).expect(422);
+      expect(res.body.code).toBe('INVOICE_HAS_PAYMENTS');
+      expect((await invoiceOf(invoiceId)).status).toBe('PARTIALLY_PAID');
+
+      await request(server)
+        .post(`/api/v1/payments/${payment.body.id}/void`)
+        .set('Authorization', bearer(receptionist))
+        .send({ reason: 'Typed the wrong amount' })
+        .expect(200);
+      await undoAttend(appointment.id).expect(200);
+      expect((await invoiceOf(invoiceId)).status).toBe('CANCELLED');
+    });
+
+    it('same local day only; only an ATTENDED appointment', async () => {
+      const { appointment } = await attended();
+      clock.current = local('09:00', '2026-11-04');
+      const res = await undoAttend(appointment.id).expect(422);
+      expect(res.body.code).toBe('UNDO_WRONG_DAY');
+
+      clock.current = local('09:00');
+      const confirmed = await insertAppointment(p2, doctorA, local('10:00'));
+      const wrong = await undoAttend(confirmed.id).expect(422);
+      expect(wrong.body.code).toBe('INVALID_STATUS_TRANSITION');
+    });
+
+    it('a walk-in is undone through its visit (same rules); an appointment visit too', async () => {
+      const walk = await walkIn({ patientId: p2.id }).expect(201);
+      const res = await undoVisit(walk.body.id).expect(200);
+      expect(res.body).toMatchObject({
+        status: 'VOIDED',
+        voidReason: 'Registered by mistake',
+      });
+      expect((await invoiceOf(walk.body.invoiceId)).status).toBe('CANCELLED');
+      const again = await undoVisit(walk.body.id).expect(422);
+      expect(again.body.code).toBe('VISIT_VOIDED');
+
+      const paid = await walkIn({ patientId: p3.id }).expect(201);
+      await pay(paid.body.invoiceId);
+      expect((await undoVisit(paid.body.id).expect(422)).body.code).toBe(
+        'INVOICE_HAS_PAYMENTS',
+      );
+
+      const { appointment, visitId } = await attended();
+      await undoVisit(visitId).expect(200);
+      expect(await appointmentStatus(appointment.id)).toBe('CONFIRMED');
     });
   });
 
-  // ---------- reading ----------
+  // ---------- day list ----------
 
-  describe('queue, day list, open visits and lists', () => {
+  describe('day list', () => {
+    it('appointments with their visit plus walk-ins, ordered by time, with billing', async () => {
+      const early = await insertAppointment(p1, doctorA, local('08:30'));
+      clock.current = local('08:40');
+      const visit = (await attend(early.id).expect(201)).body;
+      clock.current = local('09:20');
+      const walk = (
+        await walkIn({ patientId: p3.id, doctorId: doctorB.doctorId }).expect(
+          201,
+        )
+      ).body;
+      const later = await insertAppointment(p2, doctorB, local('15:00'));
+
+      const res = await dayList();
+      expect(
+        res.body.map(
+          (r: {
+            isWalkIn: boolean;
+            id: string | null;
+            visitId: string | null;
+          }) => [r.isWalkIn, r.id, r.visitId],
+        ),
+      ).toEqual([
+        [false, early.id, visit.id], // 08:30 start
+        [true, null, walk.id], // 09:20 attended
+        [false, later.id, null], // 15:00, not here yet
+      ]);
+      expect(res.body[0]).toMatchObject({
+        status: 'ATTENDED',
+        visitStatus: 'ACTIVE',
+        attendedAt: iso('08:40'),
+        noteStatus: null,
+        invoiceId: visit.invoiceId,
+        invoiceTotal: '300.00',
+        paymentStatus: 'UNPAID',
+      });
+      expect(res.body[1]).toMatchObject({
+        referenceCode: null,
+        startAt: null,
+        visitStatus: 'ACTIVE',
+        attendedAt: iso('09:20'),
+        patient: { name: 'Patient Three' },
+        nameMismatch: false,
+      });
+      expect(res.body[2]).toMatchObject({ paymentStatus: 'NOT_INVOICED' });
+    });
+
+    it('status filter takes several values (repeated or comma-separated); walk-ins count as ATTENDED', async () => {
+      const pending = await insertAppointment(
+        p1,
+        doctorA,
+        local('10:00'),
+        AppointmentStatus.PENDING,
+      );
+      const confirmed = await insertAppointment(p2, doctorA, local('11:00'));
+      await insertAppointment(
+        p3,
+        doctorB,
+        local('12:00'),
+        AppointmentStatus.CANCELLED,
+      );
+      const walk = (await walkIn({ patientId: p3.id }).expect(201)).body;
+
+      const ids = (body: { id: string | null; visitId: string | null }[]) =>
+        body.map((r) => r.id ?? r.visitId);
+      expect(
+        ids((await dayList(receptionist, '&status=PENDING,CONFIRMED')).body),
+      ).toEqual([pending.id, confirmed.id]);
+      expect(
+        ids(
+          (await dayList(receptionist, '&status=PENDING&status=ATTENDED')).body,
+        ),
+      ).toEqual([walk.id, pending.id]);
+      await request(server)
+        .get(`/api/v1/appointments/day?date=${TODAY}&status=WAITING`)
+        .set('Authorization', bearer(receptionist))
+        .expect(400);
+    });
+
+    it('allowedActions follow the status, the time and the undo rules', async () => {
+      clock.current = local('11:00');
+      const futurePending = await insertAppointment(
+        p1,
+        doctorA,
+        local('16:00'),
+        AppointmentStatus.PENDING,
+      );
+      const startedConfirmed = await insertAppointment(
+        p2,
+        doctorA,
+        local('10:00'),
+      );
+      const attendedFree = await insertAppointment(p3, doctorA, local('09:00'));
+      await attend(attendedFree.id).expect(201);
+      const p4 = await insertPatient('Patient Four', '+201000000004');
+      const attendedWithNote = await insertAppointment(
+        p4,
+        doctorB,
+        local('09:00'),
+      );
+      const noted = (await attend(attendedWithNote.id).expect(201)).body;
+      await writeNote(noted.id, doctorB);
+      const p5 = await insertPatient('Patient Five', '+201000000005');
+      const noShow = await insertAppointment(
+        p5,
+        doctorB,
+        local('08:00'),
+        AppointmentStatus.NO_SHOW,
+      );
+      const p6 = await insertPatient('Patient Six', '+201000000006');
+      const cancelled = await insertAppointment(
+        p6,
+        doctorB,
+        local('13:00'),
+        AppointmentStatus.CANCELLED,
+      );
+      const walk = (
+        await walkIn({ name: 'Walk In', phone: '01099999999' }).expect(201)
+      ).body;
+
+      const rows = (await dayList()).body as {
+        id: string | null;
+        visitId: string | null;
+        allowedActions: string[];
+      }[];
+      const actionsOf = (id: string) =>
+        rows.find((r) => (r.id ?? r.visitId) === id)?.allowedActions;
+      expect(actionsOf(futurePending.id)).toEqual([
+        'confirm',
+        'cancel',
+        'reschedule',
+        'attend',
+      ]);
+      expect(actionsOf(startedConfirmed.id)).toEqual([
+        'cancel',
+        'reschedule',
+        'noShow',
+        'attend',
+      ]);
+      expect(actionsOf(attendedFree.id)).toEqual(['undoAttend']);
+      expect(actionsOf(attendedWithNote.id)).toEqual([]);
+      expect(actionsOf(noShow.id)).toEqual(['undoNoShow']);
+      expect(actionsOf(cancelled.id)).toEqual([]);
+      expect(actionsOf(walk.id)).toEqual(['undoAttend']);
+
+      // The next day, nothing can be undone any more.
+      clock.current = local('09:00', '2026-11-04');
+      const nextDay = (await dayList()).body as typeof rows;
+      expect(
+        nextDay.find((r) => r.id === attendedFree.id)?.allowedActions,
+      ).toEqual([]);
+      expect(nextDay.find((r) => r.id === noShow.id)?.allowedActions).toEqual(
+        [],
+      );
+    });
+
+    it('a doctor gets only their own rows, PENDING included, without billing fields', async () => {
+      const pending = await insertAppointment(
+        p1,
+        doctorA,
+        local('10:00'),
+        AppointmentStatus.PENDING,
+      );
+      const seen = await insertAppointment(p2, doctorA, local('08:30'));
+      const visit = (await attend(seen.id).expect(201)).body;
+      const signedVisit = (await walkIn({ patientId: p3.id }).expect(201)).body;
+      await writeNote(signedVisit.id, doctorA);
+      await request(server)
+        .post(`/api/v1/visits/${signedVisit.id}/note/sign`)
+        .set('Authorization', bearer(doctorA))
+        .expect(200);
+      await insertAppointment(p3, doctorB, local('11:00'));
+
+      // A doctor's doctorId filter is always their own.
+      const res = await dayList(doctorA, `&doctorId=${doctorB.doctorId}`);
+      expect(
+        res.body.map(
+          (r: { id: string | null; visitId: string | null }) =>
+            r.id ?? r.visitId,
+        ),
+      ).toEqual([seen.id, signedVisit.id, pending.id]);
+      for (const row of res.body) {
+        expect(row).not.toHaveProperty('invoiceId');
+        expect(row).not.toHaveProperty('invoiceTotal');
+        expect(row).not.toHaveProperty('amountPaid');
+        expect(row).not.toHaveProperty('balance');
+        expect(row).not.toHaveProperty('paymentStatus');
+      }
+      expect(res.body[0]).toMatchObject({
+        visitId: visit.id,
+        noteStatus: null,
+        allowedActions: ['writeNote'],
+      });
+      expect(res.body[1]).toMatchObject({
+        noteStatus: 'SIGNED',
+        allowedActions: ['viewNote'],
+      });
+      expect(res.body[2]).toMatchObject({
+        status: 'PENDING',
+        allowedActions: [],
+      });
+    });
+  });
+
+  // ---------- queue and lists ----------
+
+  describe('queue and lists', () => {
     async function busyMorning() {
-      // 09:00 walk-in p1 (A), 09:10 check-in p2 (A), 09:20 walk-in p3 (B).
+      // 09:00 walk-in p1 (A), 09:10 attend p2 (A), 09:20 walk-in p3 (B).
       const v1 = (await walkIn({ patientId: p1.id }).expect(201)).body;
       clock.current = local('09:10');
       const appointment = await insertAppointment(p2, doctorA, local('09:15'));
-      const v2 = (await checkIn(appointment.id).expect(201)).body;
+      const v2 = (await attend(appointment.id).expect(201)).body;
       clock.current = local('09:20');
       const v3 = (
         await walkIn({ patientId: p3.id, doctorId: doctorB.doctorId }).expect(
           201,
         )
       ).body;
-      clock.current = local('09:15');
-      await act(v1.id, 'start', doctorA).expect(200);
-      clock.current = local('09:30');
       return { v1, v2, v3, appointment };
     }
 
-    it('queue: ordered by check-in time with waitingMinutes', async () => {
+    it("queue: the day's ACTIVE visits in attend order; doctors get their own", async () => {
       const { v1, v2, v3, appointment } = await busyMorning();
 
       const res = await request(server)
@@ -705,49 +799,30 @@ describe('Visits (e2e)', () => {
         v2.id,
         v3.id,
       ]);
-      expect(res.body[0]).toMatchObject({
-        status: 'IN_SESSION',
-        isWalkIn: true,
-        appointmentStartAt: null,
-        patient: { name: 'Patient One' },
-        service: { name: 'Physio' },
-        checkedInAt: iso('09:00'),
-        waitingMinutes: 15, // waited until the session started
-      });
-      expect(res.body[1]).toMatchObject({
-        status: 'WAITING',
+      expect(res.body[1]).toEqual({
+        visitId: v2.id,
         isWalkIn: false,
         appointmentId: appointment.id,
         appointmentStartAt: iso('09:15'),
-        waitingMinutes: 20,
+        patient: { id: p2.id, name: 'Patient Two', phone: '+201000000002' },
+        doctor: { id: doctorA.doctorId, name: expect.any(String) },
+        service: { id: serviceId, name: 'Physio', durationMinutes: 30 },
+        attendedAt: iso('09:10'),
+        hasNote: false,
+        noteStatus: null,
       });
-      expect(res.body[2].waitingMinutes).toBe(10);
 
-      const filtered = await request(server)
-        .get(`/api/v1/visits/queue?doctorId=${doctorB.doctorId}`)
-        .set('Authorization', bearer(receptionist))
-        .expect(200);
-      expect(filtered.body.map((q: { visitId: string }) => q.visitId)).toEqual([
-        v3.id,
-      ]);
-
-      // Doctors always get their own queue, whatever they ask for.
-      const mine = await request(server)
+      const own = await request(server)
         .get(`/api/v1/visits/queue?doctorId=${doctorB.doctorId}`)
         .set('Authorization', bearer(doctorA))
         .expect(200);
-      expect(mine.body).toEqual([]);
-      const ownQueue = await request(server)
-        .get('/api/v1/visits/queue')
-        .set('Authorization', bearer(doctorA))
-        .expect(200);
-      expect(ownQueue.body.map((q: { visitId: string }) => q.visitId)).toEqual([
+      expect(own.body.map((q: { visitId: string }) => q.visitId)).toEqual([
         v1.id,
         v2.id,
       ]);
 
-      // Finished visits leave the queue.
-      await act(v1.id, 'complete', doctorA).expect(200);
+      // Voided visits leave the queue.
+      await undoVisit(v1.id).expect(200);
       const after = await request(server)
         .get('/api/v1/visits/queue')
         .set('Authorization', bearer(receptionist))
@@ -758,101 +833,50 @@ describe('Visits (e2e)', () => {
       ]);
     });
 
-    it('day list includes the visit of each appointment and the walk-ins, ordered by time', async () => {
-      const { v1, v2, v3, appointment } = await busyMorning();
-      const later = await insertAppointment(p1, doctorB, local('15:00'));
-
-      const res = await request(server)
-        .get(`/api/v1/appointments/day?date=${TODAY}`)
-        .set('Authorization', bearer(receptionist))
-        .expect(200);
-      expect(
-        res.body.map(
-          (r: {
-            isWalkIn: boolean;
-            id: string | null;
-            visitId: string | null;
-          }) => [r.isWalkIn, r.id, r.visitId],
-        ),
-      ).toEqual([
-        [true, null, v1.id], // 09:00 check-in
-        [false, appointment.id, v2.id], // 09:15 start
-        [true, null, v3.id], // 09:20 check-in
-        [false, later.id, null], // 15:00, not here yet
-      ]);
-      expect(res.body[1]).toMatchObject({
-        status: 'CHECKED_IN',
-        visitStatus: 'WAITING',
-        checkedInAt: iso('09:10'),
-      });
-      expect(res.body[0]).toMatchObject({
-        referenceCode: null,
-        startAt: null,
-        visitStatus: 'IN_SESSION',
-        checkedInAt: iso('09:00'),
-        patient: { name: 'Patient One' },
-        nameMismatch: false,
-      });
-    });
-
-    it('open visits lists forgotten visits from previous days only', async () => {
-      clock.current = local('17:00', '2026-11-02');
-      const forgotten = (await walkIn({ patientId: p1.id }).expect(201)).body;
-      clock.current = local('09:00');
-      await walkIn({ patientId: p2.id }).expect(201);
-
-      const res = await request(server)
-        .get('/api/v1/visits/open')
-        .set('Authorization', bearer(receptionist))
-        .expect(200);
-      expect(res.body.map((v: { id: string }) => v.id)).toEqual([forgotten.id]);
-    });
-
     it('lists with filters; doctors see only their own; history; patient visits across doctors', async () => {
       const { v1, v2, v3 } = await busyMorning();
+      await undoVisit(v3.id).expect(200);
 
       const walkIns = await request(server)
         .get('/api/v1/visits?walkIn=true')
-        .set('Authorization', bearer(receptionist))
+        .set('Authorization', bearer(owner))
         .expect(200);
       expect(
         walkIns.body.items.map((v: { id: string }) => v.id).sort(),
       ).toEqual([v1.id, v3.id].sort());
-      const booked = await request(server)
-        .get('/api/v1/visits?walkIn=false&status=WAITING')
+      const voided = await request(server)
+        .get('/api/v1/visits?status=VOIDED')
         .set('Authorization', bearer(receptionist))
         .expect(200);
-      expect(booked.body.items.map((v: { id: string }) => v.id)).toEqual([
-        v2.id,
+      expect(voided.body.items.map((v: { id: string }) => v.id)).toEqual([
+        v3.id,
       ]);
 
       const mine = await request(server)
         .get('/api/v1/visits')
-        .set('Authorization', bearer(doctorB))
-        .expect(200);
-      expect(mine.body.items.map((v: { id: string }) => v.id)).toEqual([v3.id]);
-
-      await request(server)
-        .get(`/api/v1/visits/${v1.id}`)
-        .set('Authorization', bearer(doctorB))
-        .expect(404);
-      await request(server)
-        .get(`/api/v1/visits/${v1.id}/history`)
-        .set('Authorization', bearer(doctorB))
-        .expect(404);
-      const history = await request(server)
-        .get(`/api/v1/visits/${v1.id}/history`)
         .set('Authorization', bearer(doctorA))
         .expect(200);
+      expect(mine.body.items.map((v: { id: string }) => v.id)).toEqual([
+        v2.id,
+        v1.id,
+      ]);
+      await request(server)
+        .get(`/api/v1/visits/${v3.id}`)
+        .set('Authorization', bearer(doctorA))
+        .expect(404);
+      await request(server)
+        .get(`/api/v1/visits/${v3.id}/history`)
+        .set('Authorization', bearer(doctorA))
+        .expect(404);
+      const history = await request(server)
+        .get(`/api/v1/visits/${v3.id}/history`)
+        .set('Authorization', bearer(doctorB))
+        .expect(200);
       expect(history.body.map((h: { toStatus: string }) => h.toStatus)).toEqual(
-        ['WAITING', 'IN_SESSION'],
+        ['ACTIVE', 'VOIDED'],
       );
 
       // Patient visits: every doctor's, including for doctors.
-      await walkIn({ patientId: p3.id }).expect(409); // p3 still has an open visit
-      await act(v3.id, 'cancel', receptionist, { reason: 'Left early' }).expect(
-        200,
-      );
       await walkIn({ patientId: p3.id }).expect(201);
       const p3Visits = await request(server)
         .get(`/api/v1/patients/${p3.id}/visits`)
@@ -867,90 +891,5 @@ describe('Visits (e2e)', () => {
         ),
       ).toEqual(new Set([doctorA.doctorId, doctorB.doctorId]));
     });
-  });
-});
-
-describe('VisitCompletionPolicy hook (e2e)', () => {
-  let ctx: TestApp;
-  let receptionist: TestUser;
-  let doctor: DoctorUser;
-
-  beforeAll(async () => {
-    ctx = await createTestApp((builder) =>
-      builder
-        .overrideProvider(CLOCK)
-        .useValue({ now: () => new Date('2026-11-03T09:00:00+02:00') })
-        .overrideProvider(VISIT_COMPLETION_POLICY)
-        .useValue({
-          check: () =>
-            Promise.resolve({
-              allowed: false,
-              reason: 'A signed clinical note is required',
-            }),
-        }),
-    );
-    await resetDatabase(ctx.dataSource);
-    receptionist = await createLoggedInUser(
-      ctx.app,
-      ctx.dataSource,
-      UserRole.RECEPTIONIST,
-    );
-    doctor = await createLoggedInDoctor(ctx.app, ctx.dataSource);
-  });
-
-  afterAll(async () => {
-    await ctx.app.close();
-  });
-
-  it('a rejecting policy blocks completion with 422 and nothing changes', async () => {
-    const server = ctx.app.getHttpServer();
-    const service = await insertService(ctx.dataSource);
-    await assignService(ctx.dataSource, doctor.doctorId, service.id);
-    const emitted: string[] = [];
-    ctx.app
-      .get(EventEmitter2)
-      .on(VisitEvent.COMPLETED, () => emitted.push('completed'));
-
-    const visit = (
-      await request(server)
-        .post('/api/v1/visits/walk-in')
-        .set('Authorization', bearer(receptionist))
-        .send({
-          name: 'Walk In',
-          phone: '01099999999',
-          doctorId: doctor.doctorId,
-          serviceId: service.id,
-        })
-        .expect(201)
-    ).body;
-    await request(server)
-      .post(`/api/v1/visits/${visit.id}/start`)
-      .set('Authorization', bearer(doctor))
-      .expect(200);
-
-    const res = await request(server)
-      .post(`/api/v1/visits/${visit.id}/complete`)
-      .set('Authorization', bearer(doctor))
-      .expect(422);
-    expect(res.body).toMatchObject({
-      code: 'VISIT_COMPLETION_BLOCKED',
-      message: 'A signed clinical note is required',
-    });
-
-    const stored = await ctx.dataSource
-      .getRepository(Visit)
-      .findOneByOrFail({ id: visit.id });
-    expect(stored).toMatchObject({ status: 'IN_SESSION', completedAt: null });
-    expect(
-      await ctx.dataSource
-        .getRepository(VisitStatusHistory)
-        .countBy({ visitId: visit.id }),
-    ).toBe(2);
-    expect(
-      await ctx.dataSource
-        .getRepository(AuditLog)
-        .countBy({ action: 'VISIT_COMPLETED' }),
-    ).toBe(0);
-    expect(emitted).toEqual([]);
   });
 });

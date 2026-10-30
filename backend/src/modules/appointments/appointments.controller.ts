@@ -2,9 +2,10 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
-  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -105,15 +106,18 @@ export class AppointmentsController {
   }
 
   @Get('day')
-  @Auth(...DESK)
+  @Auth(...STAFF)
   @ApiOperation({
-    summary: 'Reception day list for a clinic local date',
+    summary: 'Day list for a clinic local date',
     description:
-      "Every appointment of the day (with its visit if checked in) plus the day's walk-ins (isWalkIn), ordered by time.",
+      "Every appointment of the day (with its visit if attended) plus the day's walk-ins (isWalkIn), ordered by time, each with allowedActions. A DOCTOR gets only their own rows, without billing fields.",
   })
   @ApiOkResponse({ type: [DayListEntryDto] })
-  day(@Query() query: DayListQueryDto): Promise<DayListEntryDto[]> {
-    return this.appointments.day(query);
+  day(
+    @Query() query: DayListQueryDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<DayListEntryDto[]> {
+    return this.appointments.day(query, user);
   }
 
   @Get('by-reference/:code')
@@ -182,9 +186,10 @@ export class AppointmentsController {
     return this.appointments.statusHistory(id, user);
   }
 
-  @Patch(':id/confirm')
+  @Post(':id/confirm')
   @Auth(...DESK)
-  @ApiOperation({ summary: 'PENDING -> CONFIRMED' })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'PENDING -> CONFIRMED (optional)' })
   @ApiOkResponse({ type: AppointmentResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
   @ApiUnprocessableEntityResponse(TRANSITION_ERRORS)
@@ -195,8 +200,9 @@ export class AppointmentsController {
     return this.appointments.confirm(id, actor);
   }
 
-  @Patch(':id/cancel')
+  @Post(':id/cancel')
   @Auth(...DESK)
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'PENDING/CONFIRMED -> CANCELLED (reason required)' })
   @ApiOkResponse({ type: AppointmentResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
@@ -209,9 +215,12 @@ export class AppointmentsController {
     return this.appointments.cancel(id, dto.reason, actor);
   }
 
-  @Patch(':id/no-show')
+  @Post(':id/no-show')
   @Auth(...DESK)
-  @ApiOperation({ summary: 'CONFIRMED -> NO_SHOW (only after the start time)' })
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'PENDING/CONFIRMED -> NO_SHOW (only after the start time)',
+  })
   @ApiOkResponse({ type: AppointmentResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
   @ApiUnprocessableEntityResponse(TRANSITION_ERRORS)
@@ -222,10 +231,32 @@ export class AppointmentsController {
     return this.appointments.noShow(id, actor);
   }
 
+  @Post(':id/undo-no-show')
+  @Auth(...DESK)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Marked as no-show by mistake: NO_SHOW -> CONFIRMED',
+    description:
+      'Same local day only. 409 SLOT_UNAVAILABLE / PATIENT_OVERLAP if the freed slot was booked meanwhile.',
+  })
+  @ApiOkResponse({ type: AppointmentResponseDto })
+  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  @ApiConflictResponse(BOOKING_CONFLICTS)
+  @ApiUnprocessableEntityResponse({
+    type: ErrorResponseDto,
+    description: 'UNDO_WRONG_DAY or INVALID_STATUS_TRANSITION',
+  })
+  undoNoShow(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentActor() actor: Actor,
+  ): Promise<AppointmentResponseDto> {
+    return this.appointments.undoNoShow(id, actor);
+  }
+
   @Post(':id/reschedule')
   @Auth(...DESK)
   @ApiOperation({
-    summary: 'Move a CONFIRMED appointment (atomically)',
+    summary: 'Move a PENDING or CONFIRMED appointment (atomically)',
     description:
       'Creates a new CONFIRMED appointment (rescheduledFromId = old id) and marks the old one RESCHEDULED. Returns the new appointment.',
   })

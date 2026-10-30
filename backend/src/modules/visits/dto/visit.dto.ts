@@ -64,7 +64,7 @@ export class WalkInDto {
 }
 
 export class VisitReasonDto {
-  @ApiProperty({ example: 'Checked in the wrong patient', maxLength: 255 })
+  @ApiProperty({ example: 'Sent in the wrong patient', maxLength: 255 })
   @Trim()
   @IsString()
   @Length(3, 255)
@@ -74,7 +74,7 @@ export class VisitReasonDto {
 export class ListVisitsQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({
     ...AT('2026-11-01T00:00:00+02:00'),
-    description: 'checked_in_at >= from',
+    description: 'attended_at >= from',
   })
   @IsOptional()
   @IsIsoWithOffset()
@@ -82,7 +82,7 @@ export class ListVisitsQueryDto extends PaginationQueryDto {
 
   @ApiPropertyOptional({
     ...AT('2026-12-01T00:00:00+02:00'),
-    description: 'checked_in_at < to',
+    description: 'attended_at < to',
   })
   @IsOptional()
   @IsIsoWithOffset()
@@ -165,28 +165,19 @@ export class VisitResponseDto {
   service: AppointmentServiceDto;
 
   @ApiProperty(AT('2026-11-05T09:50:00+02:00'))
-  checkedInAt: string;
+  attendedAt: string;
 
   @ApiProperty({ format: 'uuid' })
-  checkedInById: string;
+  attendedById: string;
 
   @ApiProperty({ nullable: true, type: String })
-  startedAt: string | null;
-
-  @ApiProperty({ nullable: true, type: String })
-  completedAt: string | null;
+  voidedAt: string | null;
 
   @ApiProperty({ format: 'uuid', nullable: true, type: String })
-  completedById: string | null;
+  voidedById: string | null;
 
   @ApiProperty({ nullable: true, type: String })
-  cancelledAt: string | null;
-
-  @ApiProperty({ format: 'uuid', nullable: true, type: String })
-  cancelledById: string | null;
-
-  @ApiProperty({ nullable: true, type: String })
-  cancelReason: string | null;
+  voidReason: string | null;
 
   @ApiProperty()
   createdAt: Date;
@@ -195,12 +186,15 @@ export class VisitResponseDto {
   updatedAt: Date;
 }
 
+// Attend and walk-in: the visit plus the invoice created with it.
+export class AttendResponseDto extends VisitResponseDto {
+  @ApiProperty({ format: 'uuid' })
+  invoiceId: string;
+}
+
 export class QueueEntryDto {
   @ApiProperty({ format: 'uuid' })
   visitId: string;
-
-  @ApiProperty({ enum: [VisitStatus.WAITING, VisitStatus.IN_SESSION] })
-  status: VisitStatus;
 
   @ApiProperty()
   isWalkIn: boolean;
@@ -226,17 +220,7 @@ export class QueueEntryDto {
   service: AppointmentServiceDto;
 
   @ApiProperty(AT('2026-11-05T09:50:00+02:00'))
-  checkedInAt: string;
-
-  @ApiProperty({ nullable: true, type: String })
-  startedAt: string | null;
-
-  @ApiProperty({
-    example: 12,
-    description:
-      'WAITING: minutes since check-in. IN_SESSION: minutes waited before the session started.',
-  })
-  waitingMinutes: number;
+  attendedAt: string;
 
   @ApiProperty({
     description: 'The visit has a clinical note (draft or signed)',

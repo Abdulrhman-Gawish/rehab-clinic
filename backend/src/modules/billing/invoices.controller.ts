@@ -10,7 +10,6 @@ import {
   Patch,
   Post,
   Query,
-  Res,
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
@@ -21,7 +20,6 @@ import {
   ApiTags,
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
-import type { Response } from 'express';
 import { Auth } from '../../common/decorators/api-auth.decorator.js';
 import { CurrentActor } from '../../common/decorators/current-user.decorator.js';
 import { ErrorResponseDto } from '../../common/dto/error-response.dto.js';
@@ -176,36 +174,5 @@ export class PatientBillingController {
     @Param('patientId', ParseUUIDPipe) patientId: string,
   ): Promise<PatientBalanceDto> {
     return this.invoices.balance(patientId);
-  }
-}
-
-@ApiTags('Billing: invoices')
-@Controller('visits')
-@Auth(...DESK)
-export class VisitInvoiceController {
-  constructor(private readonly invoices: InvoicesService) {}
-
-  @Post(':id/invoice')
-  @ApiOperation({
-    summary:
-      "Create the visit's invoice if missing (recovery for the automatic one)",
-    description:
-      'Idempotent: returns the existing invoice (200) or creates it (201).',
-  })
-  @ApiCreatedResponse({ type: InvoiceDetailDto })
-  @ApiOkResponse({ type: InvoiceDetailDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
-  @ApiUnprocessableEntityResponse({
-    type: ErrorResponseDto,
-    description: 'VISIT_CANCELLED',
-  })
-  async createForVisit(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentActor() actor: Actor,
-    @Res({ passthrough: true }) res: Response,
-  ): Promise<InvoiceDetailDto> {
-    const { invoice, created } = await this.invoices.createForVisit(id, actor);
-    res.status(created ? HttpStatus.CREATED : HttpStatus.OK);
-    return invoice;
   }
 }

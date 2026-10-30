@@ -24,6 +24,14 @@ export const ToLowerCaseTrimmed = () =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,
   );
 
+// Query arrays: ?status=A&status=B or ?status=A,B -> ['A', 'B'].
+export const ToArray = () =>
+  Transform(({ value }: { value: unknown }) =>
+    (Array.isArray(value) ? value : [value]).flatMap((item: unknown) =>
+      typeof item === 'string' ? item.split(',').map((s) => s.trim()) : [item],
+    ),
+  );
+
 // Query strings arrive as "true"/"false"; anything else is left for
 // @IsBoolean() to reject.
 export const ToBoolean = () =>

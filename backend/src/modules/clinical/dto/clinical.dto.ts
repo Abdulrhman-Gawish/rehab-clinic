@@ -12,6 +12,7 @@ import {
 import { Trim } from '../../../common/decorators/transform.decorators.js';
 import {
   PaginatedResponse,
+  PaginationQueryDto,
   type Paginated,
 } from '../../../common/dto/pagination.dto.js';
 import { NoteStatus } from '../clinical.enums.js';
@@ -101,6 +102,16 @@ export class AttachmentUploadDto {
   visitId?: string;
 }
 
+export class NeedsAttentionQueryDto extends PaginationQueryDto {
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'OWNER only; ignored for doctors (always their own)',
+  })
+  @IsOptional()
+  @IsUUID()
+  doctorId?: string;
+}
+
 // ---------- Outputs ----------
 
 export class ClinicalDoctorDto {
@@ -162,7 +173,7 @@ export class NoteVisitDto {
 
   @ApiProperty({
     example: '2026-11-05T09:50:00+02:00',
-    description: 'Check-in time of the visit',
+    description: 'When the patient attended',
   })
   date: string;
 
@@ -260,4 +271,31 @@ export class ClinicalHistoryDto {
     description: "All of the patient's attachments, newest first",
   })
   attachments: AttachmentResponseDto[];
+}
+
+export class NeedsAttentionEntryDto {
+  @ApiProperty({ format: 'uuid' })
+  visitId: string;
+
+  @ApiProperty({
+    example: '2026-11-05T09:50:00+02:00',
+    description: 'When the patient attended',
+  })
+  visitDate: string;
+
+  @ApiProperty({ example: { id: '…', name: 'Ahmed Hassan' } })
+  patient: { id: string; name: string };
+
+  @ApiProperty({ example: { id: '…', name: 'Physiotherapy session' } })
+  service: { id: string; name: string };
+
+  @ApiProperty({ type: ClinicalDoctorDto })
+  doctor: ClinicalDoctorDto;
+
+  @ApiProperty({
+    enum: [NoteStatus.DRAFT],
+    nullable: true,
+    description: 'null = no note yet',
+  })
+  noteStatus: NoteStatus | null;
 }

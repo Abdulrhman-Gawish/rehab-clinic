@@ -3,6 +3,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In } from 'typeorm';
 import {
   toPaginated,
+  type Paginated,
   type PaginationQueryDto,
 } from '../../common/dto/pagination.dto.js';
 import {
@@ -24,12 +25,18 @@ import { Visit } from '../visits/entities/visit.entity.js';
 import { VisitStatus } from '../visits/visit.enums.js';
 import { ClinicalAccessService } from './clinical-access.service.js';
 import { NoteStatus } from './clinical.enums.js';
-import { toAttachment, toClinicalNote } from './clinical.mapper.js';
+import {
+  toAttachment,
+  toClinicalNote,
+  toNeedsAttentionEntry,
+} from './clinical.mapper.js';
 import type {
   AddendumInputDto,
   ClinicalHistoryDto,
   ClinicalNoteInputDto,
   ClinicalNoteResponseDto,
+  NeedsAttentionEntryDto,
+  NeedsAttentionQueryDto,
 } from './dto/clinical.dto.js';
 import { ClinicalNoteAddendum } from './entities/clinical-note-addendum.entity.js';
 import {
@@ -47,9 +54,6 @@ const NOTE_FIELDS = [
   'plan',
   'painScore',
 ] as const satisfies readonly (keyof ClinicalNote)[];
-
-// Notes can be written once the session has started.
-const WRITABLE_VISIT_STATUSES = [VisitStatus.IN_SESSION, VisitStatus.COMPLETED];
 
 @Injectable()
 export class ClinicalNotesService {
@@ -73,10 +77,11 @@ export class ClinicalNotesService {
     try {
       await this.dataSource.transaction(async (manager) => {
         const visit = await this.ownVisit(visitId, user, manager);
-        if (!WRITABLE_VISIT_STATUSES.includes(visit.status)) {
+        // Any day after the visit, as long as it wasn't voided.
+        if (visit.status !== VisitStatus.ACTIVE) {
           throw unprocessable(
             ErrorCode.NOTE_NOT_ALLOWED,
-            'A note can only be written once the session has started (IN_SESSION or COMPLETED)',
+            'A note can only be written for an ACTIVE visit',
             { visitStatus: visit.status },
           );
         }
@@ -252,7 +257,7 @@ export class ClinicalNotesService {
     const [notes, total] = await this.noteQuery()
       .where('note.patientId = :patientId', { patientId })
       .andWhere('note.status = :signed', { signed: NoteStatus.SIGNED })
-      .orderBy('visit.checkedInAt', 'DESC')
+      .orderBy('visit.attendedAt', 'DESC')
       .addOrderBy('note.id', 'DESC')
       .skip(query.skip)
       .take(query.limit)
@@ -268,6 +273,56 @@ export class ClinicalNotesService {
         toAttachment(a, (d) => this.time.toIso(d)),
       ),
     };
+  }
+
+  /**
+   * ACTIVE visits whose note is missing or still a DRAFT, oldest first.
+   * A DOCTOR sees only their own; the OWNER all (optionally one doctor's).
+   */
+  async needsAttention(
+    query: NeedsAttentionQueryDto,
+    user: AuthenticatedUser,
+  ): Promise<Paginated<NeedsAttentionEntryDto>> {
+    const doctorId = (await this.doctors.scopeFor(user)) ?? query.doctorId;
+    const qb = this.dataSource
+      .getRepository(Visit)
+      .createQueryBuilder('visit')
+      .innerJoinAndSelect('visit.patient', 'patient')
+      .innerJoinAndSelect('visit.service', 'service')
+      .innerJoinAndSelect('visit.doctor', 'doctor')
+      .innerJoinAndSelect('doctor.user', 'doctorUser')
+      .where('visit.status = :active', { active: VisitStatus.ACTIVE })
+      .andWhere(
+        'NOT EXISTS (SELECT 1 FROM clinical_notes signed WHERE signed.visit_id = visit.id AND signed.status = :signed)',
+        { signed: NoteStatus.SIGNED },
+      );
+    if (doctorId) qb.andWhere('visit.doctorId = :doctorId', { doctorId });
+    const [visits, total] = await qb
+      .orderBy('visit.attendedAt', 'ASC')
+      .addOrderBy('visit.id', 'ASC')
+      .skip(query.skip)
+      .take(query.limit)
+      .getManyAndCount();
+
+    // Any note left on these visits is a DRAFT.
+    const drafts = visits.length
+      ? await this.dataSource.getRepository(ClinicalNote).find({
+          where: { visitId: In(visits.map((v) => v.id)) },
+          select: { visitId: true },
+        })
+      : [];
+    const hasDraft = new Set(drafts.map((note) => note.visitId));
+    return toPaginated(
+      visits.map((visit) =>
+        toNeedsAttentionEntry(
+          visit,
+          hasDraft.has(visit.id) ? NoteStatus.DRAFT : null,
+          (d) => this.time.toIso(d),
+        ),
+      ),
+      total,
+      query,
+    );
   }
 
   // ---------- Internals ----------

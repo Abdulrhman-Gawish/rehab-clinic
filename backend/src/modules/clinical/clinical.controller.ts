@@ -36,7 +36,11 @@ import {
   CurrentUser,
 } from '../../common/decorators/current-user.decorator.js';
 import { ErrorResponseDto } from '../../common/dto/error-response.dto.js';
-import { PaginationQueryDto } from '../../common/dto/pagination.dto.js';
+import {
+  PaginatedResponse,
+  PaginationQueryDto,
+  type Paginated,
+} from '../../common/dto/pagination.dto.js';
 import { UserRole } from '../../common/enums/user-role.enum.js';
 import type {
   Actor,
@@ -56,6 +60,8 @@ import {
   ClinicalNoteResponseDto,
   MedicalInfoDto,
   MedicalInfoResponseDto,
+  NeedsAttentionEntryDto,
+  NeedsAttentionQueryDto,
 } from './dto/clinical.dto.js';
 import { MedicalInfoService } from './medical-info.service.js';
 import { PatientAttachmentsService } from './patient-attachments.service.js';
@@ -202,7 +208,7 @@ export class VisitNoteController {
   @Auth(UserRole.DOCTOR)
   @ApiOperation({
     summary:
-      'Start the note as a DRAFT (the visit’s doctor; IN_SESSION or COMPLETED)',
+      'Start the note as a DRAFT (the visit’s doctor; ACTIVE visits, any day after)',
   })
   @ApiCreatedResponse({ type: ClinicalNoteResponseDto })
   @ApiConflictResponse({
@@ -263,6 +269,21 @@ export class VisitNoteController {
 @Controller('clinical-notes')
 export class ClinicalNotesController {
   constructor(private readonly notes: ClinicalNotesService) {}
+
+  @Get('needs-attention')
+  @Auth(...READERS)
+  @ApiOperation({
+    summary: 'ACTIVE visits without a SIGNED note (none yet, or a DRAFT)',
+    description:
+      'Oldest visit first. DOCTOR: own visits only. OWNER: all, optionally filtered by doctorId.',
+  })
+  @ApiOkResponse({ type: PaginatedResponse(NeedsAttentionEntryDto) })
+  needsAttention(
+    @Query() query: NeedsAttentionQueryDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<Paginated<NeedsAttentionEntryDto>> {
+    return this.notes.needsAttention(query, user);
+  }
 
   @Post(':id/addenda')
   @Auth(UserRole.DOCTOR)

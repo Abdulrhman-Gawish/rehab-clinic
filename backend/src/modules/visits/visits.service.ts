@@ -1,5 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
@@ -24,14 +23,25 @@ import type {
 } from '../../common/interfaces/authenticated-request.interface.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
 import { isoToDate } from '../../common/time/clinic-time.util.js';
+import { isZeroMoney } from '../../common/utils/money.util.js';
 import { isUniqueViolation } from '../../common/utils/pg-errors.js';
+import {
+  assertDeskAction,
+  assertWalkInUndo,
+  DeskAction,
+} from '../appointments/appointment-actions.js';
 import { AppointmentTrigger } from '../appointments/appointment-state-machine.js';
-import { AppointmentWriter } from '../appointments/appointment-writer.service.js';
+import {
+  AppointmentWriter,
+  mapBookingError,
+} from '../appointments/appointment-writer.service.js';
 import { AppointmentStatus } from '../appointments/appointment.enums.js';
 import { AvailabilityService } from '../appointments/availability/availability.service.js';
 import { Appointment } from '../appointments/entities/appointment.entity.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
+import type { Invoice } from '../billing/entities/invoice.entity.js';
+import { InvoicesService } from '../billing/invoices.service.js';
 import { ClinicalNote } from '../clinical/entities/clinical-note.entity.js';
 import { DoctorAccessService } from '../doctors/doctor-access.service.js';
 import {
@@ -39,6 +49,7 @@ import {
   PatientsService,
 } from '../patients/patients.service.js';
 import type {
+  AttendResponseDto,
   ListVisitsQueryDto,
   QueueEntryDto,
   QueueQueryDto,
@@ -47,54 +58,24 @@ import type {
   WalkInDto,
 } from './dto/visit.dto.js';
 import { VisitStatusHistory } from './entities/visit-status-history.entity.js';
+import { Visit, VISIT_APPOINTMENT_UNIQUE } from './entities/visit.entity.js';
+import { VisitStatus } from './visit.enums.js';
 import {
-  Visit,
-  VISIT_APPOINTMENT_UNIQUE,
-  VISIT_DOCTOR_IN_SESSION_UNIQUE,
-  VISIT_PATIENT_OPEN_UNIQUE,
-} from './entities/visit.entity.js';
-import {
-  VISIT_COMPLETION_POLICY,
-  type VisitCompletionPolicy,
-} from './visit-completion-policy.js';
-import { assertVisitTransition } from './visit-state-machine.js';
-import { OPEN_VISIT_STATUSES, VisitStatus } from './visit.enums.js';
-import { VisitEvent } from './visit.events.js';
-import {
-  toEventPayload,
   toQueueEntry,
   toVisitHistoryEntry,
   toVisitResponse,
 } from './visit.mapper.js';
 
-// Unique-index violations -> stable 409 codes. Mapped outside the failed
-// (aborted) transaction.
+// Unique-index and exclusion violations -> stable 409 codes. Mapped outside
+// the failed (aborted) transaction.
 function mapVisitError(error: unknown): unknown {
   if (isUniqueViolation(error, VISIT_APPOINTMENT_UNIQUE)) {
     return conflict(
-      ErrorCode.ALREADY_CHECKED_IN,
-      'This appointment is already checked in',
+      ErrorCode.ALREADY_ATTENDED,
+      'This appointment has already attended',
     );
   }
-  if (isUniqueViolation(error, VISIT_PATIENT_OPEN_UNIQUE)) {
-    return conflict(
-      ErrorCode.PATIENT_HAS_OPEN_VISIT,
-      'The patient already has an open visit',
-    );
-  }
-  if (isUniqueViolation(error, VISIT_DOCTOR_IN_SESSION_UNIQUE)) {
-    return conflict(
-      ErrorCode.DOCTOR_ALREADY_IN_SESSION,
-      'The doctor already has a session in progress',
-    );
-  }
-  return error;
-}
-
-interface Committed {
-  visit: Visit;
-  event: VisitEvent;
-  at: Date;
+  return mapBookingError(error);
 }
 
 @Injectable()
@@ -107,76 +88,54 @@ export class VisitsService {
     private readonly appointmentWriter: AppointmentWriter,
     private readonly availability: AvailabilityService,
     private readonly patients: PatientsService,
+    private readonly invoices: InvoicesService,
     private readonly access: DoctorAccessService,
     private readonly auditService: AuditService,
     private readonly time: ClinicTimeService,
-    private readonly events: EventEmitter2,
-    @Inject(VISIT_COMPLETION_POLICY)
-    private readonly completionPolicy: VisitCompletionPolicy,
   ) {}
 
-  // ---------- Commands ----------
+  // ---------- Commands (OWNER, RECEPTIONIST) ----------
 
   /**
-   * Check-in on the appointment's local date (late arrival is fine). Creates
-   * the WAITING visit and moves the appointment to CHECKED_IN (a PENDING one
-   * passes through CONFIRMED: two history rows), all in one transaction.
+   * The patient entered the doctor: on the appointment's local date only.
+   * The appointment becomes ATTENDED (from PENDING or CONFIRMED), and the
+   * ACTIVE visit and its invoice are created, all in one transaction.
    */
-  checkIn(appointmentId: string, actor: Actor): Promise<VisitResponseDto> {
+  async attend(
+    appointmentId: string,
+    actor: Actor,
+  ): Promise<AttendResponseDto> {
     return this.execute(async (manager) => {
-      const appointment = await manager.findOne(Appointment, {
-        where: { id: appointmentId },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!appointment) throw new NotFoundException('Appointment not found');
-
-      const appointmentDate = this.time.localDate(appointment.startAt);
-      const today = this.time.today();
-      if (appointmentDate !== today) {
-        throw unprocessable(
-          ErrorCode.CHECK_IN_WRONG_DAY,
-          'Check-in is only possible on the day of the appointment',
-          { appointmentDate, today },
-        );
-      }
+      const appointment = await this.lockAppointment(appointmentId, manager);
       // Friendly answer; the unique index is the real guarantee.
-      if (appointment.status === AppointmentStatus.CHECKED_IN) {
+      if (appointment.status === AppointmentStatus.ATTENDED) {
         throw conflict(
-          ErrorCode.ALREADY_CHECKED_IN,
-          'This appointment is already checked in',
+          ErrorCode.ALREADY_ATTENDED,
+          'This appointment has already attended',
         );
       }
-
-      const trigger = AppointmentTrigger.CHECK_IN;
-      if (appointment.status === AppointmentStatus.PENDING) {
-        await this.appointmentWriter.changeStatus(
-          manager,
-          appointment,
-          AppointmentStatus.CONFIRMED,
-          actor,
-          { trigger },
-        );
-      }
+      assertDeskAction(DeskAction.ATTEND, appointment.status, {
+        isToday: this.isToday(appointment.startAt),
+      });
       await this.appointmentWriter.changeStatus(
         manager,
         appointment,
-        AppointmentStatus.CHECKED_IN,
+        AppointmentStatus.ATTENDED,
         actor,
-        { trigger },
+        { trigger: AppointmentTrigger.ATTEND },
       );
-
-      const visit = await this.insertVisit(manager, actor, {
+      return this.insertVisit(manager, actor, {
         appointmentId: appointment.id,
         patientId: appointment.patientId,
         doctorId: appointment.doctorId,
         serviceId: appointment.serviceId,
       });
-      return { visit, event: VisitEvent.CHECKED_IN, at: visit.checkedInAt };
     });
   }
 
-  // Walk-in: no appointment, never blocks booking slots.
-  walkIn(dto: WalkInDto, actor: Actor): Promise<VisitResponseDto> {
+  // Walk-in: attended now, with its invoice, no appointment. Never blocks
+  // booking slots.
+  walkIn(dto: WalkInDto, actor: Actor): Promise<AttendResponseDto> {
     assertDeskPatientInput(dto);
 
     return this.execute(async (manager) => {
@@ -187,122 +146,76 @@ export class VisitsService {
         {},
         manager,
       );
-
       const patient = await this.patients.resolveForDesk(dto, actor, manager);
-      const visit = await this.insertVisit(manager, actor, {
+      return this.insertVisit(manager, actor, {
         appointmentId: null,
         patientId: patient.id,
         doctorId: context.doctor.id,
         serviceId: context.service.id,
       });
-      return { visit, event: VisitEvent.CHECKED_IN, at: visit.checkedInAt };
-    });
-  }
-
-  // Checked in by mistake: visit CANCELLED, appointment back to CONFIRMED.
-  undoCheckIn(
-    id: string,
-    reason: string,
-    actor: Actor,
-  ): Promise<VisitResponseDto> {
-    return this.closeWaiting(id, reason, actor, 'undo');
-  }
-
-  // Patient left before being seen: visit and appointment CANCELLED.
-  cancel(id: string, reason: string, actor: Actor): Promise<VisitResponseDto> {
-    return this.closeWaiting(id, reason, actor, 'left');
-  }
-
-  // WAITING -> IN_SESSION. The visit's doctor or the OWNER.
-  start(
-    id: string,
-    user: AuthenticatedUser,
-    actor: Actor,
-  ): Promise<VisitResponseDto> {
-    return this.execute(async (manager) => {
-      const visit = await this.lockOwnVisit(id, user, manager);
-      const from = visit.status;
-      assertVisitTransition(from, VisitStatus.IN_SESSION);
-
-      const now = this.time.now();
-      visit.status = VisitStatus.IN_SESSION;
-      visit.startedAt = now;
-      await manager.getRepository(Visit).save(visit);
-      await this.recordHistory(
-        manager,
-        visit.id,
-        from,
-        visit.status,
-        actor,
-        null,
-      );
-      await this.audit(manager, actor, AuditAction.VISIT_STARTED, visit, {
-        oldValues: { status: from },
-        newValues: { status: visit.status, startedAt: now.toISOString() },
-      });
-      return { visit, event: VisitEvent.STARTED, at: now };
     });
   }
 
   /**
-   * IN_SESSION -> COMPLETED (the visit's doctor or the OWNER). The
-   * VisitCompletionPolicy is consulted first; the linked appointment becomes
-   * COMPLETED in the same transaction.
+   * Attended by mistake (same local day, no note, nothing paid): the visit
+   * is VOIDED, its invoice CANCELLED and the appointment back to CONFIRMED.
    */
-  complete(
-    id: string,
-    user: AuthenticatedUser,
+  async undoAttend(
+    appointmentId: string,
+    reason: string,
     actor: Actor,
   ): Promise<VisitResponseDto> {
-    return this.execute(async (manager) => {
-      const visit = await this.lockOwnVisit(id, user, manager);
-      const from = visit.status;
-      assertVisitTransition(from, VisitStatus.COMPLETED);
+    const visit = await this.run((manager) =>
+      this.undoAppointmentAttend(manager, appointmentId, reason, actor),
+    );
+    return this.load(visit.id);
+  }
 
-      const decision = await this.completionPolicy.check(
-        { visit, actor },
-        manager,
-      );
-      if (!decision.allowed) {
-        throw unprocessable(
-          ErrorCode.VISIT_COMPLETION_BLOCKED,
-          decision.reason,
-        );
-      }
-
-      const now = this.time.now();
-      visit.status = VisitStatus.COMPLETED;
-      visit.completedAt = now;
-      visit.completedById = actor.userId;
-      await manager.getRepository(Visit).save(visit);
-      await this.recordHistory(
-        manager,
-        visit.id,
-        from,
-        visit.status,
-        actor,
-        null,
-      );
-      await this.audit(manager, actor, AuditAction.VISIT_COMPLETED, visit, {
-        oldValues: { status: from },
-        newValues: { status: visit.status, completedAt: now.toISOString() },
-      });
-
-      if (visit.appointmentId) {
-        const appointment = await this.lockAppointment(
-          visit.appointmentId,
+  /**
+   * Undo through the visit: the way to undo a walk-in. A visit of an
+   * appointment is undone exactly like POST /appointments/:id/undo-attend.
+   */
+  async undoVisit(
+    visitId: string,
+    reason: string,
+    actor: Actor,
+  ): Promise<VisitResponseDto> {
+    await this.run(async (manager) => {
+      const found = await manager.findOneBy(Visit, { id: visitId });
+      if (!found) throw new NotFoundException('Visit not found');
+      if (found.appointmentId) {
+        // Same lock order as every appointment write: appointment first.
+        return this.undoAppointmentAttend(
           manager,
-        );
-        await this.appointmentWriter.changeStatus(
-          manager,
-          appointment,
-          AppointmentStatus.COMPLETED,
+          found.appointmentId,
+          reason,
           actor,
-          { trigger: AppointmentTrigger.VISIT_COMPLETE },
+          visitId,
         );
       }
-      return { visit, event: VisitEvent.COMPLETED, at: now };
+      const visit = await manager.findOneOrFail(Visit, {
+        where: { id: visitId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (visit.status === VisitStatus.VOIDED) {
+        throw unprocessable(
+          ErrorCode.VISIT_VOIDED,
+          'The visit is already voided',
+        );
+      }
+      const invoice = await this.invoices.lockLiveInvoiceOfVisit(
+        visit.id,
+        manager,
+      );
+      assertWalkInUndo({
+        isToday: this.isToday(visit.attendedAt),
+        visitHasNote: await this.hasNote(visit.id, manager),
+        invoiceHasPayments:
+          invoice !== null && !isZeroMoney(invoice.amountPaid),
+      });
+      return this.voidVisit(manager, visit, invoice, reason, actor);
     });
+    return this.load(visitId);
   }
 
   // ---------- Queries ----------
@@ -341,11 +254,11 @@ export class VisitsService {
   ): Promise<Paginated<VisitResponseDto>> {
     const qb = await this.scopedQuery(user);
     if (query.from)
-      qb.andWhere('visit.checkedInAt >= :from', {
+      qb.andWhere('visit.attendedAt >= :from', {
         from: isoToDate(query.from),
       });
     if (query.to)
-      qb.andWhere('visit.checkedInAt < :to', { to: isoToDate(query.to) });
+      qb.andWhere('visit.attendedAt < :to', { to: isoToDate(query.to) });
     if (query.doctorId)
       qb.andWhere('visit.doctorId = :doctorId', { doctorId: query.doctorId });
     if (query.patientId) {
@@ -365,22 +278,23 @@ export class VisitsService {
     return this.paginate(qb, query);
   }
 
-  // WAITING/IN_SESSION visits of a local day, oldest check-in first.
+  // ACTIVE visits of a local day, in the order they attended.
   async queue(
     query: QueueQueryDto,
     user: AuthenticatedUser,
   ): Promise<QueueEntryDto[]> {
     const { start, end } = this.time.dayBounds(query.date ?? this.time.today());
-    const qb = (await this.scopedQuery(user))
-      .andWhere('visit.status IN (:...open)', { open: OPEN_VISIT_STATUSES })
-      .andWhere('visit.checkedInAt >= :start AND visit.checkedInAt < :end', {
+    // A doctor always gets their own queue, whatever doctorId says.
+    const doctorId = (await this.access.scopeFor(user)) ?? query.doctorId;
+    const qb = this.baseQuery()
+      .where('visit.status = :active', { active: VisitStatus.ACTIVE })
+      .andWhere('visit.attendedAt >= :start AND visit.attendedAt < :end', {
         start,
         end,
       })
-      .orderBy('visit.checkedInAt', 'ASC')
+      .orderBy('visit.attendedAt', 'ASC')
       .addOrderBy('visit.id', 'ASC');
-    if (query.doctorId)
-      qb.andWhere('visit.doctorId = :doctorId', { doctorId: query.doctorId });
+    if (doctorId) qb.andWhere('visit.doctorId = :doctorId', { doctorId });
 
     const visits = await qb.getMany();
     const notes = visits.length
@@ -390,23 +304,11 @@ export class VisitsService {
         })
       : [];
     const noteStatus = new Map(notes.map((n) => [n.visitId, n.status]));
-    const now = this.time.now();
     return visits.map((visit) =>
-      toQueueEntry(visit, noteStatus.get(visit.id) ?? null, now, (d) =>
+      toQueueEntry(visit, noteStatus.get(visit.id) ?? null, (d) =>
         this.time.toIso(d),
       ),
     );
-  }
-
-  // Visits still WAITING/IN_SESSION from previous days (forgotten ones).
-  async openFromPreviousDays(): Promise<VisitResponseDto[]> {
-    const { start } = this.time.dayBounds(this.time.today());
-    const visits = await this.baseQuery()
-      .where('visit.status IN (:...open)', { open: OPEN_VISIT_STATUSES })
-      .andWhere('visit.checkedInAt < :start', { start })
-      .orderBy('visit.checkedInAt', 'ASC')
-      .getMany();
-    return visits.map((visit) => this.toDto(visit));
   }
 
   // Visit metadata of a patient across all doctors (no clinical data).
@@ -423,108 +325,115 @@ export class VisitsService {
 
   // ---------- Internals ----------
 
-  /**
-   * Runs `work` in a transaction, maps unique violations to 409s and emits
-   * the domain event ONLY after the commit succeeded.
-   */
-  private async execute(
-    work: (manager: EntityManager) => Promise<Committed>,
-  ): Promise<VisitResponseDto> {
-    let committed: Committed;
+  // Runs `work` in a transaction and maps constraint violations to 409s.
+  private async run<T>(
+    work: (manager: EntityManager) => Promise<T>,
+  ): Promise<T> {
     try {
-      committed = await this.dataSource.transaction(work);
+      return await this.dataSource.transaction(work);
     } catch (error) {
       throw mapVisitError(error);
     }
-    this.events.emit(
-      committed.event,
-      toEventPayload(committed.visit, committed.at),
-    );
-    return this.load(committed.visit.id);
   }
 
-  private closeWaiting(
-    id: string,
+  private async execute(
+    work: (
+      manager: EntityManager,
+    ) => Promise<{ visit: Visit; invoiceId: string }>,
+  ): Promise<AttendResponseDto> {
+    const { visit, invoiceId } = await this.run(work);
+    return { ...(await this.load(visit.id)), invoiceId };
+  }
+
+  private async undoAppointmentAttend(
+    manager: EntityManager,
+    appointmentId: string,
     reason: string,
     actor: Actor,
-    mode: 'undo' | 'left',
-  ): Promise<VisitResponseDto> {
-    return this.execute(async (manager) => {
-      const visit = await this.lockVisit(id, manager);
-      const from = visit.status;
-      // Only WAITING visits can be undone/cancelled.
-      assertVisitTransition(from, VisitStatus.CANCELLED);
-
-      const now = this.time.now();
-      visit.status = VisitStatus.CANCELLED;
-      visit.cancelledAt = now;
-      visit.cancelledById = actor.userId;
-      visit.cancelReason = reason;
-      await manager.getRepository(Visit).save(visit);
-      await this.recordHistory(
-        manager,
-        visit.id,
-        from,
-        visit.status,
-        actor,
-        reason,
-      );
-      await this.audit(
-        manager,
-        actor,
-        mode === 'undo'
-          ? AuditAction.VISIT_CHECK_IN_UNDONE
-          : AuditAction.VISIT_CANCELLED,
-        visit,
-        {
-          oldValues: { status: from },
-          newValues: { status: visit.status, reason },
-        },
-      );
-
-      if (visit.appointmentId) {
-        const appointment = await this.lockAppointment(
-          visit.appointmentId,
-          manager,
-        );
-        await this.appointmentWriter.changeStatus(
-          manager,
-          appointment,
-          mode === 'undo'
-            ? AppointmentStatus.CONFIRMED
-            : AppointmentStatus.CANCELLED,
-          actor,
-          {
-            reason,
-            trigger:
-              mode === 'undo'
-                ? AppointmentTrigger.UNDO_CHECK_IN
-                : AppointmentTrigger.VISIT_CANCEL,
-          },
-        );
-      }
-      return { visit, event: VisitEvent.CANCELLED, at: now };
+    expectedVisitId?: string,
+  ): Promise<Visit> {
+    const appointment = await this.lockAppointment(appointmentId, manager);
+    const visit = await manager.findOne(Visit, {
+      where: { appointmentId, status: VisitStatus.ACTIVE },
+      lock: { mode: 'pessimistic_write' },
     });
+    if (expectedVisitId && visit?.id !== expectedVisitId) {
+      throw unprocessable(
+        ErrorCode.VISIT_VOIDED,
+        'The visit is already voided',
+      );
+    }
+    const invoice = visit
+      ? await this.invoices.lockLiveInvoiceOfVisit(visit.id, manager)
+      : null;
+    assertDeskAction(DeskAction.UNDO_ATTEND, appointment.status, {
+      isToday: this.isToday(appointment.startAt),
+      visitHasNote: visit ? await this.hasNote(visit.id, manager) : false,
+      invoiceHasPayments: invoice !== null && !isZeroMoney(invoice.amountPaid),
+    });
+    // ATTENDED always has its ACTIVE visit (same transaction).
+    if (!visit)
+      throw new Error(`Attended appointment ${appointmentId} has no visit`);
+
+    await this.voidVisit(manager, visit, invoice, reason, actor);
+    await this.appointmentWriter.changeStatus(
+      manager,
+      appointment,
+      AppointmentStatus.CONFIRMED,
+      actor,
+      { reason, trigger: AppointmentTrigger.UNDO_ATTEND },
+    );
+    return visit;
+  }
+
+  // ACTIVE -> VOIDED, and its invoice (locked and checked unpaid by the
+  // caller) cancelled with the same reason.
+  private async voidVisit(
+    manager: EntityManager,
+    visit: Visit,
+    invoice: Invoice | null,
+    reason: string,
+    actor: Actor,
+  ): Promise<Visit> {
+    if (invoice) {
+      await this.invoices.cancelForVoidedVisit(manager, invoice, reason, actor);
+    }
+
+    visit.status = VisitStatus.VOIDED;
+    visit.voidedAt = this.time.now();
+    visit.voidedById = actor.userId;
+    visit.voidReason = reason;
+    await manager.getRepository(Visit).save(visit);
+    await this.recordHistory(
+      manager,
+      visit.id,
+      VisitStatus.ACTIVE,
+      VisitStatus.VOIDED,
+      actor,
+      reason,
+    );
+    await this.audit(manager, actor, AuditAction.VISIT_VOIDED, visit, {
+      oldValues: { status: VisitStatus.ACTIVE },
+      newValues: { status: visit.status, reason, invoiceId: invoice?.id },
+    });
+    return visit;
   }
 
   private async insertVisit(
     manager: EntityManager,
     actor: Actor,
     data: Pick<Visit, 'appointmentId' | 'patientId' | 'doctorId' | 'serviceId'>,
-  ): Promise<Visit> {
+  ): Promise<{ visit: Visit; invoiceId: string }> {
     const repository = manager.getRepository(Visit);
     const visit = await repository.save(
       repository.create({
         ...data,
-        status: VisitStatus.WAITING,
-        checkedInAt: this.time.now(),
-        checkedInById: actor.userId as string,
-        startedAt: null,
-        completedAt: null,
-        completedById: null,
-        cancelledAt: null,
-        cancelledById: null,
-        cancelReason: null,
+        status: VisitStatus.ACTIVE,
+        attendedAt: this.time.now(),
+        attendedById: actor.userId as string,
+        voidedAt: null,
+        voidedById: null,
+        voidReason: null,
       }),
     );
     await this.recordHistory(
@@ -535,17 +444,26 @@ export class VisitsService {
       actor,
       null,
     );
-    await this.audit(manager, actor, AuditAction.VISIT_CHECKED_IN, visit, {
+    await this.audit(manager, actor, AuditAction.VISIT_ATTENDED, visit, {
       newValues: {
         appointmentId: visit.appointmentId,
         patientId: visit.patientId,
         doctorId: visit.doctorId,
         serviceId: visit.serviceId,
         walkIn: visit.appointmentId === null,
-        checkedInAt: visit.checkedInAt.toISOString(),
+        attendedAt: visit.attendedAt.toISOString(),
       },
     });
-    return visit;
+    const invoice = await this.invoices.createForVisit(manager, visit, actor);
+    return { visit, invoiceId: invoice.id };
+  }
+
+  private isToday(instant: Date): boolean {
+    return this.time.localDate(instant) === this.time.today();
+  }
+
+  private hasNote(visitId: string, manager: EntityManager): Promise<boolean> {
+    return manager.getRepository(ClinicalNote).existsBy({ visitId });
   }
 
   private async recordHistory(
@@ -582,37 +500,16 @@ export class VisitsService {
     );
   }
 
-  private async lockVisit(id: string, manager: EntityManager): Promise<Visit> {
-    const visit = await manager.findOne(Visit, {
-      where: { id },
-      lock: { mode: 'pessimistic_write' },
-    });
-    if (!visit) throw new NotFoundException('Visit not found');
-    return visit;
-  }
-
-  // Only the visit's doctor (or OWNER) may act; other doctors get 404.
-  private async lockOwnVisit(
-    id: string,
-    user: AuthenticatedUser,
-    manager: EntityManager,
-  ): Promise<Visit> {
-    const visit = await this.lockVisit(id, manager);
-    const ownDoctorId = await this.access.scopeFor(user);
-    if (ownDoctorId !== null && visit.doctorId !== ownDoctorId) {
-      throw new NotFoundException('Visit not found');
-    }
-    return visit;
-  }
-
   private async lockAppointment(
     id: string,
     manager: EntityManager,
   ): Promise<Appointment> {
-    return manager.findOneOrFail(Appointment, {
+    const appointment = await manager.findOne(Appointment, {
       where: { id },
       lock: { mode: 'pessimistic_write' },
     });
+    if (!appointment) throw new NotFoundException('Appointment not found');
+    return appointment;
   }
 
   private baseQuery(): SelectQueryBuilder<Visit> {
@@ -642,7 +539,7 @@ export class VisitsService {
     page: PaginationQueryDto,
   ): Promise<Paginated<VisitResponseDto>> {
     const [rows, total] = await qb
-      .orderBy('visit.checkedInAt', 'DESC')
+      .orderBy('visit.attendedAt', 'DESC')
       .addOrderBy('visit.id', 'DESC')
       .skip(page.skip)
       .take(page.limit)

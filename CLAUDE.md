@@ -9,7 +9,7 @@ a few staff users and at most a few hundred patients a day. `backend/README.md` 
   after receiving the money at the desk. `reference` is optional free text, never validated against anything.
 - Patients are not users and never log in. Only OWNER, DOCTOR and RECEPTIONIST staff log in.
 - Do not add abstractions, interfaces, generic base classes or new libraries unless the current stage needs them.
-  **Ask before adding a dependency.** The only planned hooks are `VisitCompletionPolicy` and `VisitBillingPolicy`.
+  **Ask before adding a dependency.** The only planned hook is `VisitBillingPolicy` (packages).
 - Plain services and repositories. No CQRS, no repository layers on top of TypeORM, no event sourcing, no caching, no queues.
 - A rule that must never break (uniqueness, overlaps, totals) is enforced by the **database** (unique/partial indexes,
   exclusion constraints, CHECKs). Everything else is enforced in the service. Don't duplicate a DB rule with a
@@ -45,8 +45,11 @@ a few staff users and at most a few hundred patients a day. `backend/README.md` 
   `ClinicalAccessService` (a doctor must have an appointment or visit with the patient; RECEPTIONIST never).
 - **Responses:** every input and output is a DTO. Map entities with `static fromEntity()` on the response DTO, or with a
   `<module>.mapper.ts` when the mapping needs `toIso` or several entities. Don't add a third style.
-- **Events:** cross-module side effects use domain events emitted **only after commit**. Listeners run their own
-  transaction, must be idempotent, and log failures instead of throwing.
+- **Cross-module writes:** no domain events or listeners. Writes that must succeed together (attend = appointment +
+  visit + invoice) run in one transaction: the owning service exposes a method that takes the caller's `manager`.
+- **Desk workflow:** reception does all attendance (attend, undo attend, no-show, undo no-show, walk-in); doctors only
+  write and sign notes. Appointment transitions live only in `appointment-state-machine.ts`; the time/undo rules on top
+  (and the day list's `allowedActions`) only in `appointment-actions.ts`.
 - **Patients at the desk:** `assertDeskPatientInput(dto)` + `PatientsService.resolveForDesk(...)` (id, or name + phone
   find-or-create). Phones are normalized to `+201XXXXXXXXX` and unique.
 - **Files:** `FileStorage` (local disk under `STORAGE_LOCAL_PATH`, never served statically). Check uploads with

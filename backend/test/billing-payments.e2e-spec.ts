@@ -488,7 +488,7 @@ describe('Billing: payments (e2e)', () => {
         basePrice: '300.00',
       });
       await assignService(ctx.dataSource, doctor.doctorId, service.id);
-      const checkedIn = await insertAppointment(ctx.dataSource, {
+      const attended = await insertAppointment(ctx.dataSource, {
         patientId: patient.id,
         doctorId: doctor.doctorId,
         serviceId: service.id,
@@ -506,17 +506,10 @@ describe('Billing: payments (e2e)', () => {
         startAt: local('15:00'),
       });
       const visit = await request(server)
-        .post(`/api/v1/appointments/${checkedIn.id}/check-in`)
+        .post(`/api/v1/appointments/${attended.id}/attend`)
         .set(as(receptionist))
         .expect(201);
-      let invoiceId = '';
-      await vi.waitFor(async () => {
-        const invoice = await ctx.dataSource
-          .getRepository(Invoice)
-          .findOneBy({ visitId: visit.body.id });
-        expect(invoice).not.toBeNull();
-        invoiceId = (invoice as Invoice).id;
-      });
+      const invoiceId = visit.body.invoiceId as string;
       await pay(invoiceId, { amount: '120', method: 'CASH' }).expect(201);
 
       const day = await request(server)
@@ -524,7 +517,7 @@ describe('Billing: payments (e2e)', () => {
         .set(as(receptionist))
         .expect(200);
       expect(day.body[0]).toMatchObject({
-        id: checkedIn.id,
+        id: attended.id,
         invoiceId,
         invoiceTotal: '300.00',
         amountPaid: '120.00',
@@ -538,7 +531,7 @@ describe('Billing: payments (e2e)', () => {
       });
     });
 
-    it('attention: money held for cancelled visits, and overdue balances', async () => {
+    it('attention: money held for voided visits, and overdue balances', async () => {
       const doctor = await createLoggedInDoctor(ctx.app, ctx.dataSource);
       const service = await insertService(ctx.dataSource, {
         basePrice: '300.00',
@@ -553,20 +546,14 @@ describe('Billing: payments (e2e)', () => {
           serviceId: service.id,
         })
         .expect(201);
-      let visitInvoice = '';
-      await vi.waitFor(async () => {
-        const invoice = await ctx.dataSource
-          .getRepository(Invoice)
-          .findOneBy({ visitId: walkIn.body.id });
-        expect(invoice).not.toBeNull();
-        visitInvoice = (invoice as Invoice).id;
-      });
+      const visitInvoice = walkIn.body.invoiceId as string;
       await pay(visitInvoice, { amount: '50', method: 'CASH' }).expect(201);
-      await request(server)
-        .post(`/api/v1/visits/${walkIn.body.id}/cancel`)
-        .set(as(receptionist))
-        .send({ reason: 'Patient left' })
-        .expect(200);
+      // Undo attend refuses paid invoices: only data from before that rule
+      // can be in this state.
+      await ctx.dataSource.query(
+        `UPDATE visits SET status = 'VOIDED', voided_at = now(), void_reason = 'Legacy' WHERE id = $1`,
+        [walkIn.body.id],
+      );
 
       clock.current = local('09:00', '2026-10-26'); // 8 days ago
       const old = await newInvoice(['80.00']);
@@ -580,7 +567,7 @@ describe('Billing: payments (e2e)', () => {
         .expect(200);
       expect(res.body.overdueDays).toBe(7);
       expect(
-        res.body.cancelledVisitsWithPayments.map((i: { id: string }) => i.id),
+        res.body.voidedVisitsWithPayments.map((i: { id: string }) => i.id),
       ).toEqual([visitInvoice]);
       expect(res.body.overdue.map((i: { id: string }) => i.id)).toEqual([old]);
     });

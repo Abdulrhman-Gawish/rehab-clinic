@@ -1,10 +1,13 @@
 import type { Doctor } from '../doctors/entities/doctor.entity.js';
+import type { Visit } from '../visits/entities/visit.entity.js';
+import type { NoteStatus } from './clinical.enums.js';
 import type {
   AddendumResponseDto,
   AttachmentResponseDto,
   ClinicalDoctorDto,
   ClinicalNoteResponseDto,
   MedicalInfoResponseDto,
+  NeedsAttentionEntryDto,
 } from './dto/clinical.dto.js';
 import type { ClinicalNoteAddendum } from './entities/clinical-note-addendum.entity.js';
 import type { ClinicalNote } from './entities/clinical-note.entity.js';
@@ -63,7 +66,7 @@ export function toClinicalNote(
     patientId: note.patientId,
     visit: {
       id: visit.id,
-      date: toIso(visit.checkedInAt),
+      date: toIso(visit.attendedAt),
       service: { id: visit.service.id, name: visit.service.name },
     },
     doctor: toDoctor(note.doctor),
@@ -94,5 +97,23 @@ export function toAttachment(
     sizeBytes: attachment.sizeBytes,
     uploadedById: attachment.uploadedById,
     createdAt: toIso(attachment.createdAt),
+  };
+}
+
+// Requires patient, service and doctor.user loaded on the visit.
+export function toNeedsAttentionEntry(
+  visit: Visit,
+  noteStatus: NoteStatus | null,
+  toIso: ToIso,
+): NeedsAttentionEntryDto {
+  const { patient, service } = visit;
+  if (!patient || !service) throw new Error('Visit relations are not loaded');
+  return {
+    visitId: visit.id,
+    visitDate: toIso(visit.attendedAt),
+    patient: { id: patient.id, name: patient.name },
+    service: { id: service.id, name: service.name },
+    doctor: toDoctor(visit.doctor),
+    noteStatus,
   };
 }

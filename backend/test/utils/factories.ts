@@ -159,23 +159,21 @@ export async function insertAppointment(
   );
 }
 
-// A walk-in visit in any status, bypassing check-in (no events, no invoice).
+// A walk-in visit (ACTIVE by default), bypassing the API (no invoice).
 export async function insertVisit(
   dataSource: DataSource,
   data: {
     patientId: string;
     doctorId: string;
     serviceId: string;
-    checkedInById: string;
+    attendedById: string;
     status?: VisitStatus;
-    checkedInAt?: Date;
+    attendedAt?: Date;
   },
 ): Promise<Visit> {
-  const status = data.status ?? VisitStatus.WAITING;
-  const checkedInAt = data.checkedInAt ?? new Date();
-  const started = [VisitStatus.IN_SESSION, VisitStatus.COMPLETED].includes(
-    status,
-  );
+  const status = data.status ?? VisitStatus.ACTIVE;
+  const attendedAt = data.attendedAt ?? new Date();
+  const voided = status === VisitStatus.VOIDED;
   const repository = dataSource.getRepository(Visit);
   return repository.save(
     repository.create({
@@ -184,16 +182,11 @@ export async function insertVisit(
       doctorId: data.doctorId,
       serviceId: data.serviceId,
       status,
-      checkedInAt,
-      checkedInById: data.checkedInById,
-      startedAt: started ? checkedInAt : null,
-      completedAt: status === VisitStatus.COMPLETED ? checkedInAt : null,
-      completedById:
-        status === VisitStatus.COMPLETED ? data.checkedInById : null,
-      cancelledAt: status === VisitStatus.CANCELLED ? checkedInAt : null,
-      cancelledById:
-        status === VisitStatus.CANCELLED ? data.checkedInById : null,
-      cancelReason: status === VisitStatus.CANCELLED ? 'Patient left' : null,
+      attendedAt,
+      attendedById: data.attendedById,
+      voidedAt: voided ? attendedAt : null,
+      voidedById: voided ? data.attendedById : null,
+      voidReason: voided ? 'Sent in by mistake' : null,
     }),
   );
 }

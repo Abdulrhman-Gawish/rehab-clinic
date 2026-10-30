@@ -10,15 +10,16 @@ import { AppointmentStatus as S } from './appointment.enums.js';
 // Every allowed (from, to, trigger). Anything else must be rejected.
 const ALLOWED: [S, S, T][] = [
   [S.PENDING, S.CONFIRMED, T.APPOINTMENT],
-  [S.PENDING, S.CONFIRMED, T.CHECK_IN],
   [S.PENDING, S.CANCELLED, T.APPOINTMENT],
+  [S.PENDING, S.RESCHEDULED, T.APPOINTMENT],
+  [S.PENDING, S.NO_SHOW, T.APPOINTMENT],
+  [S.PENDING, S.ATTENDED, T.ATTEND],
   [S.CONFIRMED, S.CANCELLED, T.APPOINTMENT],
-  [S.CONFIRMED, S.NO_SHOW, T.APPOINTMENT],
   [S.CONFIRMED, S.RESCHEDULED, T.APPOINTMENT],
-  [S.CONFIRMED, S.CHECKED_IN, T.CHECK_IN],
-  [S.CHECKED_IN, S.COMPLETED, T.VISIT_COMPLETE],
-  [S.CHECKED_IN, S.CONFIRMED, T.UNDO_CHECK_IN],
-  [S.CHECKED_IN, S.CANCELLED, T.VISIT_CANCEL],
+  [S.CONFIRMED, S.NO_SHOW, T.APPOINTMENT],
+  [S.CONFIRMED, S.ATTENDED, T.ATTEND],
+  [S.ATTENDED, S.CONFIRMED, T.UNDO_ATTEND],
+  [S.NO_SHOW, S.CONFIRMED, T.UNDO_NO_SHOW],
 ];
 
 const STATUSES = Object.values(S);
@@ -52,17 +53,13 @@ describe('appointment state machine', () => {
     },
   );
 
-  it('the plain appointment endpoints cannot touch CHECKED_IN appointments', () => {
-    expect(allowedTransitions(S.CHECKED_IN)).toEqual([]);
-    expect(allowedTransitions(S.CONFIRMED)).toEqual([
-      S.CANCELLED,
-      S.NO_SHOW,
-      S.RESCHEDULED,
-    ]);
+  it('confirm cannot undo an attendance or a no-show', () => {
+    expect(allowedTransitions(S.ATTENDED)).toEqual([]);
+    expect(allowedTransitions(S.NO_SHOW)).toEqual([]);
   });
 
-  it('terminal statuses have no outgoing transitions', () => {
-    for (const status of [S.NO_SHOW, S.CANCELLED, S.RESCHEDULED, S.COMPLETED]) {
+  it('cancelled and rescheduled appointments are final', () => {
+    for (const status of [S.CANCELLED, S.RESCHEDULED]) {
       for (const trigger of TRIGGERS) {
         expect(allowedTransitions(status, trigger)).toEqual([]);
       }
@@ -70,6 +67,6 @@ describe('appointment state machine', () => {
   });
 
   it('covers every (from, to, trigger) combination', () => {
-    expect(ALLOWED.length + FORBIDDEN.length).toBe(7 * 7 * TRIGGERS.length);
+    expect(ALLOWED.length + FORBIDDEN.length).toBe(6 * 6 * TRIGGERS.length);
   });
 });

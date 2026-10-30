@@ -1,8 +1,8 @@
 export enum AppointmentStatus {
   PENDING = 'PENDING',
   CONFIRMED = 'CONFIRMED',
-  CHECKED_IN = 'CHECKED_IN',
-  COMPLETED = 'COMPLETED',
+  // Reception sent the patient in to the doctor (the visit exists).
+  ATTENDED = 'ATTENDED',
   NO_SHOW = 'NO_SHOW',
   CANCELLED = 'CANCELLED',
   RESCHEDULED = 'RESCHEDULED',
@@ -18,6 +18,5 @@ export enum AppointmentSource {
 export const ACTIVE_STATUSES: readonly AppointmentStatus[] = [
   AppointmentStatus.PENDING,
   AppointmentStatus.CONFIRMED,
-  AppointmentStatus.CHECKED_IN,
-  AppointmentStatus.COMPLETED,
+  AppointmentStatus.ATTENDED,
 ];

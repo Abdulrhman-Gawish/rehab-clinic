@@ -72,7 +72,8 @@ export class BillingReportsService {
   }
 
   /**
-   * Invoices someone must look at: money held for a CANCELLED visit, and
+   * Invoices someone must look at: money held for a VOIDED visit (only
+   * from before undo attend required unpaid invoices), and
    * balances left open since before (today - BILLING_OVERDUE_DAYS).
    */
   async attention(): Promise<AttentionDto> {
@@ -87,11 +88,9 @@ export class BillingReportsService {
         })
         .orderBy('invoice.issuedAt', 'ASC');
 
-    const cancelledVisits = await base()
+    const voidedVisits = await base()
       .innerJoin('invoice.visit', 'visit')
-      .andWhere('visit.status = :visitCancelled', {
-        visitCancelled: VisitStatus.CANCELLED,
-      })
+      .andWhere('visit.status = :voided', { voided: VisitStatus.VOIDED })
       .andWhere('invoice.amountPaid > 0')
       .getMany();
 
@@ -105,7 +104,7 @@ export class BillingReportsService {
 
     return {
       overdueDays: this.overdueDays,
-      cancelledVisitsWithPayments: cancelledVisits.map((i) =>
+      voidedVisitsWithPayments: voidedVisits.map((i) =>
         toInvoiceSummary(i, toIso),
       ),
       overdue: overdue.map((i) => toInvoiceSummary(i, toIso)),

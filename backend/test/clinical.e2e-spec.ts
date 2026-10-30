@@ -42,7 +42,7 @@ describe('Clinical records (e2e)', () => {
   let ctx: TestApp;
   let server: App;
   let owner: TestUser;
-  // doctorA treats the patient (visit IN_SESSION); doctorB only had a
+  // doctorA treats the patient (ACTIVE visit); doctorB only had a
   // cancelled appointment with them; doctorC has never met them.
   let doctorA: DoctorUser;
   let doctorB: DoctorUser;
@@ -67,7 +67,7 @@ describe('Clinical records (e2e)', () => {
     doctorC = await createLoggedInDoctor(ctx.app, ctx.dataSource);
     serviceId = (await insertService(ctx.dataSource, { name: 'Physio' })).id;
     patient = await insertPatient(ctx.dataSource, 'Mona Adel', '+201000000001');
-    visit = await newVisit(doctorA, VisitStatus.IN_SESSION);
+    visit = await newVisit(doctorA, VisitStatus.ACTIVE);
     await insertAppointment(ctx.dataSource, {
       patientId: patient.id,
       doctorId: doctorB.doctorId,
@@ -86,16 +86,16 @@ describe('Clinical records (e2e)', () => {
   function newVisit(
     doctor: DoctorUser,
     status: VisitStatus,
-    checkedInAt?: Date,
+    attendedAt?: Date,
     patientId = patient.id,
   ): Promise<Visit> {
     return insertVisit(ctx.dataSource, {
       patientId,
       doctorId: doctor.doctorId,
       serviceId,
-      checkedInById: owner.id,
+      attendedById: owner.id,
       status,
-      checkedInAt,
+      attendedAt,
     });
   }
 
@@ -208,20 +208,24 @@ describe('Clinical records (e2e)', () => {
       ]);
     });
 
-    it('only on visits IN_SESSION or COMPLETED', async () => {
+    it('only on ACTIVE visits, any day after the visit', async () => {
       const other = await insertPatient(ctx.dataSource, 'Ali', '+201000000002');
-      for (const status of [VisitStatus.WAITING, VisitStatus.CANCELLED]) {
-        const v = await newVisit(doctorC, status, undefined, other.id);
-        const res = await writeNote(v.id, doctorC).expect(422);
-        expect(res.body.code).toBe('NOTE_NOT_ALLOWED');
-      }
-      const done = await newVisit(
+      const voided = await newVisit(
         doctorC,
-        VisitStatus.COMPLETED,
+        VisitStatus.VOIDED,
         undefined,
         other.id,
       );
-      await writeNote(done.id, doctorC).expect(201);
+      const res = await writeNote(voided.id, doctorC).expect(422);
+      expect(res.body.code).toBe('NOTE_NOT_ALLOWED');
+
+      const lastWeek = await newVisit(
+        doctorC,
+        VisitStatus.ACTIVE,
+        new Date(Date.now() - 7 * 24 * 3600_000),
+        other.id,
+      );
+      await writeNote(lastWeek.id, doctorC).expect(201);
     });
 
     it("only the visit's doctor writes its note (others get 404)", async () => {
@@ -296,24 +300,6 @@ describe('Clinical records (e2e)', () => {
       await readNote(visit.id, owner).expect(200);
     });
 
-    it('completing a visit is blocked until its note is signed', async () => {
-      const complete = () =>
-        request(server)
-          .post(api(`/visits/${visit.id}/complete`))
-          .set(as(doctorA));
-      const noNote = await complete().expect(422);
-      expect(noNote.body.code).toBe('VISIT_COMPLETION_BLOCKED');
-
-      await writeNote(visit.id, doctorA, { assessment: 'Done' }).expect(201);
-      expect((await complete().expect(422)).body.code).toBe(
-        'VISIT_COMPLETION_BLOCKED',
-      );
-
-      await sign(visit.id, doctorA).expect(200);
-      const done = await complete().expect(200);
-      expect(done.body.status).toBe('COMPLETED');
-    });
-
     it('the queue shows whether each visit has a note, and its status', async () => {
       const queue = async () =>
         (
@@ -353,6 +339,65 @@ describe('Clinical records (e2e)', () => {
             .insert({ ...base, ...bad }),
         ).rejects.toMatchObject({ driverError: { code: '23514' } });
       }
+    });
+  });
+
+  // ---------- needs attention ----------
+
+  describe('needs-attention', () => {
+    const needsAttention = (by: TestUser, query = '') =>
+      request(server)
+        .get(api(`/clinical-notes/needs-attention${query}`))
+        .set(as(by))
+        .expect(200);
+
+    it('ACTIVE visits without a signed note, oldest first: doctor own, owner all', async () => {
+      const other = await insertPatient(ctx.dataSource, 'Ali', '+201000000002');
+      const old = await newVisit(
+        doctorA,
+        VisitStatus.ACTIVE,
+        new Date('2026-10-01T08:00:00Z'),
+        other.id,
+      );
+      const signed = await newVisit(doctorA, VisitStatus.ACTIVE, undefined);
+      await signedNote(signed.id, doctorA, 'Done');
+      await newVisit(doctorA, VisitStatus.VOIDED);
+      const ofB = await newVisit(
+        doctorB,
+        VisitStatus.ACTIVE,
+        new Date('2026-10-02T08:00:00Z'),
+      );
+      await writeNote(visit.id, doctorA, { assessment: 'Draft' }).expect(201);
+
+      const own = await needsAttention(doctorA);
+      expect(own.body.meta.total).toBe(2);
+      expect(own.body.items).toMatchObject([
+        {
+          visitId: old.id,
+          visitDate: expect.stringMatching(/^2026-10-01T11:00:00\+03:00$/),
+          patient: { id: other.id, name: 'Ali' },
+          service: { id: serviceId, name: 'Physio' },
+          doctor: { id: doctorA.doctorId },
+          noteStatus: null,
+        },
+        { visitId: visit.id, noteStatus: 'DRAFT' },
+      ]);
+
+      const all = await needsAttention(owner);
+      expect(all.body.items.map((e: { visitId: string }) => e.visitId)).toEqual(
+        [old.id, ofB.id, visit.id],
+      );
+      const onlyB = await needsAttention(
+        owner,
+        `?doctorId=${doctorB.doctorId}`,
+      );
+      expect(onlyB.body.items).toMatchObject([{ visitId: ofB.id }]);
+      // A doctor's filter is always their own.
+      const ignored = await needsAttention(
+        doctorB,
+        `?doctorId=${doctorA.doctorId}`,
+      );
+      expect(ignored.body.items).toMatchObject([{ visitId: ofB.id }]);
     });
   });
 
@@ -439,7 +484,7 @@ describe('Clinical records (e2e)', () => {
   it("clinical history: medical info, every doctor's signed notes (newest first) with addenda, and attachments", async () => {
     const older = await newVisit(
       doctorB,
-      VisitStatus.COMPLETED,
+      VisitStatus.ACTIVE,
       new Date('2026-10-20T08:00:00Z'),
     );
     const first = await signedNote(older.id, doctorB, 'Initial assessment');
@@ -532,7 +577,7 @@ describe('Clinical records (e2e)', () => {
     );
     const foreignVisit = await newVisit(
       doctorA,
-      VisitStatus.COMPLETED,
+      VisitStatus.ACTIVE,
       undefined,
       stranger.id,
     );

@@ -6,6 +6,7 @@ import {
   subMoney,
 } from '../../common/utils/money.util.js';
 import type { Invoice } from '../billing/entities/invoice.entity.js';
+import type { NoteStatus } from '../clinical/clinical.enums.js';
 import type { Visit } from '../visits/entities/visit.entity.js';
 import {
   DayPaymentStatus,
@@ -52,13 +53,22 @@ export function toAppointmentResponse(
   };
 }
 
-// Billing columns of a day-list row, from the visit's live invoice.
-function billingColumns(
-  invoice: Invoice | null,
-): Pick<
+// What a day-list row shows about its visit.
+export interface DayVisitInfo {
+  visit: Visit;
+  // The live invoice; null when there is none, and always for a doctor.
+  invoice: Invoice | null;
+  noteStatus: NoteStatus | null;
+  hasPayments: boolean;
+}
+
+type BillingColumns = Pick<
   DayListEntryDto,
   'invoiceId' | 'invoiceTotal' | 'amountPaid' | 'balance' | 'paymentStatus'
-> {
+>;
+
+// Billing columns of a day-list row, from the visit's live invoice.
+function billingColumns(invoice: Invoice | null): BillingColumns {
   if (!invoice) {
     return {
       invoiceId: null,
@@ -83,11 +93,33 @@ function billingColumns(
   };
 }
 
-// `visit`: the appointment's visit, if it was checked in.
+function visitColumns(
+  info: DayVisitInfo | null,
+  allowedActions: string[],
+  withBilling: boolean,
+  toIso: ToIso,
+): Pick<
+  DayListEntryDto,
+  'visitId' | 'visitStatus' | 'attendedAt' | 'noteStatus' | 'allowedActions'
+> &
+  Partial<BillingColumns> {
+  return {
+    visitId: info?.visit.id ?? null,
+    visitStatus: info?.visit.status ?? null,
+    attendedAt: info ? toIso(info.visit.attendedAt) : null,
+    noteStatus: info?.noteStatus ?? null,
+    allowedActions,
+    // Doctors never see billing.
+    ...(withBilling && billingColumns(info?.invoice ?? null)),
+  };
+}
+
+// `info`: the appointment's visit, if it attended.
 export function toDayListEntry(
   appointment: Appointment,
-  visit: Visit | null,
-  invoice: Invoice | null,
+  info: DayVisitInfo | null,
+  allowedActions: string[],
+  withBilling: boolean,
   toIso: ToIso,
 ): DayListEntryDto {
   const dto = toAppointmentResponse(appointment, toIso);
@@ -106,20 +138,18 @@ export function toDayListEntry(
     service: dto.service,
     notes: dto.notes,
     cancelReason: dto.cancelReason,
-    visitId: visit?.id ?? null,
-    visitStatus: visit?.status ?? null,
-    checkedInAt: visit ? toIso(visit.checkedInAt) : null,
-    ...billingColumns(invoice),
+    ...visitColumns(info, allowedActions, withBilling, toIso),
   };
 }
 
 // Requires patient, doctor.user and service loaded on the visit.
 export function toWalkInDayListEntry(
-  visit: Visit,
-  invoice: Invoice | null,
+  info: DayVisitInfo,
+  allowedActions: string[],
+  withBilling: boolean,
   toIso: ToIso,
 ): DayListEntryDto {
-  const { patient, doctor, service } = visit;
+  const { patient, doctor, service } = info.visit;
   if (!patient || !doctor?.user || !service) {
     throw new Error('Visit relations are not loaded');
   }
@@ -141,11 +171,8 @@ export function toWalkInDayListEntry(
       durationMinutes: service.durationMinutes,
     },
     notes: null,
-    cancelReason: visit.cancelReason,
-    visitId: visit.id,
-    visitStatus: visit.status,
-    checkedInAt: toIso(visit.checkedInAt),
-    ...billingColumns(invoice),
+    cancelReason: info.visit.voidReason,
+    ...visitColumns(info, allowedActions, withBilling, toIso),
   };
 }
 

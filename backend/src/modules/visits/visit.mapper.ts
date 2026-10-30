@@ -6,12 +6,8 @@ import type {
 import type { VisitStatusHistory } from './entities/visit-status-history.entity.js';
 import type { Visit } from './entities/visit.entity.js';
 import type { NoteStatus } from '../clinical/clinical.enums.js';
-import { VisitStatus } from './visit.enums.js';
-import type { VisitEventPayload } from './visit.events.js';
 
 type ToIso = (instant: Date) => string;
-
-const MINUTE_MS = 60_000;
 
 function refs(visit: Visit) {
   const { patient, doctor, service } = visit;
@@ -42,14 +38,11 @@ export function toVisitResponse(visit: Visit, toIso: ToIso): VisitResponseDto {
     appointmentReferenceCode: visit.appointment?.referenceCode ?? null,
     appointmentStartAt: isoOrNull(visit.appointment?.startAt ?? null, toIso),
     ...refs(visit),
-    checkedInAt: toIso(visit.checkedInAt),
-    checkedInById: visit.checkedInById,
-    startedAt: isoOrNull(visit.startedAt, toIso),
-    completedAt: isoOrNull(visit.completedAt, toIso),
-    completedById: visit.completedById,
-    cancelledAt: isoOrNull(visit.cancelledAt, toIso),
-    cancelledById: visit.cancelledById,
-    cancelReason: visit.cancelReason,
+    attendedAt: toIso(visit.attendedAt),
+    attendedById: visit.attendedById,
+    voidedAt: isoOrNull(visit.voidedAt, toIso),
+    voidedById: visit.voidedById,
+    voidReason: visit.voidReason,
     createdAt: visit.createdAt,
     updatedAt: visit.updatedAt,
   };
@@ -58,27 +51,15 @@ export function toVisitResponse(visit: Visit, toIso: ToIso): VisitResponseDto {
 export function toQueueEntry(
   visit: Visit,
   noteStatus: NoteStatus | null,
-  now: Date,
   toIso: ToIso,
 ): QueueEntryDto {
-  // IN_SESSION: the wait ended when the session started.
-  const waitEnd =
-    visit.status === VisitStatus.IN_SESSION && visit.startedAt
-      ? visit.startedAt
-      : now;
   return {
     visitId: visit.id,
-    status: visit.status,
     isWalkIn: visit.appointmentId === null,
     appointmentId: visit.appointmentId,
     appointmentStartAt: isoOrNull(visit.appointment?.startAt ?? null, toIso),
     ...refs(visit),
-    checkedInAt: toIso(visit.checkedInAt),
-    startedAt: isoOrNull(visit.startedAt, toIso),
-    waitingMinutes: Math.max(
-      0,
-      Math.floor((waitEnd.getTime() - visit.checkedInAt.getTime()) / MINUTE_MS),
-    ),
+    attendedAt: toIso(visit.attendedAt),
     hasNote: noteStatus !== null,
     noteStatus,
   };
@@ -94,16 +75,5 @@ export function toVisitHistoryEntry(
     changedById: entry.changedById,
     reason: entry.reason,
     changedAt: toIso(entry.changedAt),
-  };
-}
-
-export function toEventPayload(visit: Visit, at: Date): VisitEventPayload {
-  return {
-    visitId: visit.id,
-    appointmentId: visit.appointmentId,
-    patientId: visit.patientId,
-    doctorId: visit.doctorId,
-    serviceId: visit.serviceId,
-    at,
   };
 }

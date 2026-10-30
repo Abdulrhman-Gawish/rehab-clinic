@@ -383,9 +383,9 @@ export class AttentionDto {
 
   @ApiProperty({
     type: [InvoiceSummaryDto],
-    description: 'Invoices of CANCELLED visits that still hold money',
+    description: 'Invoices of VOIDED visits that still hold money',
   })
-  cancelledVisitsWithPayments: InvoiceSummaryDto[];
+  voidedVisitsWithPayments: InvoiceSummaryDto[];
 
   @ApiProperty({
     type: [InvoiceSummaryDto],
