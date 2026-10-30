@@ -62,7 +62,8 @@ start/complete buttons and the queue's waiting states from this UI.
   slots).
 
 ### 6. Patient page takes 5 requests (med)
-- **Status: deferred** to Stage 8, together with the patient timeline. The page still makes five calls.
+- **Status: fixed** in Stage 8: the page now makes one `GET /patients/:id/overview` call plus the paged
+  `GET /patients/:id/timeline` (type filter, "load more").
 - **Screen:** Patient page.
 - **Hard:** `GET /patients/:id`, `/appointments`, `/visits`, `/invoices` and `/balance`: five round trips for one
   screen.
