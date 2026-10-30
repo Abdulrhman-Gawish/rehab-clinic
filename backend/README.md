@@ -1,6 +1,6 @@
 # Rehab Clinic — Backend
 
-NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, staff users, the audit trail, patients, doctors, the services catalog, doctor schedules, availability appointments (online and reception booking) visits (check-in, walk-ins, the waiting room, doctor sessions), billing (invoices, discounts, payments, refunds, cash-desk summary) and clinic expenses. Packages, clinical notes and reports will come later as new modules.
+NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, staff users, the audit trail, patients, doctors, the services catalog, doctor schedules, availability appointments (online and reception booking) visits (check-in, walk-ins, the waiting room, doctor sessions), billing (invoices, discounts, payments, refunds, cash-desk summary), clinic expenses and clinical records (medical info, session notes, addenda, attachments). Packages and reports will come later as new modules.
 
 - **Who logs in:** `OWNER`, `DOCTOR` and `RECEPTIONIST` staff.
 - **Patients never log in.** A patient is identified only by their phone number, which is unique.
@@ -127,8 +127,11 @@ Every route is under `/api/v1` and needs `Authorization: Bearer <accessToken>` u
 | expenses: create / edit / void / receipt upload | W | W (own, same day) | – | – |
 | expenses: view, receipt file | R | R | – | – |
 | `/expense-categories` | RW | R | – | – |
+| clinical: medical info, notes, history, attachments (read) | R | – | R (patients they treat) | – |
+| clinical: `PUT …/medical-info`, notes (write, sign), addenda | – | – | W (notes: own visits) | – |
+| clinical: attachment upload | W | – | W (patients they treat) | – |
 
-Doctors have no access to billing or expenses.
+Doctors have no access to billing or expenses. Receptionists have no access to clinical records.
 
 "Own" means a doctor sees only their own data. Asking for another doctor's schedule or appointment returns **404**, not 403, so the response doesn't reveal that it exists.
 
@@ -176,6 +179,12 @@ Business errors also carry a stable machine-readable `code`:
 | `EXPENSE_DATE_IN_FUTURE` | 422 | Expense dated after today |
 | `EXPENSE_EDIT_NOT_ALLOWED` | 422 | Not the creator on the same local day (and not OWNER), or the expense is voided |
 | `CATEGORY_INACTIVE` / `CATEGORY_NAME_TAKEN` | 422 / 409 | Expense category inactive / name already used |
+| `NOTE_NOT_ALLOWED` | 422 | A note on a visit that is not IN_SESSION or COMPLETED |
+| `NOTE_ALREADY_EXISTS` | 409 | The visit already has a note (edit it instead) |
+| `NOTE_SIGNED` | 422 | Editing or re-signing a signed note (add an addendum instead) |
+| `NOTE_INCOMPLETE` | 422 | Signing without an assessment or the treatment done |
+| `NOTE_NOT_SIGNED` | 422 | An addendum on a draft |
+| `ATTACHMENT_VISIT_MISMATCH` | 422 | The attachment's `visitId` belongs to another patient |
 | `UNSUPPORTED_FILE_TYPE` | 422 | The upload's content isn't JPG/PNG/WEBP/PDF, or doesn't match its extension (files over 5 MB get 413) |
 | `BACKDATE_LIMIT_EXCEEDED` | 422 | A RECEPTIONIST tried to book (or reschedule) more than `BACKDATE_MAX_DAYS` local days in the past |
 
@@ -351,7 +360,7 @@ CHECK constraints keep the timestamps consistent: IN_SESSION ⇒ `started_at`; C
 
 **`VisitCompletionPolicy` hook** (`visit-completion-policy.ts`):
 - Consulted inside the completion transaction before anything is written. Returning `{ allowed: false, reason }` answers 422 `VISIT_COMPLETION_BLOCKED` and nothing changes.
-- The default `AllowAllVisitCompletionPolicy` allows everything. Stage 7 binds a "signed clinical note required" policy to `VISIT_COMPLETION_POLICY` in `VisitsModule` without touching `VisitsService`.
+- `VisitsModule` binds `SignedNoteCompletionPolicy` (clinical module): a visit is completed only once its clinical note is SIGNED.
 
 **Domain events** (`visit.events.ts`, via `@nestjs/event-emitter`):
 
@@ -367,7 +376,7 @@ CHECK constraints keep the timestamps consistent: IN_SESSION ⇒ `started_at`; C
 - Billing listens to `visit.checked_in` (automatic invoice) and `visit.cancelled` (cancel an unpaid invoice).
 
 **Reading:**
-- `GET /visits/queue?date=&doctorId=`: the day's WAITING and IN_SESSION visits ordered by check-in. Each row has patient, service, booked start time (null for walk-ins), `checkedInAt` and `waitingMinutes` (minutes since check-in, or minutes waited before the session started once IN_SESSION). Doctors always get their own queue.
+- `GET /visits/queue?date=&doctorId=`: the day's WAITING and IN_SESSION visits ordered by check-in. Each row has patient, service, booked start time (null for walk-ins), `checkedInAt` and `waitingMinutes` (minutes since check-in, or minutes waited before the session started once IN_SESSION), plus `hasNote` and `noteStatus` (`DRAFT` / `SIGNED` / null). Doctors always get their own queue.
 - `GET /appointments/day` now also has `visitId`, `visitStatus` and `checkedInAt` per appointment. It includes the day's walk-ins as rows with `isWalkIn: true` and null appointment fields, ordered by start time (check-in time for walk-ins).
 - `GET /visits` filters by check-in date range, doctor, patient, status and `walkIn`; it is paginated, newest first. Doctors see only their own.
 - `GET /visits/:id` and `/visits/:id/history`.
@@ -454,6 +463,48 @@ stateDiagram-v2
   - Files are stored by `FileStorage` (`common/storage/file-storage.service.ts`) under `STORAGE_LOCAL_PATH`, with server-generated keys and path-traversal checks, and **nothing is served statically**. Add `FileStorage` to a module's providers to reuse it.
 - Categories: the OWNER creates, renames and (de)activates them; the RECEPTIONIST can read them.
 
+### `clinical` (clinical records)
+
+Doctors record what happened in each session. Any doctor treating a patient sees that patient's full clinical history, across all doctors.
+
+**Access rules:**
+
+| Who | Read | Write |
+|---|---|---|
+| RECEPTIONIST | nothing (403 on every clinical endpoint) | nothing |
+| DOCTOR | patients they have **at least one appointment or visit** with (any status, any date); otherwise **404** | notes on **their own** visits; medical info, addenda and attachments for patients they can read |
+| OWNER | everything | attachment upload only (read-only otherwise, 403) |
+| Anonymous | nothing (401) | nothing |
+
+A DRAFT note is visible **only to its author**: everyone else (other doctors, the OWNER) gets 404 until it is signed.
+
+**Medical info** (`patient_medical_info`, one row per patient, created on the first save):
+- `GET /patients/:id/medical-info` returns empty fields with `updatedAt: null` before the first save.
+- `PUT /patients/:id/medical-info { allergies, chronicConditions, pastSurgeries, currentMedications, notes }` replaces the record: a field left out becomes null. Any doctor with access may update it, and old and new values are audited (`PATIENT_MEDICAL_INFO_UPDATED`).
+
+**Session notes** (`clinical_notes`, at most one per visit, enforced by `uq_clinical_notes_visit`):
+- `POST /visits/:id/note` creates a DRAFT. Only the visit's doctor may do this (others get 404), and only while the visit is IN_SESSION or COMPLETED (`NOTE_NOT_ALLOWED`). A second note is 409 `NOTE_ALREADY_EXISTS`.
+- Fields: `chiefComplaint`, `assessment`, `treatmentDone`, `progress`, `plan` (next steps and home exercises) and `painScore` (0–10, DB CHECK).
+- `PATCH /visits/:id/note` edits the draft (fields left out are unchanged; null clears one).
+- `POST /visits/:id/note/sign` needs an assessment or the treatment done (`NOTE_INCOMPLETE`). A SIGNED note is **locked forever** (`NOTE_SIGNED`); the DB CHECK `chk_clinical_notes_signed` requires `signed_at`.
+- `GET /visits/:id/note` returns the note with its addenda.
+- **Completing a visit requires its signed note** (422 `VISIT_COMPLETION_BLOCKED` otherwise).
+
+**Addenda** (`clinical_note_addenda`, never edited or deleted):
+- `POST /clinical-notes/:id/addenda { content }` adds to a SIGNED note (`NOTE_NOT_SIGNED` on a draft). Any doctor with access to the patient may add one, and the author is recorded.
+
+**History:**
+- `GET /patients/:id/clinical-history?page=&limit=` returns `{ medicalInfo, notes, attachments }`.
+  - `notes` holds the patient's **SIGNED** notes from every doctor, newest visit first, paginated. Each has the doctor's name, visit date, service and addenda.
+  - `attachments` lists all of the patient's attachments, newest first; each has its `visitId`.
+
+**Attachments** (`patient_attachments`):
+- `POST /patients/:id/attachments` (multipart: `file`, `title`, optional `visitId` of one of the patient's visits) is allowed for doctors with access and the OWNER.
+- Files follow the same rules as expense receipts: JPG, PNG, WEBP or PDF, at most 5 MB (413), and the type is checked by magic bytes (`UNSUPPORTED_FILE_TYPE`). They are stored by `FileStorage` and never served publicly.
+- `GET /patients/:id/attachments` lists them, and `GET /attachments/:id/file` streams one. Both follow the read rule above.
+
+Every write is audited in the same transaction (`CLINICAL_NOTE_*`, `PATIENT_MEDICAL_INFO_UPDATED`, `PATIENT_ATTACHMENT_UPLOADED`).
+
 ## Project layout
 
 ```
@@ -462,7 +513,7 @@ src/
   common/      decorators, guards, filters, pipes, dto, errors, utils (money, phone...), time (clinic time zone), storage, base entity, enums
   config/      env validation (Joi), logger config
   database/    data-source.ts (TypeORM CLI), typeorm.options.ts, migrations/, seeds/
-  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, visits, billing, expenses, health
+  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, visits, billing, expenses, clinical, health
 test/          e2e suites + global setup (test DB reset + migrations) + helpers
 ```
 

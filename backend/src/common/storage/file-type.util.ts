@@ -1,5 +1,18 @@
+import { BadRequestException } from '@nestjs/common';
+import { ErrorCode, unprocessable } from '../errors/app.exception.js';
+
 // Detects an uploaded file's real type from its first bytes ("magic bytes"):
 // the client's file name and Content-Type are not trusted.
+
+// Upload limit for every file (FileInterceptor answers 413 above it).
+export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+
+// The parts of a multer memory-storage file we use.
+export interface UploadedFileData {
+  originalname: string;
+  size: number;
+  buffer: Buffer;
+}
 
 const TYPES = {
   jpg: { mimeType: 'image/jpeg', names: ['jpg', 'jpeg'] },
@@ -50,6 +63,25 @@ export function extensionMatches(
   if (dot < 0) return true;
   const name = fileName.slice(dot + 1).toLowerCase();
   return (TYPES[detected.extension].names as readonly string[]).includes(name);
+}
+
+/**
+ * The upload rule shared by every endpoint: a file must be present (400) and
+ * be a real JPG, PNG, WEBP or PDF whose name agrees with its content (422).
+ */
+export function checkUpload(file: UploadedFileData | undefined): {
+  file: UploadedFileData;
+  type: DetectedType;
+} {
+  if (!file) throw new BadRequestException('A file is required (field "file")');
+  const detected = detectFileType(file.buffer);
+  if (!detected || !extensionMatches(file.originalname, detected)) {
+    throw unprocessable(
+      ErrorCode.UNSUPPORTED_FILE_TYPE,
+      'Only JPG, PNG, WEBP or PDF files are accepted',
+    );
+  }
+  return { file, type: detected };
 }
 
 // Mime type of a stored file, from the extension we gave its key.

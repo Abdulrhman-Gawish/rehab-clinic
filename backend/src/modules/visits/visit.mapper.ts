@@ -5,6 +5,7 @@ import type {
 } from './dto/visit.dto.js';
 import type { VisitStatusHistory } from './entities/visit-status-history.entity.js';
 import type { Visit } from './entities/visit.entity.js';
+import type { NoteStatus } from '../clinical/clinical.enums.js';
 import { VisitStatus } from './visit.enums.js';
 import type { VisitEventPayload } from './visit.events.js';
 
@@ -56,6 +57,7 @@ export function toVisitResponse(visit: Visit, toIso: ToIso): VisitResponseDto {
 
 export function toQueueEntry(
   visit: Visit,
+  noteStatus: NoteStatus | null,
   now: Date,
   toIso: ToIso,
 ): QueueEntryDto {
@@ -77,6 +79,8 @@ export function toQueueEntry(
       0,
       Math.floor((waitEnd.getTime() - visit.checkedInAt.getTime()) / MINUTE_MS),
     ),
+    hasNote: noteStatus !== null,
+    noteStatus,
   };
 }
 

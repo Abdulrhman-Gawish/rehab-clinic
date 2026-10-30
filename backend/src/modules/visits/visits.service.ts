@@ -4,6 +4,7 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
   EntityManager,
+  In,
   Repository,
   type SelectQueryBuilder,
 } from 'typeorm';
@@ -31,6 +32,7 @@ import { AvailabilityService } from '../appointments/availability/availability.s
 import { Appointment } from '../appointments/entities/appointment.entity.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
+import { ClinicalNote } from '../clinical/entities/clinical-note.entity.js';
 import { DoctorAccessService } from '../doctors/doctor-access.service.js';
 import {
   assertDeskPatientInput,
@@ -380,9 +382,19 @@ export class VisitsService {
     if (query.doctorId)
       qb.andWhere('visit.doctorId = :doctorId', { doctorId: query.doctorId });
 
+    const visits = await qb.getMany();
+    const notes = visits.length
+      ? await this.dataSource.getRepository(ClinicalNote).find({
+          where: { visitId: In(visits.map((v) => v.id)) },
+          select: { visitId: true, status: true },
+        })
+      : [];
+    const noteStatus = new Map(notes.map((n) => [n.visitId, n.status]));
     const now = this.time.now();
-    return (await qb.getMany()).map((visit) =>
-      toQueueEntry(visit, now, (d) => this.time.toIso(d)),
+    return visits.map((visit) =>
+      toQueueEntry(visit, noteStatus.get(visit.id) ?? null, now, (d) =>
+        this.time.toIso(d),
+      ),
     );
   }
 

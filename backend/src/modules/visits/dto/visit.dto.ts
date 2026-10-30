@@ -23,6 +23,7 @@ import {
   AppointmentPatientDto,
   AppointmentServiceDto,
 } from '../../appointments/dto/appointment.dto.js';
+import { NoteStatus } from '../../clinical/clinical.enums.js';
 import { VisitStatus } from '../visit.enums.js';
 
 const AT = (example: string) => ({
@@ -236,6 +237,14 @@ export class QueueEntryDto {
       'WAITING: minutes since check-in. IN_SESSION: minutes waited before the session started.',
   })
   waitingMinutes: number;
+
+  @ApiProperty({
+    description: 'The visit has a clinical note (draft or signed)',
+  })
+  hasNote: boolean;
+
+  @ApiProperty({ enum: NoteStatus, nullable: true })
+  noteStatus: NoteStatus | null;
 }
 
 export class VisitHistoryEntryDto {

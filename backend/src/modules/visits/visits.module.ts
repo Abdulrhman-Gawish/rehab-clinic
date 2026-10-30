@@ -5,10 +5,8 @@ import { DoctorsModule } from '../doctors/doctors.module.js';
 import { PatientsModule } from '../patients/patients.module.js';
 import { VisitStatusHistory } from './entities/visit-status-history.entity.js';
 import { Visit } from './entities/visit.entity.js';
-import {
-  AllowAllVisitCompletionPolicy,
-  VISIT_COMPLETION_POLICY,
-} from './visit-completion-policy.js';
+import { SignedNoteCompletionPolicy } from '../clinical/signed-note-completion.policy.js';
+import { VISIT_COMPLETION_POLICY } from './visit-completion-policy.js';
 import {
   CheckInController,
   PatientVisitsController,
@@ -26,10 +24,10 @@ import { VisitsService } from './visits.service.js';
   controllers: [VisitsController, CheckInController, PatientVisitsController],
   providers: [
     VisitsService,
-    // Stage 7 swaps this for "a signed clinical note is required".
+    // A visit is completed only once its clinical note is SIGNED.
     {
       provide: VISIT_COMPLETION_POLICY,
-      useClass: AllowAllVisitCompletionPolicy,
+      useClass: SignedNoteCompletionPolicy,
     },
   ],
   exports: [VisitsService],

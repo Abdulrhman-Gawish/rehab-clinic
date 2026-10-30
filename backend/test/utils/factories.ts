@@ -14,6 +14,8 @@ import { ClinicService } from '../../src/modules/clinic-services/entities/clinic
 import { DoctorClinicService } from '../../src/modules/doctors/entities/doctor-clinic-service.entity.js';
 import { Doctor } from '../../src/modules/doctors/entities/doctor.entity.js';
 import { DoctorSchedule } from '../../src/modules/schedules/entities/doctor-schedule.entity.js';
+import { Visit } from '../../src/modules/visits/entities/visit.entity.js';
+import { VisitStatus } from '../../src/modules/visits/visit.enums.js';
 import { accessTokenFor, insertUser, type TestUser } from './auth-helpers.js';
 
 // Direct DB inserts for test setup (bypassing the API).
@@ -153,6 +155,45 @@ export async function insertAppointment(
       rescheduledFromId: null,
       cancelReason: null,
       notes: null,
+    }),
+  );
+}
+
+// A walk-in visit in any status, bypassing check-in (no events, no invoice).
+export async function insertVisit(
+  dataSource: DataSource,
+  data: {
+    patientId: string;
+    doctorId: string;
+    serviceId: string;
+    checkedInById: string;
+    status?: VisitStatus;
+    checkedInAt?: Date;
+  },
+): Promise<Visit> {
+  const status = data.status ?? VisitStatus.WAITING;
+  const checkedInAt = data.checkedInAt ?? new Date();
+  const started = [VisitStatus.IN_SESSION, VisitStatus.COMPLETED].includes(
+    status,
+  );
+  const repository = dataSource.getRepository(Visit);
+  return repository.save(
+    repository.create({
+      appointmentId: null,
+      patientId: data.patientId,
+      doctorId: data.doctorId,
+      serviceId: data.serviceId,
+      status,
+      checkedInAt,
+      checkedInById: data.checkedInById,
+      startedAt: started ? checkedInAt : null,
+      completedAt: status === VisitStatus.COMPLETED ? checkedInAt : null,
+      completedById:
+        status === VisitStatus.COMPLETED ? data.checkedInById : null,
+      cancelledAt: status === VisitStatus.CANCELLED ? checkedInAt : null,
+      cancelledById:
+        status === VisitStatus.CANCELLED ? data.checkedInById : null,
+      cancelReason: status === VisitStatus.CANCELLED ? 'Patient left' : null,
     }),
   );
 }
