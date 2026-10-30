@@ -10,7 +10,7 @@ import { Expenses } from './pages/Expenses';
 import { NeedsNote } from './pages/NeedsNote';
 import { VisitPage } from './pages/Visit';
 import { Users, Doctors, DoctorPage, Services } from './pages/Owner';
-import { Summary, Attention, AuditLog } from './pages/Reports';
+import { Summary, Attention, AuditLog, OwnerReports } from './pages/Reports';
 import { PublicBooking } from './pages/PublicBooking';
 
 export const homeFor = (role: Role) => (role === 'DOCTOR' ? '/doctor' : role === 'OWNER' ? '/owner/summary' : '/reception');
@@ -61,6 +61,7 @@ function Header() {
           <Link to="/owner/users">Users</Link>
           <Link to="/owner/doctors">Doctors</Link>
           <Link to="/owner/services">Services</Link>
+          <Link to="/owner/reports">Reports</Link>
           <Link to="/owner/attention">Attention</Link>
           <Link to="/owner/audit">Audit log</Link>
         </>}
@@ -103,6 +104,7 @@ export function App() {
           <Route path="/owner/doctors" element={<Protected><Doctors /></Protected>} />
           <Route path="/owner/doctors/:id" element={<Protected><DoctorPage /></Protected>} />
           <Route path="/owner/services" element={<Protected><Services /></Protected>} />
+          <Route path="/owner/reports" element={<Protected><OwnerReports /></Protected>} />
           <Route path="/owner/attention" element={<Protected><Attention /></Protected>} />
           <Route path="/owner/audit" element={<Protected><AuditLog /></Protected>} />
           <Route path="*" element={<p>Not found. <Link to="/">Home</Link></p>} />

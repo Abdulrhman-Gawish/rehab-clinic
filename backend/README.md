@@ -34,7 +34,7 @@ docker compose up -d --build     # db + backend + demo seed + playground
 |---|---|
 | `db` | PostgreSQL 16, its own volume (host port 5433, so it doesn't clash with the dev database) |
 | `backend` | API on <http://localhost:3000/api/v1>. On every start it runs the migrations and the OWNER seed (both idempotent) |
-| `demo-seed` | One-shot: demo staff, services, schedules and a sample day. Skipped when doctors already exist |
+| `demo-seed` | One-shot: demo staff, services, schedules, six weeks of patient history and a sample day. Skipped when doctors already exist. It moves the history back in time with SQL, so it also gets the `DB_*` settings |
 | `playground` | Throwaway UI on <http://localhost:5173> (quick-login buttons for the demo accounts) |
 
 The containers take `backend/.env`, with the `DB_*` values overridden to point at `db` and `NODE_ENV=production`.

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { get, getSession, qs } from '../api';
 import { fmtDateTime, todayCairo } from '../time';
@@ -55,6 +55,157 @@ export function Attention() {
       <Table rows={a.voidedVisitsWithPayments} />
       <h3>Overdue (balance, older than {a.overdueDays} days) ({a.overdue.length})</h3>
       <Table rows={a.overdue} />
+    </>
+  );
+}
+
+// ---------- Owner reports (GET /reports/*, from/to inclusive local dates)
+
+const firstOfLastMonth = () => {
+  const [y, m] = todayCairo().split('-').map(Number);
+  return m === 1 ? `${y - 1}-12-01` : `${y}-${String(m - 1).padStart(2, '0')}-01`;
+};
+
+export function OwnerReports() {
+  const [from, setFrom] = useState(firstOfLastMonth());
+  const [to, setTo] = useState(todayCairo());
+  const range = { from, to };
+  return (
+    <>
+      <h2>Reports</h2>
+      <div className="row">
+        <label>From <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+        <label>To <input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+      </div>
+      <SummaryReport range={range} />
+      <RevenueReport range={range} />
+      <AttendanceReport range={range} />
+      <DiscountsReport range={range} />
+      <ExpensesReport range={range} />
+      <OutstandingReport range={range} />
+    </>
+  );
+}
+
+type Range = { from: string; to: string };
+const useReport = (path: string, range: Range, extra: Record<string, string | number> = {}) =>
+  useLoad(() => get(`/reports/${path}${qs({ ...range, ...extra })}`), [path, range.from, range.to, JSON.stringify(extra)])[0];
+
+function SummaryReport({ range }: { range: Range }) {
+  const s = useReport('summary', range);
+  if (!s) return null;
+  const { from: _f, to: _t, ...fields } = s;
+  return (
+    <>
+      <h3>Summary</h3>
+      <table><tbody>
+        {Object.entries(fields).map(([k, v]) => <tr key={k}><td>{k}</td><td><b>{String(v)}</b></td></tr>)}
+      </tbody></table>
+    </>
+  );
+}
+
+function RevenueReport({ range }: { range: Range }) {
+  const [groupBy, setGroupBy] = useState('day');
+  const r = useReport('revenue', range, { groupBy });
+  return (
+    <>
+      <h3>Revenue</h3>
+      <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
+        {['day', 'month', 'doctor', 'service', 'method'].map((g) => <option key={g}>{g}</option>)}
+      </select>
+      {r && (
+        <table>
+          <thead><tr><th>{groupBy}</th><th>Collected</th><th>Invoiced</th><th>Visits</th></tr></thead>
+          <tbody>
+            {r.rows.map((row: any) => (
+              <tr key={row.key ?? 'none'}><td>{row.label}</td><td>{row.collected}</td><td>{row.invoiced ?? '-'}</td><td>{row.visits ?? '-'}</td></tr>
+            ))}
+            <tr><td><b>Total</b></td><td><b>{r.totals.collected}</b></td><td><b>{r.totals.invoiced ?? '-'}</b></td><td><b>{r.totals.visits ?? '-'}</b></td></tr>
+          </tbody>
+        </table>
+      )}
+    </>
+  );
+}
+
+function AttendanceReport({ range }: { range: Range }) {
+  const a = useReport('attendance', range);
+  if (!a) return null;
+  const Row = ({ label, c }: { label: string; c: any }) => (
+    <tr><td>{label}</td><td>{c.booked}</td><td>{c.attended}</td><td>{c.noShow}</td><td>{c.cancelled}</td>
+      <td>{c.noShowRate ?? '-'}%</td><td>{c.walkIns}</td><td>{c.onlineBookings}</td><td>{c.receptionBookings}</td></tr>
+  );
+  return (
+    <>
+      <h3>Attendance</h3>
+      <table>
+        <thead><tr><th>Doctor</th><th>Booked</th><th>Attended</th><th>No-show</th><th>Cancelled</th><th>No-show rate</th><th>Walk-ins</th><th>Online</th><th>Reception</th></tr></thead>
+        <tbody>
+          {a.doctors.map((d: any) => <Row key={d.doctor.id} label={d.doctor.name} c={d} />)}
+          <Row label="Total" c={a.totals} />
+        </tbody>
+      </table>
+    </>
+  );
+}
+
+function DiscountsReport({ range }: { range: Range }) {
+  const d = useReport('discounts', range);
+  if (!d) return null;
+  return (
+    <>
+      <h3>Discounts</h3>
+      <p>{d.count} discounts, {d.totalAmount} in total, {d.repeats} repeated</p>
+      <div className="cols">
+        <table>
+          <thead><tr><th>By user</th><th>Count</th><th>Amount</th></tr></thead>
+          <tbody>{d.byUser.map((u: any) => <tr key={u.user.id}><td>{u.user.name}</td><td>{u.count}</td><td>{u.amount}</td></tr>)}</tbody>
+        </table>
+        <table>
+          <thead><tr><th>Top reasons</th><th>Count</th><th>Amount</th></tr></thead>
+          <tbody>{d.byReason.map((r: any) => <tr key={r.reason}><td>{r.reason}</td><td>{r.count}</td><td>{r.amount}</td></tr>)}</tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function ExpensesReport({ range }: { range: Range }) {
+  const e = useReport('expenses', range);
+  if (!e) return null;
+  return (
+    <>
+      <h3>Expenses</h3>
+      <p>{e.count} expenses, {e.total} in total · {Object.entries(e.byMethod).map(([m, v]) => `${m} ${v}`).join(' · ')}</p>
+      <table>
+        <thead><tr><th>Category</th><th>Count</th><th>Total</th></tr></thead>
+        <tbody>{e.byCategory.map((c: any) => <tr key={c.category.id}><td>{c.category.name}</td><td>{c.count}</td><td>{c.total}</td></tr>)}</tbody>
+      </table>
+    </>
+  );
+}
+
+function OutstandingReport({ range }: { range: Range }) {
+  const [page, setPage] = useState(1);
+  useEffect(() => setPage(1), [range.from, range.to]);
+  const o = useReport('outstanding', range, { page, limit: 10 });
+  if (!o) return null;
+  return (
+    <>
+      <h3>Outstanding</h3>
+      <table>
+        <thead><tr><th>Patient</th><th>Phone</th><th>Balance</th><th>Oldest unpaid invoice</th></tr></thead>
+        <tbody>
+          {o.items.map((r: any) => (
+            <tr key={r.patient.id}><td><Link to={`/reception/patients/${r.patient.id}`}>{r.patient.name}</Link></td><td>{r.patient.phone}</td><td>{r.balance}</td><td>{r.oldestUnpaidInvoiceDate}</td></tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="inline">
+        <button disabled={page <= 1} onClick={() => setPage(page - 1)}>prev</button> page {page} / {o.meta.totalPages || 1} ({o.meta.total})
+        <button disabled={page >= o.meta.totalPages} onClick={() => setPage(page + 1)}>next</button>
+      </div>
     </>
   );
 }
