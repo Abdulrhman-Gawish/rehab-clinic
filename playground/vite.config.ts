@@ -17,7 +17,8 @@ function backendEnv(): Record<string, string> {
   }
 }
 
-const env = backendEnv();
+// The environment (Docker) wins over backend/.env (local run).
+const env: Record<string, string | undefined> = { ...backendEnv(), ...process.env };
 
 export default defineConfig({
   plugins: [react()],

@@ -22,6 +22,29 @@ NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, 
 | Docs | Swagger UI at `/api/docs`, JSON at `/api/docs-json` |
 | Tests | Vitest (Jest-compatible API) + supertest e2e against a real PostgreSQL |
 
+## Run everything with Docker
+
+From the repo root, after `cp backend/.env.example backend/.env` (set `JWT_ACCESS_SECRET` and `SEED_OWNER_*`):
+
+```bash
+docker compose up -d --build     # db + backend + demo seed + playground
+```
+
+| Service | What it does |
+|---|---|
+| `db` | PostgreSQL 16, its own volume (host port 5433, so it doesn't clash with the dev database) |
+| `backend` | API on <http://localhost:3000/api/v1>. On every start it runs the migrations and the OWNER seed (both idempotent) |
+| `demo-seed` | One-shot: demo staff, services, schedules and a sample day. Skipped when doctors already exist |
+| `playground` | Throwaway UI on <http://localhost:5173> (quick-login buttons for the demo accounts) |
+
+The containers take `backend/.env`, with the `DB_*` values overridden to point at `db` and `NODE_ENV=production`.
+Seeding happens when the containers start, not at image build time (there is no database during the build).
+
+- Logs: `docker compose logs -f backend` (or `demo-seed`).
+- Stop: `docker compose down`. Start again later: `docker compose up -d`.
+- Fresh database and demo data again: `docker compose down -v && docker compose up -d --build` (**deletes the Docker database and uploaded files**).
+- After code changes: `docker compose up -d --build`.
+
 ## Getting started
 
 Prerequisites: Node 24+, Docker.

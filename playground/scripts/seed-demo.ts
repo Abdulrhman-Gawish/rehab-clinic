@@ -6,12 +6,20 @@ import { addDays, cairoIso, dayOfWeek, nowCairoHHmm, todayCairo } from '../src/t
 
 const API = process.env.API_URL ?? 'http://localhost:3000/api/v1';
 
-const env: Record<string, string> = Object.fromEntries(
-  readFileSync(new URL('../../backend/.env', import.meta.url), 'utf8')
-    .split(/\r?\n/)
-    .filter((l) => /^[A-Z_]+=/.test(l))
-    .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]),
-);
+// SEED_OWNER_* from the environment (Docker), else from backend/.env (local run).
+function backendEnvFile(): Record<string, string> {
+  try {
+    return Object.fromEntries(
+      readFileSync(new URL('../../backend/.env', import.meta.url), 'utf8')
+        .split(/\r?\n/)
+        .filter((l) => /^[A-Z_]+=/.test(l))
+        .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).trim()]),
+    );
+  } catch {
+    return {};
+  }
+}
+const env: Record<string, string | undefined> = { ...backendEnvFile(), ...process.env };
 
 class HttpError extends Error {
   constructor(public status: number, public body: any, label: string) {
@@ -59,11 +67,14 @@ function shift(time: string, minutes: number): string {
 
 async function main() {
   console.log(`API ${API}; today ${TODAY}, tomorrow ${TOMORROW}, next working day ${NEXT_WORKDAY}`);
+  if (!env.SEED_OWNER_EMAIL || !env.SEED_OWNER_PASSWORD) throw new Error('SEED_OWNER_EMAIL / SEED_OWNER_PASSWORD are not set');
   const owner = await login(env.SEED_OWNER_EMAIL, env.SEED_OWNER_PASSWORD);
 
+  // Idempotent: on a database that already has doctors (seeded before, or real data) do nothing.
   const existing = await call(owner, 'GET', '/doctors?limit=1');
   if (existing.meta.total > 0) {
-    throw new Error('Doctors already exist: this seed expects a freshly migrated database. See playground/README.md ("Reset").');
+    console.log('Doctors already exist: demo seed skipped (it only runs on a fresh database). See playground/README.md ("Reset").');
+    return;
   }
 
   // ---------- staff

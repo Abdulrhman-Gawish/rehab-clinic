@@ -3,8 +3,13 @@
 A deliberately ugly Vite + React UI for clicking through the clinic workflow by hand. **Not for production.
 It will be deleted.** API problems found while building it are in [FINDINGS.md](FINDINGS.md).
 
-## Run
+## Run with Docker (simplest)
 
+From the repo root: `docker compose up -d --build`. It starts the database and the backend, runs the migrations, the
+OWNER seed and the demo seed, then serves this UI on http://localhost:5173. See "Run everything with Docker" in
+`backend/README.md`.
+
+## Run
 ```bash
 # 1. backend (in backend/): CORS_ORIGINS must include http://localhost:5173 in backend/.env
 #    Rate limits count per user (login: per email + IP), so switching roles is fine.
