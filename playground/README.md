@@ -132,8 +132,10 @@ To keep your dev data, use a separate database instead: prefix the backend comma
 8. **Packages**:
    - Owner → **Services & packages**: services on top, packages underneath. Each has one form for create and
      **edit** (services: name, description, duration, price, doctors; packages: also sessions, offer with dates).
-     **Delete** deactivates after a confirm (nothing is hard deleted: history points at it); tick "show deleted" to
-     see and **restore** them. "Selling today" is the package's offer price.
+     **Deactivate** hides it for a while (a service can't be booked, a package can't be sold, neither is on the
+     website) and **activate** shows it again. **Delete** (after a confirm) removes it for good. A service with packages
+     can't be deleted until its packages are; patients keep the sessions of a deleted package. "Selling today" is the
+     package's offer price.
    - Patient page → Packages: sell one (creates the invoice; pay part of it on the invoice page), "sessions" lists
      the usages with **restore** for a no-show; the owner can cancel a package.
    - Day list: **attend** opens a box to use the oldest usable package, pick one, or bill normally. The Package column

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { act, get, patch, post, qs } from '../api';
+import { act, del, get, patch, post, qs } from '../api';
 import { doctorBody, DoctorPicker, type DoctorChoice } from '../components';
 import { useForm, useLoad } from '../util';
 
@@ -9,22 +9,21 @@ const EMPTY = {
 };
 
 /**
- * Owner: package catalog (create / edit / doctors / offer / delete), shown under the services. "Delete" deactivates:
- * it stops new sales, sold packages stay usable, and it can be restored.
+ * Owner: package catalog, shown under the services. Edit, deactivate (not sold for a while) / activate, and delete
+ * for good. Patients who bought a package keep their sessions in every case.
  */
 export function Packages({ services }: { services: any[] }) {
   const [res, reload] = useLoad(() => get(`/packages${qs({ limit: 100 })}`), []);
   const f = useForm(EMPTY);
   const [docs, setDocs] = useState<DoctorChoice>({ all: true, ids: [] });
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [showDeleted, setShowDeleted] = useState(false);
   const run = (fn: () => Promise<unknown>) => act(fn).then(reload);
   const remove = (p: any) => {
-    if (confirm(`Delete "${p.name}"? It can't be sold any more; patients who bought it keep their sessions. You can restore it.`)) {
-      run(() => patch(`/packages/${p.id}/deactivate`));
+    if (confirm(`Delete "${p.name}" for good? It can't be undone (use deactivate to stop selling it for a while). Patients who bought it keep their sessions.`)) {
+      run(() => del(`/packages/${p.id}`)).then(() => { if (editingId === p.id) reset(); });
     }
   };
-  const rows = (res?.items ?? []).filter((p: any) => showDeleted || p.isActive);
+  const rows = res?.items ?? [];
 
   const reset = () => { f.setV(EMPTY); setDocs({ all: true, ids: [] }); setEditingId(null); };
   const edit = (p: any) => {
@@ -77,9 +76,8 @@ export function Packages({ services }: { services: any[] }) {
         </div>
         <small>Sold packages keep their name, sessions and prices; they follow the doctor list as it is now.</small>
       </div>
-      <label><input type="checkbox" checked={showDeleted} onChange={(e) => setShowDeleted(e.target.checked)} /> show deleted</label>
       <table>
-        <thead><tr><th>Name</th><th>Service</th><th>Sessions</th><th>Price</th><th>Offer</th><th>Selling today</th><th>Doctors</th><th>Public</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Service</th><th>Sessions</th><th>Price</th><th>Offer</th><th>Selling today</th><th>Doctors</th><th>Public</th><th>Status</th><th></th></tr></thead>
         <tbody>
           {rows.map((p: any) => (
             <tr key={p.id} style={p.isActive ? {} : { opacity: 0.5 }}>
@@ -88,11 +86,13 @@ export function Packages({ services }: { services: any[] }) {
               <td><b>{p.sellingPrice}</b></td>
               <td>{p.allDoctors ? <i>all</i> : p.doctors.map((d: any) => d.name).join(', ')}</td>
               <td>{String(p.isPublic)}</td>
+              <td>{p.isActive ? 'active' : 'hidden'}</td>
               <td>
-                {p.isActive ? <>
-                  <button onClick={() => edit(p)}>edit</button>
-                  <button onClick={() => remove(p)}>delete</button>
-                </> : <button onClick={() => run(() => patch(`/packages/${p.id}/activate`))}>restore</button>}
+                <button onClick={() => edit(p)}>edit</button>
+                <button onClick={() => run(() => patch(`/packages/${p.id}/${p.isActive ? 'deactivate' : 'activate'}`))}>
+                  {p.isActive ? 'deactivate' : 'activate'}
+                </button>
+                <button onClick={() => remove(p)}>delete</button>
               </td>
             </tr>
           ))}

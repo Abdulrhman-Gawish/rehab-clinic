@@ -161,15 +161,14 @@ export function DoctorPage() {
 const EMPTY_SERVICE = { name: '', description: '', durationMinutes: '30', basePrice: '' };
 
 /**
- * Services, with their packages underneath. "Delete" deactivates (nothing is ever hard deleted: visits, invoices
- * and sold packages point at it); deleted rows are hidden unless "show deleted" is ticked, and can be restored.
+ * Services, with their packages underneath. Deactivate hides a service for a while (not bookable, not public) and
+ * activate brings it back; delete removes it for good (DELETE /clinic-services/:id).
  */
 export function Services() {
   const [res, reload] = useLoad(() => get(`/clinic-services${qs({ limit: 100 })}`), []);
   const f = useForm(EMPTY_SERVICE);
   const [docs, setDocs] = useState<DoctorChoice>({ all: false, ids: [] });
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [showDeleted, setShowDeleted] = useState(false);
   const run = (fn: () => Promise<unknown>) => act(fn).then(reload);
 
   const reset = () => { f.setV(EMPTY_SERVICE); setDocs({ all: false, ids: [] }); setEditingId(null); };
@@ -191,11 +190,11 @@ export function Services() {
       .then((ok) => { if (ok) reset(); reload(); });
   };
   const remove = (s: any) => {
-    if (confirm(`Delete "${s.name}"? It is hidden and can't be booked any more; history keeps it. You can restore it.`)) {
-      run(() => patch(`/clinic-services/${s.id}/deactivate`));
+    if (confirm(`Delete "${s.name}" for good? It can't be undone (use deactivate to hide it for a while).`)) {
+      run(() => del(`/clinic-services/${s.id}`)).then(() => { if (editingId === s.id) reset(); });
     }
   };
-  const rows = (res?.items ?? []).filter((s: any) => showDeleted || s.isActive);
+  const rows = res?.items ?? [];
 
   return (
     <>
@@ -213,25 +212,27 @@ export function Services() {
         </div>
         <small>Changing the price never changes old invoices. Doctors who stay keep their price override (doctor's page).</small>
       </div>
-      <label><input type="checkbox" checked={showDeleted} onChange={(e) => setShowDeleted(e.target.checked)} /> show deleted</label>
       <table>
-        <thead><tr><th>Name</th><th>Duration</th><th>Base price</th><th>Doctors</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Duration</th><th>Base price</th><th>Doctors</th><th>Status</th><th></th></tr></thead>
         <tbody>
           {rows.map((s: any) => (
             <tr key={s.id} style={s.isActive ? {} : { opacity: 0.5 }}>
               <td>{s.name}{s.description && <div><small>{s.description}</small></div>}</td>
               <td>{s.durationMinutes} min</td><td>{s.basePrice}</td>
               <td>{s.doctors.map((d: any) => d.name).join(', ') || '-'}</td>
+              <td>{s.isActive ? 'active' : 'hidden'}</td>
               <td>
-                {s.isActive ? <>
-                  <button onClick={() => edit(s)}>edit</button>
-                  <button onClick={() => remove(s)}>delete</button>
-                </> : <button onClick={() => run(() => patch(`/clinic-services/${s.id}/activate`))}>restore</button>}
+                <button onClick={() => edit(s)}>edit</button>
+                <button onClick={() => run(() => patch(`/clinic-services/${s.id}/${s.isActive ? 'deactivate' : 'activate'}`))}>
+                  {s.isActive ? 'deactivate' : 'activate'}
+                </button>
+                <button onClick={() => remove(s)}>delete</button>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
+      <small>Deactivate: hidden for now (no booking, not on the website), activate shows it again. Delete: gone for good.</small>
 
       <Packages services={(res?.items ?? []).filter((s: any) => s.isActive)} />
     </>
