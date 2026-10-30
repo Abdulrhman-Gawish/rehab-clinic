@@ -1,0 +1,16 @@
+/* A few overrides on top of Pico classless. */
+body > #root > * { max-width: 1400px; margin: 0 auto; padding: 0 1rem; }
+table { font-size: 0.85rem; }
+td button, td a[role='button'] { padding: 0.15rem 0.4rem; font-size: 0.75rem; margin: 0.1rem; width: auto; display: inline-block; }
+nav a { margin-right: 0.8rem; }
+.error { background: #fdd; color: #900; border: 1px solid #c00; padding: 0.5rem 1rem; margin: 0.5rem 0; white-space: pre-wrap; }
+.warn { color: #b00; font-weight: bold; }
+.ok { color: #070; }
+.row { display: flex; gap: 1rem; flex-wrap: wrap; align-items: end; }
+.row > * { flex: 1 1 10rem; margin-bottom: 0; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+.slots button { width: auto; display: inline-block; margin: 0.2rem; padding: 0.2rem 0.5rem; }
+.slots button.picked { background: #070; }
+.box { border: 1px solid #8884; padding: 0.75rem; margin-bottom: 1rem; border-radius: 4px; }
+.inline button, .inline input, .inline select { width: auto; display: inline-block; margin: 0.2rem; }
+@media print { header, nav, .noprint { display: none !important; } }
