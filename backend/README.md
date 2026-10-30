@@ -280,6 +280,8 @@ Business errors also carry a stable machine-readable `code`:
 
 ### `clinic-services`
 - OWNER can create, update, activate and deactivate services; there is no hard delete. Staff can read them.
+- **Doctors offering a service:** `POST /clinic-services` and `PATCH /clinic-services/:id` accept `doctorIds: uuid[]` **or** `allDoctors: true` (every doctor active at that moment; doctors added later are not included). `PUT /clinic-services/:id/doctors { doctorIds | allDoctors }` replaces the list (exactly one of the two, 400 otherwise). These write the same `doctor_services` rows as `PUT/DELETE /doctors/:id/services/:serviceId`: doctors that stay keep their `priceOverride`, new ones get none, and each added or removed doctor is audited (`DOCTOR_SERVICE_ASSIGNED` / `_UNASSIGNED`). An unknown doctor id is 404, adding doctors to an inactive service is 409.
+- Every service response has `doctors: [{ id, name }]` (doctor id, sorted by name).
 - `GET /public/services` returns active services only.
 - Prices are `numeric(12,2)` and travel as decimal strings (`"350.00"`) end to end, so there is no float math. These are **current** prices: future invoices must snapshot the price at billing time.
 

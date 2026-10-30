@@ -64,6 +64,7 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
   { method: 'get', path: `/clinic-services/${id}`, allowed: STAFF },
   { method: 'post', path: '/clinic-services', allowed: [OWNER] },
   { method: 'patch', path: `/clinic-services/${id}`, allowed: [OWNER] },
+  { method: 'put', path: `/clinic-services/${id}/doctors`, allowed: [OWNER] },
   {
     method: 'patch',
     path: `/clinic-services/${id}/activate`,
