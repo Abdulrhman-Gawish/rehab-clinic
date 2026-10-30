@@ -38,6 +38,28 @@ export function DoctorService({ doctorId, serviceId, onChange }: {
   );
 }
 
+export interface DoctorChoice { all: boolean; ids: string[] }
+export const doctorBody = (c: DoctorChoice) => (c.all ? { allDoctors: true } : { doctorIds: c.ids });
+
+/** "All doctors" or a checkbox per active doctor (services: all active now; packages: also doctors added later). */
+export function DoctorPicker({ value, onChange, allLabel }: { value: DoctorChoice; onChange: (c: DoctorChoice) => void; allLabel: string }) {
+  const [doctors] = useDoctors();
+  const toggle = (id: string) =>
+    onChange({ ...value, ids: value.ids.includes(id) ? value.ids.filter((x) => x !== id) : [...value.ids, id] });
+  return (
+    <div className="inline">
+      <label style={{ display: 'inline', marginRight: 12 }}>
+        <input type="checkbox" checked={value.all} onChange={(e) => onChange({ ...value, all: e.target.checked })} /> <b>{allLabel}</b>
+      </label>
+      {!value.all && doctors?.map((d) => (
+        <label key={d.id} style={{ display: 'inline', marginRight: 12 }}>
+          <input type="checkbox" checked={value.ids.includes(d.id)} onChange={() => toggle(d.id)} /> {d.name}
+        </label>
+      ))}
+    </div>
+  );
+}
+
 /** Staff slot picker. With `outside`, the whole day is listed, past dates and times included (back to BACKDATE_MAX_DAYS). */
 export function SlotPicker({ doctorId, serviceId, outside, value, onPick }: {
   doctorId: string; serviceId: string; outside: boolean; value: string; onPick: (startAt: string) => void;

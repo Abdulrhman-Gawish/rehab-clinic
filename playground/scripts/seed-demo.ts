@@ -58,6 +58,7 @@ const login = async (email: string, password: string) => (await call(null, 'POST
 // ---------- dates (clinic local)
 const TODAY = todayCairo();
 const TOMORROW = addDays(TODAY, 1);
+const YESTERDAY = addDays(TODAY, -1);
 const isWorkday = (d: string) => dayOfWeek(d) <= 4; // Sun..Thu
 let NEXT_WORKDAY = TOMORROW;
 while (!isWorkday(NEXT_WORKDAY)) NEXT_WORKDAY = addDays(NEXT_WORKDAY, 1);
@@ -113,7 +114,15 @@ async function main() {
       await call(owner, 'POST', `/doctors/${doc.id}/schedules`, { dayOfWeek: day, startTime: '17:00', endTime: '21:00' });
     }
   }
-  console.log('staff, services, schedules: done');
+  // Packages: physio for every doctor with an active 10% offer; massage with Dr. Mona only.
+  const pkgPhysio = await call(owner, 'POST', '/packages', {
+    name: '10 physio sessions', serviceId: svc.physio.id, sessionsCount: 10, price: '2700.00', allDoctors: true,
+    offer: { type: 'PERCENT', value: '10', startsOn: addDays(TODAY, -7), endsOn: addDays(TODAY, 30) },
+  });
+  const pkgMassage = await call(owner, 'POST', '/packages', {
+    name: '5 sports massages', serviceId: svc.massage.id, sessionsCount: 5, price: '1800.00', doctorIds: [D2.id],
+  });
+  console.log('staff, services, schedules, packages: done');
 
   const desk = await login(rec.email, DEMO_PASSWORD);
   const d1 = await login(docSpecs[0].email, DEMO_PASSWORD);
@@ -138,6 +147,7 @@ async function main() {
     dina: { name: 'Dina Wagdy', phone: phone(14) },
     hossam: { name: 'Hossam Zaki', phone: phone(15) },
     ola: { name: 'Ola Samy', phone: phone(16) },
+    kareem: { name: 'Kareem Wael', phone: phone(17) },
   };
 
   /** Reception booking, outside schedule; on SLOT_UNAVAILABLE try the next time (step minutes). */
@@ -150,7 +160,7 @@ async function main() {
           ...p, doctorId: doc.id, serviceId: s.id, startAt: cairoIso(date, t), allowOutsideSchedule: true, notes,
         });
       } catch (e) {
-        if (e instanceof HttpError && e.body?.code === 'SLOT_UNAVAILABLE') continue;
+        if (e instanceof HttpError && ['SLOT_UNAVAILABLE', 'PATIENT_OVERLAP'].includes(e.body?.code)) continue;
         throw e;
       }
     }
@@ -204,8 +214,10 @@ async function main() {
   const vYoussef = await attend(aYoussef);
   await call(d2, 'PUT', `/visits/${vYoussef.id}/note`, { chiefComplaint: 'Knee pain after running' });
 
-  // d) Nour: confirmed, not arrived yet.
-  await book(P.nour, D2, svc.massage, TODAY, '12:00');
+  // d) Nour: confirmed, not arrived yet. She bought the massage package (Dr. Mona only): attending her from the
+  //    day list uses a session.
+  const aNour = await book(P.nour, D2, svc.massage, TODAY, '12:00');
+  await call(desk, 'POST', `/patients/${aNour.patient.id}/packages`, { packageId: pkgMassage.id });
 
   // e) Hana: cancelled.
   const aHana = await book(P.hana, D3, svc.assessment, TODAY, '10:00');
@@ -225,6 +237,22 @@ async function main() {
     await book(P.mostafa, D3, svc.physio, TODAY, '19:00');
     console.log('  (too early in the day for a NO_SHOW example; Mostafa stays CONFIRMED)');
   }
+
+  // k) Kareem: mid-package. Physio package (offer price 2430.00), 1000.00 paid; attended today (0.00 line). Yesterday:
+  //    one no-show given back, one no-show still using a session (restoreSession on yesterday's day list). Works at any
+  //    hour: attend only needs today, a no-show only a start in the past.
+  const k1 = await book(P.kareem, D1, svc.physio, TODAY, '20:00');
+  const sold = await call(desk, 'POST', `/patients/${k1.patient.id}/packages`, { packageId: pkgPhysio.id });
+  await call(desk, 'POST', `/invoices/${sold.invoiceId}/payments`, { amount: '1000.00', method: 'CASH' });
+  await attend(k1);
+  const k2 = await book(P.kareem, D3, svc.physio, YESTERDAY, '17:00');
+  await call(desk, 'POST', `/appointments/${k2.id}/no-show`);
+  const { usages } = await call(desk, 'GET', `/patient-packages/${sold.id}`);
+  const missed = usages.find((u: any) => u.reason === 'NO_SHOW' && !u.restored);
+  await call(desk, 'POST', `/package-usages/${missed.id}/restore`, { reason: 'Called in sick, owner agreed' });
+  const k3 = await book(P.kareem, D1, svc.physio, YESTERDAY, '19:00');
+  await call(desk, 'POST', `/appointments/${k3.id}/no-show`);
+  await book(P.kareem, D3, svc.physio, TOMORROW, '17:30');
 
   // h) Tarek: walk-in with D1 (invoice created with it).
   await call(desk, 'POST', '/visits/walk-in', { ...P.tarek, doctorId: D1.id, serviceId: svc.assessment.id });
@@ -257,7 +285,8 @@ async function main() {
   console.log(`  OWNER         ${env.SEED_OWNER_EMAIL} / (SEED_OWNER_PASSWORD from backend/.env)`);
   for (const s of DEMO_STAFF) console.log(`  ${s.role.padEnd(13)} ${s.email} / ${DEMO_PASSWORD}   (${s.name})`);
   console.log(`\nToday (${TODAY}): Omar attended+paid+signed note, Laila attended+partial, Youssef attended (draft note),`);
-  console.log(`  Nour confirmed, Hana cancelled, Salma attended unpaid, Mostafa no-show, Tarek walk-in, Ola attend undone.`);
+  console.log(`  Nour confirmed (has a massage package), Hana cancelled, Salma attended unpaid, Mostafa no-show, Tarek walk-in,`);
+  console.log(`  Ola attend undone, Kareem mid-package (attended today; yesterday 1 no-show restored + 1 no-show; partial payment).`);
   console.log(`Tomorrow (${TOMORROW}): Omar with ${D2.name} (shared history), Rania, Sherif, Hossam, Dina (rescheduled).`);
   console.log(`Next working day (${NEXT_WORKDAY}): 4 PENDING public bookings incl. "Laila Mahmoud" (name mismatch).`);
 }

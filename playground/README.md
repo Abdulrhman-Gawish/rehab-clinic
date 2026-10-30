@@ -46,6 +46,8 @@ It creates:
 - 1 receptionist and 3 doctors.
 - 3 services (30/45/60 min, with different prices). Dr. Mona has a price override on physiotherapy.
 - Schedules Sun–Thu 10:00–14:00 and 17:00–21:00.
+- **Packages:** "10 physio sessions" for all doctors (2700.00, 10% offer from a week ago to 30 days ahead) and
+  "5 sports massages" with Dr. Mona only (1800.00).
 - **History (six days, 41 to 6 days ago, so the reports span two months):**
   - Omar: visits with all three doctors and signed notes (one addendum), a 10% student discount and its repeat, a
     no-show, a reschedule to Dr. Karim, a refund, and medical info updated twice.
@@ -56,7 +58,10 @@ It creates:
   - Omar: attended, 10% discount, paid, note written and signed in one call by Dr. Ahmed.
   - Laila: attended, fixed discount, partial card payment, no note yet.
   - Youssef: attended with Dr. Mona, draft note (so attend can no longer be undone).
-  - Nour: confirmed, not here yet.
+  - Nour: confirmed, not here yet. She bought the massage package: attend her to use a session (0.00 line).
+  - Kareem: mid-package (physio, 2430.00 with the offer, 1000.00 cash paid). Attended today with Dr. Ahmed. On
+    **yesterday's** day list: one no-show whose session was given back, and one still using a session
+    (`restoreSession`). Booked again tomorrow.
   - Hana: cancelled.
   - Salma: attended, unpaid (attend can still be undone).
   - Mostafa: no-show (can be undone today).
@@ -124,7 +129,14 @@ To keep your dev data, use a separate database instead: prefix the backend comma
 7. **Patient page** (Patients → Omar): the overview (next appointment, last visit, counts, doctors seen, balance, notes
    to write) and the timeline. Filter by type or dates, and use "Load more". Log in as a doctor to see that billing
    events and the balance disappear; as reception, the clinical events.
-8. **Owner → Reports**: pick a date range (default: from the 1st of last month). There is one section per report, and
+8. **Packages**:
+   - Owner → Services: pick the doctors when creating a service, or change them with "doctors" on a row.
+   - Owner → Packages: create / edit (doctors, offer with dates), deactivate. "Selling today" is the offer price.
+   - Patient page → Packages: sell one (creates the invoice; pay part of it on the invoice page), "sessions" lists
+     the usages with **restore** for a no-show; the owner can cancel a package.
+   - Day list: **attend** opens a box to use the oldest usable package, pick one, or bill normally. The Package column
+     shows the session a visit or no-show used; **restoreSession** gives a no-show's session back.
+9. **Owner → Reports**: pick a date range (default: from the 1st of last month). There is one section per report, and
    revenue can be grouped by day, month, doctor, service or method.
 
 Times are shown in Africa/Cairo. API errors appear at the top of the page as they are (status, `code`, message,
@@ -132,5 +144,5 @@ details).
 
 ## Layout
 
-`src/api.ts` is the fetch wrapper (token, one refresh on 401, error bar). `src/time.ts` has the Cairo helpers, also
+`src/api.ts` is the fetch wrapper (token, one shared refresh on 401, `REFRESH_RACE` retry, error bar). `src/time.ts` has the Cairo helpers, also
 used by the seed. `src/pages/*` holds one file per area. `scripts/seed-demo.ts` is the seed.
