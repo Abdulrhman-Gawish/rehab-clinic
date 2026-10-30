@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { act, del, get, patch, post, put, qs } from '../api';
+import { Packages } from './Packages';
 import { doctorBody, DoctorPicker, type Doctor, type DoctorChoice } from '../components';
 import { DAYS, fmtDateTime, localInputToIso } from '../time';
 import { opt, useForm, useLoad } from '../util';
@@ -157,60 +158,82 @@ export function DoctorPage() {
   );
 }
 
+const EMPTY_SERVICE = { name: '', description: '', durationMinutes: '30', basePrice: '' };
+
+/**
+ * Services, with their packages underneath. "Delete" deactivates (nothing is ever hard deleted: visits, invoices
+ * and sold packages point at it); deleted rows are hidden unless "show deleted" is ticked, and can be restored.
+ */
 export function Services() {
   const [res, reload] = useLoad(() => get(`/clinic-services${qs({ limit: 100 })}`), []);
-  const f = useForm({ name: '', description: '', durationMinutes: '30', basePrice: '' });
+  const f = useForm(EMPTY_SERVICE);
   const [docs, setDocs] = useState<DoctorChoice>({ all: false, ids: [] });
-  // The service whose doctor list is being edited.
-  const [editing, setEditing] = useState<{ id: string; choice: DoctorChoice } | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [showDeleted, setShowDeleted] = useState(false);
   const run = (fn: () => Promise<unknown>) => act(fn).then(reload);
+
+  const reset = () => { f.setV(EMPTY_SERVICE); setDocs({ all: false, ids: [] }); setEditingId(null); };
+  const edit = (s: any) => {
+    setEditingId(s.id);
+    f.setV({ name: s.name, description: s.description ?? '', durationMinutes: String(s.durationMinutes), basePrice: s.basePrice });
+    setDocs({ all: false, ids: s.doctors.map((d: any) => d.id) });
+    window.scrollTo(0, 0);
+  };
+  const save = () => {
+    const body = {
+      name: f.v.name, durationMinutes: Number(f.v.durationMinutes), basePrice: f.v.basePrice,
+      // On edit the doctor list is always sent (it replaces the current one); on create only when chosen.
+      ...(editingId || docs.all || docs.ids.length ? doctorBody(docs) : {}),
+    };
+    return act(() => (editingId
+      ? patch(`/clinic-services/${editingId}`, { ...body, description: f.v.description.trim() || null })
+      : post('/clinic-services', { ...body, description: opt(f.v.description) })))
+      .then((ok) => { if (ok) reset(); reload(); });
+  };
+  const remove = (s: any) => {
+    if (confirm(`Delete "${s.name}"? It is hidden and can't be booked any more; history keeps it. You can restore it.`)) {
+      run(() => patch(`/clinic-services/${s.id}/deactivate`));
+    }
+  };
+  const rows = (res?.items ?? []).filter((s: any) => showDeleted || s.isActive);
+
   return (
     <>
       <h2>Services</h2>
       <div className="box">
+        <h4>{editingId ? 'Edit service' : 'New service'}</h4>
         <div className="row">
           <input placeholder="name" {...f.bind('name')} /><input placeholder="description (optional)" {...f.bind('description')} />
           <input placeholder="duration min" {...f.bind('durationMinutes')} /><input placeholder="price e.g. 300.00" {...f.bind('basePrice')} />
         </div>
         <DoctorPicker value={docs} onChange={setDocs} allLabel="all doctors active now" />
-        <button style={{ width: 'auto' }} onClick={() => run(() => post('/clinic-services', {
-          ...f.v, description: opt(f.v.description), durationMinutes: Number(f.v.durationMinutes),
-          ...(docs.all || docs.ids.length ? doctorBody(docs) : {}),
-        }))}>Create</button>
+        <div className="inline">
+          <button onClick={save}>{editingId ? 'Save' : 'Create'}</button>
+          {editingId && <button onClick={reset}>Cancel edit</button>}
+        </div>
+        <small>Changing the price never changes old invoices. Doctors who stay keep their price override (doctor's page).</small>
       </div>
+      <label><input type="checkbox" checked={showDeleted} onChange={(e) => setShowDeleted(e.target.checked)} /> show deleted</label>
       <table>
-        <thead><tr><th>Name</th><th>Duration</th><th>Base price</th><th>Doctors</th><th>Active</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Duration</th><th>Base price</th><th>Doctors</th><th></th></tr></thead>
         <tbody>
-          {res?.items.map((s: any) => {
-            const choice = editing && editing.id === s.id ? editing.choice : null;
-            return (
-            <tr key={s.id}>
-              <td>{s.name}</td><td>{s.durationMinutes}</td><td>{s.basePrice}</td>
+          {rows.map((s: any) => (
+            <tr key={s.id} style={s.isActive ? {} : { opacity: 0.5 }}>
+              <td>{s.name}{s.description && <div><small>{s.description}</small></div>}</td>
+              <td>{s.durationMinutes} min</td><td>{s.basePrice}</td>
+              <td>{s.doctors.map((d: any) => d.name).join(', ') || '-'}</td>
               <td>
-                {choice ? (
-                  <>
-                    <DoctorPicker value={choice} onChange={(c) => setEditing({ id: s.id, choice: c })} allLabel="all doctors active now" />
-                    <button onClick={() => run(() => put(`/clinic-services/${s.id}/doctors`, doctorBody(choice))).then(() => setEditing(null))}>save</button>
-                    <button onClick={() => setEditing(null)}>close</button>
-                  </>
-                ) : (
-                  <>
-                    {s.doctors.map((d: any) => d.name).join(', ') || '-'}{' '}
-                    <button onClick={() => setEditing({ id: s.id, choice: { all: false, ids: s.doctors.map((d: any) => d.id) } })}>doctors</button>
-                  </>
-                )}
-              </td>
-              <td>{String(s.isActive)}</td>
-              <td>
-                <button onClick={() => { const p = prompt('New base price', s.basePrice); if (p) run(() => patch(`/clinic-services/${s.id}`, { basePrice: p })); }}>change price</button>
-                <button onClick={() => run(() => patch(`/clinic-services/${s.id}/${s.isActive ? 'deactivate' : 'activate'}`))}>{s.isActive ? 'deactivate' : 'activate'}</button>
+                {s.isActive ? <>
+                  <button onClick={() => edit(s)}>edit</button>
+                  <button onClick={() => remove(s)}>delete</button>
+                </> : <button onClick={() => run(() => patch(`/clinic-services/${s.id}/activate`))}>restore</button>}
               </td>
             </tr>
-            );
-          })}
+          ))}
         </tbody>
       </table>
-      <small>Doctors who stay keep their price override (set on the doctor's page).</small>
+
+      <Packages services={(res?.items ?? []).filter((s: any) => s.isActive)} />
     </>
   );
 }
