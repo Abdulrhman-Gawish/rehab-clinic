@@ -81,6 +81,21 @@ const PAYMENT_COLUMNS = (at: string, actor: string, data: string) => ({
   data,
 });
 
+const USAGES = `package_usages u JOIN patient_packages pp ON pp.id = u.patient_package_id
+  LEFT JOIN visits v ON v.id = u.visit_id
+  LEFT JOIN appointments ap ON ap.id = u.appointment_id
+  WHERE pp.patient_id = $1`;
+const USAGE_COLUMNS = (at: string, actor: string, data: string): Columns => ({
+  id: 'u.id',
+  at,
+  actor,
+  doctor: 'COALESCE(v.doctor_id, ap.doctor_id)',
+  appointment: 'COALESCE(u.appointment_id, v.appointment_id)',
+  visit: 'u.visit_id',
+  data: `jsonb_build_object('patientPackageId', pp.id, 'name', pp.name, 'reason', u.reason,
+    'totalSessions', pp.total_sessions, ${data})`,
+});
+
 const BRANCHES: Record<T, string> = {
   [T.PATIENT_CREATED]: branch(T.PATIENT_CREATED, 'patients p WHERE p.id = $1', {
     id: 'p.id',
@@ -314,6 +329,49 @@ const BRANCHES: Record<T, string> = {
       doctor: 'dr.id',
       visit: 'pa.visit_id',
       data: `jsonb_build_object('attachmentId', pa.id, 'title', pa.title, 'mimeType', pa.mime_type)`,
+    },
+  ),
+  [T.PACKAGE_SOLD]: branch(
+    T.PACKAGE_SOLD,
+    `patient_packages pp JOIN clinic_services s ON s.id = pp.service_id WHERE pp.patient_id = $1`,
+    {
+      id: 'pp.id',
+      at: 'pp.sold_at',
+      actor: 'pp.sold_by',
+      invoice: 'pp.invoice_id',
+      data: `jsonb_build_object('patientPackageId', pp.id, 'name', pp.name, 'service', ${SERVICE},
+        'totalSessions', pp.total_sessions, 'listPrice', pp.list_price::text,
+        'offerAmount', pp.offer_amount::text, 'price', pp.price::text)`,
+    },
+  ),
+  // Restored sessions too: they were used, then restored.
+  [T.PACKAGE_SESSION_USED]: branch(
+    T.PACKAGE_SESSION_USED,
+    USAGES,
+    USAGE_COLUMNS(
+      'u.used_at',
+      'u.used_by',
+      `'restored', u.restored_at IS NOT NULL`,
+    ),
+  ),
+  [T.PACKAGE_SESSION_RESTORED]: branch(
+    T.PACKAGE_SESSION_RESTORED,
+    `${USAGES} AND u.restored_at IS NOT NULL`,
+    USAGE_COLUMNS(
+      'u.restored_at',
+      'u.restored_by',
+      `'restoreReason', u.restore_reason`,
+    ),
+  ),
+  [T.PACKAGE_CANCELLED]: branch(
+    T.PACKAGE_CANCELLED,
+    `patient_packages pp WHERE pp.patient_id = $1 AND pp.cancelled_at IS NOT NULL`,
+    {
+      id: 'pp.id',
+      at: 'pp.cancelled_at',
+      actor: 'pp.cancelled_by',
+      data: `jsonb_build_object('patientPackageId', pp.id, 'name', pp.name, 'reason', pp.cancel_reason,
+        'usedSessions', pp.used_sessions, 'totalSessions', pp.total_sessions)`,
     },
   ),
 };

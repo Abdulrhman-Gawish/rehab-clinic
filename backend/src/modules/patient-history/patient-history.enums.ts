@@ -22,6 +22,10 @@ export enum TimelineEventType {
   ADDENDUM_ADDED = 'ADDENDUM_ADDED',
   MEDICAL_INFO_UPDATED = 'MEDICAL_INFO_UPDATED',
   ATTACHMENT_UPLOADED = 'ATTACHMENT_UPLOADED',
+  PACKAGE_SOLD = 'PACKAGE_SOLD',
+  PACKAGE_SESSION_USED = 'PACKAGE_SESSION_USED',
+  PACKAGE_SESSION_RESTORED = 'PACKAGE_SESSION_RESTORED',
+  PACKAGE_CANCELLED = 'PACKAGE_CANCELLED',
 }
 
 const T = TimelineEventType;
@@ -41,6 +45,8 @@ export const BILLING_EVENTS: readonly TimelineEventType[] = [
   T.PAYMENT_RECORDED,
   T.PAYMENT_VOIDED,
   T.PAYMENT_REFUNDED,
+  // Carries the prices; the other package events have none.
+  T.PACKAGE_SOLD,
 ];
 
 // RECEPTIONIST: no clinical data. DOCTOR: no billing. OWNER: everything.

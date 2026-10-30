@@ -19,6 +19,7 @@ import { ClinicServicesModule } from './modules/clinic-services/clinic-services.
 import { DoctorsModule } from './modules/doctors/doctors.module.js';
 import { ExpensesModule } from './modules/expenses/expenses.module.js';
 import { HealthModule } from './modules/health/health.module.js';
+import { PackagesModule } from './modules/packages/packages.module.js';
 import { PatientHistoryModule } from './modules/patient-history/patient-history.module.js';
 import { PatientsModule } from './modules/patients/patients.module.js';
 import { ReportsModule } from './modules/reports/reports.module.js';
@@ -65,6 +66,7 @@ import { VisitsModule } from './modules/visits/visits.module.js';
     ClinicalModule,
     PatientHistoryModule,
     ReportsModule,
+    PackagesModule,
   ],
 })
 export class AppModule {}

@@ -154,6 +154,11 @@ Every route is under `/api/v1` and needs `Authorization: Bearer <accessToken>` u
 | clinical: attachment upload | W | – | W (patients they treat) | – |
 | `/patients/:id/overview`, `/patients/:id/timeline` | R | R (no clinical data) | R (patients they treat, no billing) | – |
 | `/reports/*` | R | – | – | – |
+| `/packages` (catalog) | RW | R | – | – |
+| `/public/packages` | – | – | – | R |
+| sell (`POST /patients/:id/packages`), restore a no-show session | W | W | – | – |
+| `/patients/:id/packages`, `/patient-packages/:id` | R | R | R (patients they treat, no prices) | – |
+| cancel a sold package | W | – | – | – |
 
 Doctors have no access to billing or expenses. Receptionists have no access to clinical records.
 
@@ -217,6 +222,12 @@ Business errors also carry a stable machine-readable `code`:
 | `ATTACHMENT_VISIT_MISMATCH` | 422 | The attachment's `visitId` belongs to another patient |
 | `UNSUPPORTED_FILE_TYPE` | 422 | The upload's content isn't JPG/PNG/WEBP/PDF, or doesn't match its extension (files over 5 MB get 413) |
 | `BACKDATE_LIMIT_EXCEEDED` | 422 | A RECEPTIONIST tried to book (or reschedule) more than `BACKDATE_MAX_DAYS` local days in the past |
+| `OFFER_EXCEEDS_PRICE` | 422 | A FIXED package offer above the package price |
+| `PACKAGE_INACTIVE` | 422 | Selling a deactivated package (or one whose service is inactive) |
+| `PACKAGE_NOT_USABLE` | 422 | The chosen `patientPackageId` can't pay this session: cancelled, no sessions left, other service, or the doctor isn't covered |
+| `PACKAGE_CANCELLED` | 422 | Cancelling a package twice |
+| `PACKAGE_INVOICE` | 422 | Editing the items of a package sale's invoice, or cancelling it while the package isn't cancelled |
+| `RESTORE_NOT_ALLOWED` | 422 | Restoring an ATTENDED usage (undo the attendance instead) or one already restored |
 
 ## Modules
 
@@ -364,8 +375,8 @@ The time and undo rules on top of the transitions live in `appointment-actions.t
 | `confirm` | `POST /appointments/:id/confirm` | PENDING | – |
 | `cancel` | `POST /appointments/:id/cancel { reason }` | PENDING, CONFIRMED | – |
 | `reschedule` | `POST /appointments/:id/reschedule` | PENDING, CONFIRMED | the new appointment is CONFIRMED |
-| `noShow` | `POST /appointments/:id/no-show` | PENDING, CONFIRMED | start time passed (`NO_SHOW_TOO_EARLY`) |
-| `undoNoShow` | `POST /appointments/:id/undo-no-show` | NO_SHOW | same local day (`UNDO_WRONG_DAY`); 409 if the freed slot was booked meanwhile |
+| `noShow` | `POST /appointments/:id/no-show` | PENDING, CONFIRMED | start time passed (`NO_SHOW_TOO_EARLY`); uses a package session if one is usable |
+| `undoNoShow` | `POST /appointments/:id/undo-no-show` | NO_SHOW | same local day (`UNDO_WRONG_DAY`); 409 if the freed slot was booked meanwhile; restores the session |
 | `attend` | `POST /appointments/:id/attend` | PENDING, CONFIRMED | appointment's local day (`ATTEND_WRONG_DAY`) |
 | `undoAttend` | `POST /appointments/:id/undo-attend { reason }` | ATTENDED | same local day, no note (`VISIT_HAS_NOTE`), invoice unpaid (`INVOICE_HAS_PAYMENTS`) |
 
@@ -377,6 +388,7 @@ The time and undo rules on top of the transitions live in `appointment-actions.t
 - `GET /appointments/day?date=&status=&doctorId=` is the day list: every appointment of the local day with its visit (if attended) plus the day's walk-ins (`isWalkIn: true`, appointment fields null), ordered by start time (attended time for walk-ins). Each row has patient name + phone, doctor, service, status, `bookedName`, a computed `nameMismatch`, `visitId`, `visitStatus`, `attendedAt`, `noteStatus` and **`allowedActions`**.
   - `status` takes several values (`?status=PENDING&status=CONFIRMED` or `?status=PENDING,CONFIRMED`); walk-ins count as ATTENDED.
   - OWNER / RECEPTIONIST rows also carry the billing columns (see Cashier views). A walk-in row's only action is `undoAttend`, done with `POST /visits/:visitId/undo-attend`.
+  - Every row has `package: { usageId, patientPackageId, name, used, total }` when its visit (or, for a NO_SHOW row, its no-show) used a package session, else `null`. A NO_SHOW row with a session also gets `restoreSession` in `allowedActions` (`POST /package-usages/:usageId/restore`; no time limit, not a status change).
   - A DOCTOR gets only their own rows (PENDING included; `doctorId` is ignored), **without** billing fields, and `allowedActions` is `writeNote` (ACTIVE visit whose note isn't signed) or `viewNote` (signed note).
 - `GET /appointments/:id`, `GET /appointments/by-reference/:code` (case-insensitive, e.g. `APT-7K3Q9X`; 404 `REFERENCE_NOT_FOUND`) and `GET /appointments/:id/history`.
 - `GET /patients/:id/appointments` lists a patient's appointments across all doctors.
@@ -395,6 +407,7 @@ stateDiagram-v2
 - Only on the appointment's local date (`CLINIC_TIMEZONE`); late arrival the same day is fine. Otherwise 422 `ATTEND_WRONG_DAY`. Works from PENDING or CONFIRMED (one history row).
 - One transaction locks the appointment, moves it to ATTENDED, inserts the ACTIVE visit (patient, doctor and service copied from the appointment), **creates the invoice**, and writes the histories and audit entries. The response is the visit plus `invoiceId`. If anything fails (the invoice included), nothing is written.
 - A second attend returns 409 `ALREADY_ATTENDED`. The guarantee is the partial unique index `uq_visits_appointment_active` on `appointment_id WHERE status = 'ACTIVE'`; it is partial so that after an undo, the same appointment can attend again.
+- **Packages:** the optional body `{ patientPackageId }` or `{ usePackage: false }` (not both, 400) chooses who pays. By default the patient's oldest usable package pays one session (see `packages`) and the response's `package` is `{ usageId, patientPackageId, name, used, total }` (null when billed normally). Walk-ins take the same two fields.
 
 **Walk-ins** (`POST /visits/walk-in`):
 - A visit with `appointment_id = NULL`, attended now, with its invoice in the same transaction (`invoiceId` in the response). The patient is identified by `patientId` or `name` + `phone` (find-or-create, source RECEPTION) and never renamed.
@@ -405,7 +418,7 @@ stateDiagram-v2
 - `POST /appointments/:id/undo-attend`: the appointment goes back to CONFIRMED.
 - `POST /visits/:id/undo-attend`: the way to undo a walk-in (for an appointment's visit it does the same as the appointment route).
 - Refused while the doctor has a note for the visit (422 `VISIT_HAS_NOTE`) or the invoice holds money (422 `INVOICE_HAS_PAYMENTS`: void the payments first).
-- Otherwise, in one transaction: the visit becomes VOIDED (`voided_at`, `voided_by`, `void_reason`; CHECK `chk_visits_voided`), its invoice is CANCELLED with the same reason, and the appointment returns to CONFIRMED.
+- Otherwise, in one transaction: the visit becomes VOIDED (`voided_at`, `voided_by`, `void_reason`; CHECK `chk_visits_voided`), its invoice is CANCELLED with the same reason, its package session (if any) is restored, and the appointment returns to CONFIRMED.
 
 **Notes** are written by the visit's doctor on ACTIVE visits only, any day after the visit (see `clinical`).
 
@@ -453,7 +466,7 @@ stateDiagram-v2
 - **Manual invoices** (`POST /invoices`): service items take name and base price from the catalog (any client price is ignored); free-text items need a description and a price.
 - **Locking.** Items and the discount change only while the invoice has never had a valid payment (`INVOICE_LOCKED`). `GET /invoices/:id` says so in `isLocked`, and `canCancel` is true while it is not cancelled and nothing is paid. Percent discounts are recalculated when items change. An invoice keeps at least one item.
 - **Cancel** requires `amount_paid = 0`. After a full refund, a locked invoice can still be cancelled.
-- **Hook for packages (Stage 8):** bind a different `VisitBillingPolicy` to `VISIT_BILLING_POLICY` in `BillingModule` (e.g. "covered by package" items at 0.00).
+- **Packages:** `BillingModule` binds `PackageVisitBillingPolicy` to `VISIT_BILLING_POLICY`. A visit paid by a package session gets one 0.00 line `"<service> — package <name> (session 3/10)"` (total 0.00, so PAID); any other visit falls back to the default pricing. A package sale's invoice (no visit) can get a discount, but its items are fixed and it can be cancelled only after the package is cancelled (422 `PACKAGE_INVOICE`).
 
 #### Discounts and repeat
 - `POST /invoices/:id/discount` takes `{ type, value, reason }` or `{ repeatFromDiscountId }`. Only one discount is active per invoice. Replacing or removing (`POST /invoices/:id/discount/remove { reason }`) keeps the old row, with `removed_at` and `removal_reason`.
@@ -587,6 +600,10 @@ Read-only views over the other modules' tables (no tables of its own). Access is
 | `ADDENDUM_ADDED` | addenda | `content` (first 200 characters) |
 | `MEDICAL_INFO_UPDATED` | audit log | `fields` (names of the changed fields) |
 | `ATTACHMENT_UPLOADED` | attachments; `doctor` is the uploader when a doctor uploaded it | `attachmentId`, `title`, `mimeType` |
+| `PACKAGE_SOLD` | patient packages, `sold_at` (`refs.invoiceId`) | `patientPackageId`, `name`, `service`, `totalSessions`, `listPrice`, `offerAmount`, `price` |
+| `PACKAGE_SESSION_USED` | package usages (restored ones too); `doctor` is the visit's / appointment's doctor | `patientPackageId`, `name`, `reason` (ATTENDED / NO_SHOW), `totalSessions`, `restored` |
+| `PACKAGE_SESSION_RESTORED` | package usages, `restored_at` | `patientPackageId`, `name`, `reason`, `totalSessions`, `restoreReason` |
+| `PACKAGE_CANCELLED` | patient packages, `cancelled_at` | `patientPackageId`, `name`, `reason`, `usedSessions`, `totalSessions` |
 
 **Visibility** is part of the query: only the event types the role may see are queried at all.
 
@@ -594,7 +611,7 @@ Read-only views over the other modules' tables (no tables of its own). Access is
 |---|---|
 | OWNER | everything |
 | RECEPTIONIST | everything except `NOTE_SIGNED`, `ADDENDUM_ADDED`, `MEDICAL_INFO_UPDATED`, `ATTACHMENT_UPLOADED` |
-| DOCTOR (with access) | everything except `INVOICE_*`, `DISCOUNT_*`, `PAYMENT_*` |
+| DOCTOR (with access) | everything except `INVOICE_*`, `DISCOUNT_*`, `PAYMENT_*` and `PACKAGE_SOLD` (the session and cancel events carry no prices) |
 
 Draft notes never appear, for anyone (not even their author): a note shows up when it is signed.
 
@@ -603,6 +620,46 @@ Draft notes never appear, for anyone (not even their author): a note shows up wh
 - `from`/`to` are clinic local dates, inclusive, applied to `at`.
 - Keyset pagination on `(at, id)`: `limit` defaults to 50 (max 200), and the response is `{ items, nextCursor }`. Pass `nextCursor` back as `cursor` for the next (older) page; it is `null` on the last page. The cursor is opaque and keeps the time to the microsecond, so events written in the same millisecond are never skipped or repeated. A malformed cursor is 400.
 - It is one `UNION ALL` query, one branch per event type, each filtered by the patient through existing indexes. No index was added.
+
+### `packages`
+
+A package is **N sessions of one service for a total price**. Patients pay at the desk like any invoice (manual records; no online payments).
+
+**Catalog** (`packages`, `package_doctors`; OWNER writes, RECEPTIONIST reads):
+- `POST /packages { name, serviceId, sessionsCount, price, doctorIds | allDoctors: true, offer?, isPublic? }`, `PATCH /packages/:id` (same fields, all optional; `offer: null` removes it), `PATCH /packages/:id/activate|deactivate`. Every change is audited (`PACKAGE_*`).
+- **Doctors:** `allDoctors: true` means every doctor, including doctors added later. Otherwise every listed doctor must offer the package's service (422 `SERVICE_NOT_OFFERED`, `details.doctorIds`). The service must be active.
+- **Offer:** `{ type: PERCENT | FIXED, value, startsOn?, endsOn? }` (local dates, inclusive, open-ended when null). While it is active, selling price = price − offer. PERCENT is at most 100 (400), FIXED at most the price (422 `OFFER_EXCEEDS_PRICE`); CHECK `chk_packages_offer` guards both.
+- `GET /packages` (paginated, `isActive` filter) and `GET /packages/:id` return the doctors, the offer, `offerActive` and today's `sellingPrice`.
+- `GET /public/packages`: active, public packages of an active service, with only `id, name, service { id, name }, sessionsCount, price, sellingPrice, offerEndsOn` (null without an active offer).
+
+**Selling** (`POST /patients/:id/packages { packageId }`, OWNER/RECEPTIONIST): one transaction creates the `patient_packages` row and its invoice (no visit, one line at today's selling price). Name, service, sessions, list price, offer amount and price are **snapshots**. The allowed doctors are **not**: a sold package follows the package's current doctor list. A deactivated package can't be sold (422 `PACKAGE_INACTIVE`).
+- The patient pays all or part with the normal payments; the rest is their balance. Reception can add a normal invoice discount. The line itself is fixed, and the invoice can be cancelled only after the package is (`PACKAGE_INVOICE`).
+- Sessions are usable before the package is paid. There is no expiry.
+
+**Using sessions** (all in the transaction of the desk action):
+
+| Desk action | Session |
+|---|---|
+| attend, walk-in | uses one (0.00 invoice line), unless `usePackage: false`; `patientPackageId` picks the package |
+| no-show | uses one automatically |
+| undo attend (appointment or walk-in) | restored |
+| undo no-show | restored (reason "No-show undone") |
+| `POST /package-usages/:id/restore { reason }` | restores a **no-show** session (422 `RESTORE_NOT_ALLOWED` for an attended one or twice) |
+| cancel appointment | never uses one |
+
+- **Usable package:** same service, the visit's doctor allowed by the package, status ACTIVE (sessions left, not cancelled). With several, the **oldest** (by `sold_at`) pays.
+- **Concurrency:** using or restoring locks the `patient_packages` row (`FOR UPDATE`), which re-checks the conditions after waiting: of two parallel attends on the last session, one is covered and the other billed normally. CHECKs make the counts impossible to break: `0 ≤ used_sessions ≤ total_sessions`, ACTIVE ⇔ sessions left, FINISHED ⇔ none left, CANCELLED ⇔ `cancelled_*` set. Partial unique indexes allow one live usage per visit and per appointment.
+- Used = total → FINISHED; a restore moves it back to ACTIVE. Every use and restore is audited (`PACKAGE_SESSION_USED` / `_RESTORED`).
+- `package_usages` keeps the history: `reason` (ATTENDED with `visit_id`, NO_SHOW with `appointment_id`), `used_at/by`, `restored_at/by`, `restore_reason`.
+
+**Cancelling** (`POST /patient-packages/:id/cancel { reason }`, OWNER): remaining sessions can't be used. The invoice is untouched; money goes back, if at all, with `POST /payments/:id/refund`.
+
+**Reading:**
+- `GET /patients/:id/packages` (newest first) and `GET /patient-packages/:id` (plus `usages`: date, reason, doctor, who, restored or not). Each has the sessions (`totalSessions`, `usedSessions`, `sessionsLeft`), `status` and the current doctors. OWNER/RECEPTIONIST also get `listPrice`, `offerAmount`, `price`, `invoiceId`, `invoiceTotal`, `amountPaid` and `balance`.
+- A DOCTOR sees a patient's packages **without prices**, only for patients they treat (404 otherwise, like clinical data).
+- Day list: the `package` column and `restoreSession` (see `appointments`). Timeline: `PACKAGE_*` events (see `patient-history`).
+
+**Not covered on purpose:** removing a doctor from a service (`/clinic-services`) does not edit package doctor lists; that doctor can't be booked for the service any more anyway.
 
 ### `reports` (OWNER only)
 

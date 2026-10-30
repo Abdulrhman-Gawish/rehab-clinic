@@ -57,7 +57,7 @@ interface Event {
 }
 
 // What the scenario in beforeAll produces for the main patient.
-const EXPECTED: Record<T, number> = {
+const EXPECTED: Partial<Record<T, number>> = {
   [T.PATIENT_CREATED]: 1,
   [T.PATIENT_UPDATED]: 1,
   [T.APPOINTMENT_BOOKED]: 4,
@@ -80,7 +80,8 @@ const EXPECTED: Record<T, number> = {
   [T.MEDICAL_INFO_UPDATED]: 1,
   [T.ATTACHMENT_UPLOADED]: 1,
 };
-const ALL_TYPES = Object.values(T);
+// Package events are covered in packages.e2e-spec.ts.
+const ALL_TYPES = Object.keys(EXPECTED) as T[];
 const TOTAL = Object.values(EXPECTED).reduce((sum, n) => sum + n, 0);
 
 function countByType(events: Event[]): Partial<Record<T, number>> {

@@ -36,6 +36,7 @@ import type { EnvironmentVariables } from '../../config/env.validation.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
 import { DoctorAccessService } from '../doctors/doctor-access.service.js';
+import { PatientPackagesService } from '../packages/patient-packages.service.js';
 import {
   assertDeskPatientInput,
   PatientsService,
@@ -47,6 +48,7 @@ import {
   deskTransition,
   DeskAction,
   DoctorAction,
+  packageActions,
   type ActionFacts,
 } from './appointment-actions.js';
 import {
@@ -96,6 +98,7 @@ export class AppointmentsService {
     private readonly availability: AvailabilityService,
     private readonly patients: PatientsService,
     private readonly access: DoctorAccessService,
+    private readonly packages: PatientPackagesService,
     private readonly auditService: AuditService,
     private readonly time: ClinicTimeService,
     config: ConfigService<EnvironmentVariables, true>,
@@ -175,17 +178,23 @@ export class AppointmentsService {
     return this.transition(id, DeskAction.CANCEL, actor, reason.trim());
   }
 
-  // Only once the start time has passed.
+  // Only once the start time has passed. Uses a session of the patient's
+  // oldest usable package, if any.
   noShow(id: string, actor: Actor): Promise<AppointmentResponseDto> {
-    return this.transition(id, DeskAction.NO_SHOW, actor, null);
+    return this.transition(id, DeskAction.NO_SHOW, actor, null, (m, a) =>
+      this.packages.useForNoShow(m, a, actor),
+    );
   }
 
   /**
-   * Marked as no-show by mistake: back to CONFIRMED, same local day only.
-   * The slot was freed meanwhile, so it can collide (409 SLOT_UNAVAILABLE).
+   * Marked as no-show by mistake: back to CONFIRMED, same local day only,
+   * and its package session given back. The slot was freed meanwhile, so it
+   * can collide (409 SLOT_UNAVAILABLE).
    */
   undoNoShow(id: string, actor: Actor): Promise<AppointmentResponseDto> {
-    return this.transition(id, DeskAction.UNDO_NO_SHOW, actor, null);
+    return this.transition(id, DeskAction.UNDO_NO_SHOW, actor, null, (m, a) =>
+      this.packages.restoreForAppointment(m, a.id, 'No-show undone', actor),
+    );
   }
 
   /**
@@ -333,6 +342,12 @@ export class AppointmentsService {
     ];
     const invoiceByVisit = await this.invoicesOf(visitIds);
     const noteByVisit = await this.noteStatusesOf(visitIds);
+    const sessions = await this.packages.activeSessions(
+      visitIds,
+      appointments
+        .filter((a) => a.status === AppointmentStatus.NO_SHOW)
+        .map((a) => a.id),
+    );
 
     const now = this.time.now();
     const today = this.time.today();
@@ -352,17 +367,31 @@ export class AppointmentsService {
     const rows = [
       ...appointments.map((appointment) => {
         const info = visitInfo(visitByAppointment.get(appointment.id) ?? null);
+        const session =
+          (info && sessions.byVisit.get(info.visit.id)) ??
+          sessions.byAppointment.get(appointment.id) ??
+          null;
         const actions = isDoctor
           ? doctorActions(info)
-          : allowedDeskActions(appointment.status, {
-              isToday: this.time.localDate(appointment.startAt) === today,
-              hasStarted: now.getTime() >= appointment.startAt.getTime(),
-              visitHasNote: (info?.noteStatus ?? null) !== null,
-              invoiceHasPayments: info?.hasPayments ?? false,
-            });
+          : [
+              ...allowedDeskActions(appointment.status, {
+                isToday: this.time.localDate(appointment.startAt) === today,
+                hasStarted: now.getTime() >= appointment.startAt.getTime(),
+                visitHasNote: (info?.noteStatus ?? null) !== null,
+                invoiceHasPayments: info?.hasPayments ?? false,
+              }),
+              ...packageActions(appointment.status, session !== null),
+            ];
         return {
           at: appointment.startAt.getTime(),
-          entry: toDayListEntry(appointment, info, actions, !isDoctor, toIso),
+          entry: toDayListEntry(
+            appointment,
+            info,
+            session,
+            actions,
+            !isDoctor,
+            toIso,
+          ),
         };
       }),
       ...walkInVisits.map((visit) => {
@@ -376,7 +405,13 @@ export class AppointmentsService {
             });
         return {
           at: visit.attendedAt.getTime(),
-          entry: toWalkInDayListEntry(info, actions, !isDoctor, toIso),
+          entry: toWalkInDayListEntry(
+            info,
+            sessions.byVisit.get(visit.id) ?? null,
+            actions,
+            !isDoctor,
+            toIso,
+          ),
         };
       }),
     ];
@@ -507,11 +542,13 @@ export class AppointmentsService {
     }
   }
 
+  // `after` runs in the same transaction, once the status has changed.
   private async transition(
     id: string,
     action: DeskAction,
     actor: Actor,
     reason: string | null,
+    after?: (manager: EntityManager, appointment: Appointment) => Promise<void>,
   ): Promise<AppointmentResponseDto> {
     const { to, trigger } = deskTransition(action);
     try {
@@ -522,6 +559,7 @@ export class AppointmentsService {
           reason,
           trigger,
         });
+        await after?.(manager, appointment);
       });
     } catch (error) {
       throw mapBookingError(error);

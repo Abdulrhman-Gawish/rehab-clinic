@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DoctorsModule } from '../doctors/doctors.module.js';
+import { PackagesModule } from '../packages/packages.module.js';
 import { PatientsModule } from '../patients/patients.module.js';
 import { Visit } from '../visits/entities/visit.entity.js';
 import { AppointmentWriter } from './appointment-writer.service.js';
@@ -23,6 +24,7 @@ import { PublicBookingService } from './public-booking.service.js';
     TypeOrmModule.forFeature([Appointment, AppointmentStatusHistory, Visit]),
     DoctorsModule,
     PatientsModule,
+    PackagesModule,
   ],
   controllers: [
     AppointmentsController,

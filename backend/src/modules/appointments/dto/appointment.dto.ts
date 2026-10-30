@@ -24,6 +24,7 @@ import {
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
 import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
 import { NoteStatus } from '../../clinical/clinical.enums.js';
+import { PackageSessionDto } from '../../packages/dto/package.dto.js';
 import { PersonNameField } from '../../users/dto/user.dto.js';
 import { VisitStatus } from '../../visits/visit.enums.js';
 import { AppointmentSource, AppointmentStatus } from '../appointment.enums.js';
@@ -410,10 +411,18 @@ export class DayListEntryDto {
   noteStatus: NoteStatus | null;
 
   @ApiProperty({
+    type: PackageSessionDto,
+    nullable: true,
+    description:
+      'The package session this visit (or this no-show) used; no prices',
+  })
+  package: PackageSessionDto | null;
+
+  @ApiProperty({
     type: [String],
     example: ['cancel', 'reschedule', 'attend'],
     description:
-      'Desk: confirm, cancel, reschedule, noShow, undoNoShow, attend, undoAttend (a walk-in is undone with POST /visits/:visitId/undo-attend). Doctor: writeNote, viewNote.',
+      'Desk: confirm, cancel, reschedule, noShow, undoNoShow, attend, undoAttend (a walk-in is undone with POST /visits/:visitId/undo-attend), restoreSession (a no-show that used a package session: POST /package-usages/:package.usageId/restore). Doctor: writeNote, viewNote.',
   })
   allowedActions: string[];
 

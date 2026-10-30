@@ -26,6 +26,10 @@ import {
   AppointmentServiceDto,
 } from '../../appointments/dto/appointment.dto.js';
 import { NoteStatus } from '../../clinical/clinical.enums.js';
+import {
+  PackageChoiceDto,
+  PackageSessionDto,
+} from '../../packages/dto/package.dto.js';
 import { VisitStatus } from '../visit.enums.js';
 
 const AT = (example: string) => ({
@@ -35,7 +39,7 @@ const AT = (example: string) => ({
 
 // ---------- Inputs ----------
 
-export class WalkInDto {
+export class WalkInDto extends PackageChoiceDto {
   @ApiPropertyOptional({
     format: 'uuid',
     description: 'Existing patient. Either patientId OR name + phone.',
@@ -182,6 +186,13 @@ export class VisitResponseDto {
 export class AttendResponseDto extends VisitResponseDto {
   @ApiProperty({ format: 'uuid' })
   invoiceId: string;
+
+  @ApiProperty({
+    type: PackageSessionDto,
+    nullable: true,
+    description: 'The package session that paid the visit (0.00 invoice line)',
+  })
+  package: PackageSessionDto | null;
 }
 
 export class QueueEntryDto {

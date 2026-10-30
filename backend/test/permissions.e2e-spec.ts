@@ -332,7 +332,33 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
   { method: 'get', path: `/reports/discounts${RANGE}`, allowed: [OWNER] },
   { method: 'get', path: `/reports/expenses${RANGE}`, allowed: [OWNER] },
   { method: 'get', path: `/reports/outstanding${RANGE}`, allowed: [OWNER] },
+  // packages: OWNER writes the catalog; the desk sells and restores; DOCTOR
+  // reads a patient's packages (patients they treat, else 404)
+  { method: 'get', path: '/packages', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: `/packages/${id}`, allowed: [OWNER, RECEPTIONIST] },
+  { method: 'post', path: '/packages', allowed: [OWNER] },
+  { method: 'patch', path: `/packages/${id}`, allowed: [OWNER] },
+  { method: 'patch', path: `/packages/${id}/activate`, allowed: [OWNER] },
+  { method: 'patch', path: `/packages/${id}/deactivate`, allowed: [OWNER] },
+  {
+    method: 'post',
+    path: `/patients/${id}/packages`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'get', path: `/patients/${id}/packages`, allowed: STAFF },
+  { method: 'get', path: `/patient-packages/${id}`, allowed: STAFF },
+  {
+    method: 'post',
+    path: `/patient-packages/${id}/cancel`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'post',
+    path: `/package-usages/${id}/restore`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
   // public: anyone
+  { method: 'get', path: '/public/packages', allowed: EVERYONE },
   { method: 'get', path: '/public/doctors', allowed: EVERYONE },
   { method: 'get', path: `/public/doctors/${id}`, allowed: EVERYONE },
   { method: 'get', path: '/public/services', allowed: EVERYONE },

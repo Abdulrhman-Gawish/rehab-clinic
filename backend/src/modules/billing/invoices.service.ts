@@ -30,6 +30,8 @@ import {
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
 import { ClinicService } from '../clinic-services/entities/clinic-service.entity.js';
+import { PatientPackage } from '../packages/entities/patient-package.entity.js';
+import { PatientPackageStatus } from '../packages/packages.enums.js';
 import { Patient } from '../patients/entities/patient.entity.js';
 import type { Visit } from '../visits/entities/visit.entity.js';
 import {
@@ -125,6 +127,27 @@ export class InvoicesService {
       visitId: visit.id,
       notes: null,
       lines,
+    });
+  }
+
+  // A package sale's invoice (no visit), in the caller's transaction.
+  createForPackage(
+    manager: EntityManager,
+    data: { patientId: string; description: string; price: string },
+    actor: Actor,
+  ): Promise<Invoice> {
+    return this.insertInvoice(manager, actor, {
+      patientId: data.patientId,
+      visitId: null,
+      notes: null,
+      lines: [
+        {
+          serviceId: null,
+          description: data.description,
+          unitPrice: data.price,
+          quantity: 1,
+        },
+      ],
     });
   }
 
@@ -255,6 +278,15 @@ export class InvoicesService {
         throw unprocessable(
           ErrorCode.INVOICE_HAS_PAYMENTS,
           'The invoice has payments; refund them before cancelling',
+        );
+      }
+      const sale = await manager.findOneBy(PatientPackage, {
+        invoiceId: invoice.id,
+      });
+      if (sale && sale.status !== PatientPackageStatus.CANCELLED) {
+        throw unprocessable(
+          ErrorCode.PACKAGE_INVOICE,
+          'This invoice is a package sale; cancel the package first',
         );
       }
       await this.markCancelled(manager, invoice, reason, actor);
@@ -492,6 +524,13 @@ export class InvoicesService {
     await this.dataSource.transaction(async (manager) => {
       const invoice = await this.lockInvoice(id, manager);
       await this.assertInvoiceEditable(invoice, manager);
+      // The sale price is fixed; reception can still give a discount.
+      if (await manager.existsBy(PatientPackage, { invoiceId: invoice.id })) {
+        throw unprocessable(
+          ErrorCode.PACKAGE_INVOICE,
+          'The items of a package sale are fixed (a discount is allowed)',
+        );
+      }
       const before = { subtotal: invoice.subtotal, total: invoice.total };
       const { action, values } = await change(invoice, manager);
       const updated = await this.recalculate(manager, invoice);
