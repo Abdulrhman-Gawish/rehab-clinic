@@ -47,12 +47,12 @@ export function Expenses() {
       </div>
       <p><b>Total (valid): {list?.totalAmount}</b> · {list?.meta.total} expenses</p>
       <table>
-        <thead><tr><th>No.</th><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Method</th><th>Vendor</th><th>Status</th><th>Created</th><th></th></tr></thead>
+        <thead><tr><th>No.</th><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Method</th><th>Vendor</th><th>Status</th><th>Created</th><th>By</th><th></th></tr></thead>
         <tbody>
           {list?.items.map((e: any) => (
             <tr key={e.id} style={e.status === 'VOIDED' ? { textDecoration: 'line-through' } : {}}>
               <td>{e.expenseNumber}</td><td>{e.expenseDate}</td><td>{e.category.name}</td><td>{e.description}</td><td>{e.amount}</td>
-              <td>{e.paymentMethod}</td><td>{e.vendorName}</td><td>{e.status}{e.voidReason && ` (${e.voidReason})`}</td><td>{fmtDateTime(e.createdAt)}</td>
+              <td>{e.paymentMethod}</td><td>{e.vendorName}</td><td>{e.status}{e.voidReason && ` (${e.voidReason}, ${e.voidedBy?.name})`}</td><td>{fmtDateTime(e.createdAt)}</td><td>{e.createdBy.name}</td>
               <td>
                 {e.hasReceipt && <button onClick={() => openFile(`/expenses/${e.id}/receipt`)}>receipt</button>}
                 {e.status === 'VALID' && <button onClick={() => { const reason = prompt('Void reason'); if (reason) act(() => post(`/expenses/${e.id}/void`, { reason })).then(reload); }}>void</button>}

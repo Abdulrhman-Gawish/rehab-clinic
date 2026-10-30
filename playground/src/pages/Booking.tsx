@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { act, ApiError, get, post, qs } from '../api';
+import { act, get, post, qs } from '../api';
 import { DoctorService, SlotPicker } from '../components';
 import { fmtDateTime } from '../time';
 
@@ -11,15 +11,12 @@ function PatientByPhone({ onChange }: { onChange: (p: { patientId?: string; name
   const [phone, setPhone] = useState('');
   const [found, setFound] = useState<Patient | null | undefined>(undefined);
   const [name, setName] = useState('');
-  const lookup = async () => {
-    try {
-      const p = await get<Patient>(`/patients/lookup${qs({ phone })}`, { quiet404: true });
-      setFound(p);
-      onChange({ patientId: p.id });
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 404) { setFound(null); onChange({ name, phone }); }
-    }
-  };
+  // { patient: null } = unknown phone: ask for a name (find-or-create on submit).
+  const lookup = () => act(async () => {
+    const { patient } = await get<{ patient: Patient | null }>(`/patients/lookup${qs({ phone })}`);
+    setFound(patient);
+    onChange(patient ? { patientId: patient.id } : { name, phone });
+  });
   return (
     <div className="row">
       <label>Phone <input value={phone} onChange={(e) => { setPhone(e.target.value); setFound(undefined); onChange({}); }} onBlur={lookup} placeholder="010..." /></label>
@@ -90,7 +87,12 @@ function WalkIn() {
         setResult(await post('/visits/walk-in', { ...patient, ...ds }));
         setKey((k) => k + 1);
       })}>Create walk-in</button>
-      {result && <p className="ok">Walk-in visit created: {result.patient.name} → {result.doctor.name} ({result.status}). <Link to="/reception">day list</Link></p>}
+      {result && (
+        <p className="ok">
+          Walk-in attended: {result.patient.name} → {result.doctor.name}.{' '}
+          <Link to={`/reception/invoices/${result.invoiceId}`}>invoice</Link> · <Link to="/reception">day list</Link>
+        </p>
+      )}
     </div>
   );
 }

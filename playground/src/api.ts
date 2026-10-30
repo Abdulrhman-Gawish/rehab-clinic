@@ -2,7 +2,7 @@
 export const API = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3000/api/v1';
 
 export type Role = 'OWNER' | 'DOCTOR' | 'RECEPTIONIST';
-export interface User { id: string; name: string; email: string; role: Role }
+export interface User { id: string; name: string; email: string; role: Role; doctorId: string | null }
 interface Session { accessToken: string; refreshToken: string; user: User }
 
 const KEY = 'playground-session';
@@ -28,7 +28,7 @@ export class ApiError extends Error {
   get code(): string | undefined { return this.body?.code; }
 }
 
-interface Opts { quiet404?: boolean; blob?: boolean; noAuth?: boolean }
+interface Opts { blob?: boolean; noAuth?: boolean }
 
 async function refresh(): Promise<boolean> {
   const s = getSession();
@@ -58,9 +58,7 @@ export async function api<T = any>(method: string, path: string, body?: unknown,
   if (!res.ok) {
     let data: any;
     try { data = await res.json(); } catch { data = { message: res.statusText }; }
-    if (!(opts.quiet404 && res.status === 404)) {
-      showError({ status: res.status, code: data.code, message: data.message, details: data.details, path: `${method} ${path}` });
-    }
+    showError({ status: res.status, code: data.code, message: data.message, details: data.details, path: `${method} ${path}` });
     throw new ApiError(res.status, data);
   }
   if (opts.blob) return (await res.blob()) as T;
@@ -74,10 +72,13 @@ export const patch = <T = any>(path: string, body?: unknown) => api<T>('PATCH', 
 export const put = <T = any>(path: string, body?: unknown) => api<T>('PUT', path, body ?? {});
 export const del = <T = any>(path: string, body?: unknown) => api<T>('DELETE', path, body);
 
-/** Build a query string, dropping empty values. */
-export function qs(params: Record<string, string | number | boolean | undefined | null>): string {
+/** Build a query string, dropping empty values. Arrays repeat the key (?status=A&status=B). */
+export function qs(params: Record<string, string | number | boolean | string[] | undefined | null>): string {
   const p = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') p.set(k, String(v));
+  for (const [k, v] of Object.entries(params)) {
+    if (Array.isArray(v)) v.forEach((item) => p.append(k, item));
+    else if (v !== undefined && v !== null && v !== '') p.set(k, String(v));
+  }
   const s = p.toString();
   return s ? `?${s}` : '';
 }

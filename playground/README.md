@@ -7,9 +7,10 @@ It will be deleted.** API problems found while building it are in [FINDINGS.md](
 
 ```bash
 # 1. backend (in backend/): CORS_ORIGINS must include http://localhost:5173 in backend/.env
-#    THROTTLE_ENABLED=false avoids 429s when you switch roles often (login is limited to 5/min per IP)
+#    Rate limits count per user (login: per email + IP), so switching roles is fine.
+#    THROTTLE_ENABLED=false is only needed while seeding (public booking: 5 per 15 min per IP).
 cd backend
-THROTTLE_ENABLED=false npm run start:dev
+npm run start:dev
 
 # 2. playground
 cd playground
@@ -29,7 +30,7 @@ npm run seed:demo
 - Runs **through the API only**, logged in as the OWNER from `backend/.env` (`SEED_OWNER_*`).
 - Expects a **freshly migrated** database (with only the owner seeded). It stops if doctors already exist.
 - If it reports a 429, restart the backend with `THROTTLE_ENABLED=false`. It waits out the normal limits on its own,
-  but public booking is limited to 5 per 15 minutes.
+  but public booking is limited to 5 per 15 minutes per IP.
 
 It creates:
 
@@ -37,14 +38,15 @@ It creates:
 - 3 services (30/45/60 min, with different prices). Dr. Mona has a price override on physiotherapy.
 - Schedules Sun–Thu 10:00–14:00 and 17:00–21:00.
 - **Today:**
-  - Omar: completed, 10% discount, paid, signed note by Dr. Ahmed.
-  - Laila: waiting, fixed discount, partial card payment.
-  - Youssef: in session with Dr. Mona, draft note.
-  - Nour: confirmed.
+  - Omar: attended, 10% discount, paid, note written and signed in one call by Dr. Ahmed.
+  - Laila: attended, fixed discount, partial card payment, no note yet.
+  - Youssef: attended with Dr. Mona, draft note (so attend can no longer be undone).
+  - Nour: confirmed, not here yet.
   - Hana: cancelled.
-  - Salma: waiting, unpaid.
-  - Mostafa: no-show.
+  - Salma: attended, unpaid (attend can still be undone).
+  - Mostafa: no-show (can be undone today).
   - Tarek: walk-in.
+  - Ola: attended by mistake and undone (voided visit, cancelled invoice, back to CONFIRMED).
   - One expense.
 - **Tomorrow:**
   - Omar with Dr. Mona. She can see Dr. Ahmed's signed note (shared clinical history).
@@ -88,14 +90,18 @@ To keep your dev data, use a separate database instead: prefix the backend comma
 
 ## Trying a full day
 
-1. **Public booking** (`/book`, no login): doctor → service → date → slot → name + phone → reference code.
+1. **Public booking** (`/book`, no login): doctor → service → date → slot → name + phone → reference code. It starts
+   PENDING.
    - The demo schedule has no slots on Fri/Sat. On those days, add a range for today first (Owner → Doctors → doctor →
      Weekly schedule).
-2. **Receptionist**, Day list: confirm → check-in. Open the invoice: apply a discount, record a partial payment.
-3. **Doctor**, Queue → patient: start the session, write the note.
-   - "Complete" is refused (`VISIT_COMPLETION_BLOCKED`) until the note is signed.
+2. **Receptionist**, Day list: the buttons on each row come from the API's `allowedActions`. Confirming is optional:
+   a PENDING row can go straight to **attend** ("entered the doctor"), which creates the visit and its invoice. Use the
+   status checkboxes to filter. Open the invoice: apply a discount, record a partial payment.
+   - **undoAttend** (same day) is offered only while the doctor has no note and nothing is paid; void the payment
+     first. **noShow** appears once the start time has passed, **undoNoShow** the same day.
+3. **Doctor**, My day / Needs a note → patient: write the note (Save draft), then Save + sign in one call.
    - Signing is refused (`NOTE_INCOMPLETE`) without an assessment or the treatment done.
-   - Save + sign, then complete.
+   - Notes can be written any day after the visit; "Needs a note" lists every visit still without a signed note.
 4. **Receptionist**: open the invoice again, "fill balance", record the payment, then print the receipt from the
    payments table.
 5. **Expenses**: add one.

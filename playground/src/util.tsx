@@ -30,10 +30,8 @@ export function useForm<T extends Record<string, any>>(initial: T) {
   return { v, setV, bind };
 }
 
-/** Empty string -> undefined (so optional fields are left out). */
+/** Empty string -> undefined (so optional fields are left out). Blank strings sent anyway become null on the server. */
 export const opt = (s: string | undefined | null) => (s && s.trim() ? s.trim() : undefined);
-/** Empty string -> null (for "replace" endpoints where a field must be sent). */
-export const orNull = (s: string | undefined | null) => (s && s.trim() ? s.trim() : null);
 
 export function Json({ value }: { value: unknown }) {
   return <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>{JSON.stringify(value, null, 2)}</pre>;

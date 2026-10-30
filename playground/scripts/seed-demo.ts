@@ -27,8 +27,8 @@ async function call<T = any>(token: string | null, method: string, path: string,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     if (res.status === 429) {
-      if (path.startsWith('/public/')) {
-        throw new Error('Throttled on a public endpoint (5 bookings / 15 min per IP). Restart the backend with THROTTLE_ENABLED=false while seeding.');
+      if (path.startsWith('/public/') || path === '/auth/login') {
+        throw new Error('Throttled on a public endpoint (bookings: 5 / 15 min per IP; login: 5 / min per email). Restart the backend with THROTTLE_ENABLED=false while seeding.');
       }
       const wait = Number(res.headers.get('retry-after') ?? 60);
       console.log(`  throttled on ${method} ${path}, waiting ${wait}s (tip: run the backend with THROTTLE_ENABLED=false while seeding)`);
@@ -123,6 +123,7 @@ async function main() {
     sherif: { name: 'Sherif Lotfy', phone: phone(13) },
     dina: { name: 'Dina Wagdy', phone: phone(14) },
     hossam: { name: 'Hossam Zaki', phone: phone(15) },
+    ola: { name: 'Ola Samy', phone: phone(16) },
   };
 
   /** Reception booking, outside schedule; on SLOT_UNAVAILABLE try the next time (step minutes). */
@@ -141,8 +142,8 @@ async function main() {
     }
     throw new Error(`no free time for ${p.name}`);
   }
-  const checkIn = (a: any) => call(desk, 'POST', `/appointments/${a.id}/check-in`);
-  const invoiceOf = (visit: any) => call(desk, 'POST', `/visits/${visit.id}/invoice`);
+  // Attend creates the visit and its invoice in one call (the response has invoiceId).
+  const attend = (a: any) => call(desk, 'POST', `/appointments/${a.id}/attend`);
 
   // ---------- public bookings first (they need real schedule slots on the next working day)
   const publicSlots = async (doc: any, s: any) =>
@@ -161,64 +162,62 @@ async function main() {
   console.log('public bookings (PENDING):', pub.map((b) => b.referenceCode).join(', '));
 
   // ---------- today
-  // a) Omar: full flow — check-in, 10% discount, paid in full, D1 signs the note and completes.
+  // a) Omar: full flow — attended, 10% discount, paid in full, D1 writes and signs the note in one call.
   const aOmar = await book(P.omar, D1, svc.assessment, TODAY, '10:00');
-  const vOmar = await checkIn(aOmar);
-  const iOmar = await invoiceOf(vOmar);
-  await call(desk, 'POST', `/invoices/${iOmar.id}/discount`, { type: 'PERCENT', value: '10', reason: 'Student discount' });
-  const iOmar2 = await call(desk, 'GET', `/invoices/${iOmar.id}`);
-  await call(desk, 'POST', `/invoices/${iOmar.id}/payments`, { amount: iOmar2.balance, method: 'CASH' });
-  await call(d1, 'POST', `/visits/${vOmar.id}/start`);
+  const vOmar = await attend(aOmar);
+  await call(desk, 'POST', `/invoices/${vOmar.invoiceId}/discount`, { type: 'PERCENT', value: '10', reason: 'Student discount' });
+  const iOmar = await call(desk, 'GET', `/invoices/${vOmar.invoiceId}`);
+  await call(desk, 'POST', `/invoices/${vOmar.invoiceId}/payments`, { amount: iOmar.balance, method: 'CASH' });
   await call(d1, 'PUT', `/patients/${aOmar.patient.id}/medical-info`, {
-    allergies: 'Penicillin', chronicConditions: 'Mild asthma', pastSurgeries: null, currentMedications: 'Salbutamol inhaler as needed', notes: null,
+    allergies: 'Penicillin', chronicConditions: 'Mild asthma', currentMedications: 'Salbutamol inhaler as needed',
   });
-  await call(d1, 'POST', `/visits/${vOmar.id}/note`, {
+  await call(d1, 'POST', `/visits/${vOmar.id}/note/sign`, {
     chiefComplaint: 'Lower back pain for 3 weeks after lifting', assessment: 'Mechanical low back pain, no red flags',
     treatmentDone: 'Assessment, core activation, heat therapy', plan: 'Physio 2x/week for 3 weeks; home: cat-camel, bird-dog', painScore: 6,
   });
-  await call(d1, 'POST', `/visits/${vOmar.id}/note/sign`);
-  await call(d1, 'POST', `/visits/${vOmar.id}/complete`);
 
-  // b) Laila: waiting, fixed discount, partial payment.
+  // b) Laila: attended, fixed discount, partial payment, no note yet.
   const aLaila = await book(P.laila, D1, svc.physio, TODAY, '11:00');
-  const iLaila = await invoiceOf(await checkIn(aLaila));
-  await call(desk, 'POST', `/invoices/${iLaila.id}/discount`, { type: 'FIXED', value: '50.00', reason: 'Returning patient' });
-  await call(desk, 'POST', `/invoices/${iLaila.id}/payments`, { amount: '100.00', method: 'CARD', reference: 'POS 4471' });
+  const vLaila = await attend(aLaila);
+  await call(desk, 'POST', `/invoices/${vLaila.invoiceId}/discount`, { type: 'FIXED', value: '50.00', reason: 'Returning patient' });
+  await call(desk, 'POST', `/invoices/${vLaila.invoiceId}/payments`, { amount: '100.00', method: 'CARD', reference: 'POS 4471' });
 
-  // c) Youssef: in session with D2, draft note.
+  // c) Youssef: attended with D2, draft note.
   const aYoussef = await book(P.youssef, D2, svc.physio, TODAY, '10:00');
-  const vYoussef = await checkIn(aYoussef);
-  await invoiceOf(vYoussef);
-  await call(d2, 'POST', `/visits/${vYoussef.id}/start`);
-  await call(d2, 'POST', `/visits/${vYoussef.id}/note`, { chiefComplaint: 'Knee pain after running' });
+  const vYoussef = await attend(aYoussef);
+  await call(d2, 'PUT', `/visits/${vYoussef.id}/note`, { chiefComplaint: 'Knee pain after running' });
 
   // d) Nour: confirmed, not arrived yet.
   await book(P.nour, D2, svc.massage, TODAY, '12:00');
 
   // e) Hana: cancelled.
   const aHana = await book(P.hana, D3, svc.assessment, TODAY, '10:00');
-  await call(desk, 'PATCH', `/appointments/${aHana.id}/cancel`, { reason: 'Patient called to cancel' });
+  await call(desk, 'POST', `/appointments/${aHana.id}/cancel`, { reason: 'Patient called to cancel' });
 
-  // f) Salma: waiting with D3, unpaid invoice.
+  // f) Salma: attended with D3, unpaid invoice.
   const aSalma = await book(P.salma, D3, svc.massage, TODAY, '17:00');
-  await invoiceOf(await checkIn(aSalma));
+  await attend(aSalma);
 
   // g) Mostafa: no-show (needs a start in the past), stepping back from now - 2h.
   const now = nowCairoHHmm();
   const noShowStart = shift(`${now.slice(0, 2)}:${String(Math.floor(Number(now.slice(3)) / 15) * 15).padStart(2, '0')}`, -120);
   if (now >= '02:30') {
     const aMostafa = await book(P.mostafa, D3, svc.physio, TODAY, noShowStart, -15);
-    await call(desk, 'PATCH', `/appointments/${aMostafa.id}/no-show`);
+    await call(desk, 'POST', `/appointments/${aMostafa.id}/no-show`);
   } else {
     await book(P.mostafa, D3, svc.physio, TODAY, '19:00');
     console.log('  (too early in the day for a NO_SHOW example; Mostafa stays CONFIRMED)');
   }
 
-  // h) Tarek: walk-in with D1.
-  const vTarek = await call(desk, 'POST', '/visits/walk-in', { ...P.tarek, doctorId: D1.id, serviceId: svc.assessment.id });
-  await invoiceOf(vTarek);
+  // h) Tarek: walk-in with D1 (invoice created with it).
+  await call(desk, 'POST', '/visits/walk-in', { ...P.tarek, doctorId: D1.id, serviceId: svc.assessment.id });
 
-  // i) Same phone as Laila, different name, via public booking -> nameMismatch.
+  // i) Ola: attended by mistake, then undone (voided visit, cancelled invoice, back to CONFIRMED).
+  const aOla = await book(P.ola, D2, svc.physio, TODAY, '18:00');
+  await attend(aOla);
+  await call(desk, 'POST', `/appointments/${aOla.id}/undo-attend`, { reason: 'Sent in the wrong patient' });
+
+  // j) Same phone as Laila, different name, via public booking -> nameMismatch.
   const mismatch = await publicBook({ name: 'Laila Mahmoud', phone: P.laila.phone }, D3, svc.physio, 3);
   console.log('same phone / different name booking:', mismatch.referenceCode, 'on', NEXT_WORKDAY);
 
@@ -240,8 +239,8 @@ async function main() {
   console.log('\nDone. Accounts:');
   console.log(`  OWNER         ${env.SEED_OWNER_EMAIL} / (SEED_OWNER_PASSWORD from backend/.env)`);
   for (const s of DEMO_STAFF) console.log(`  ${s.role.padEnd(13)} ${s.email} / ${DEMO_PASSWORD}   (${s.name})`);
-  console.log(`\nToday (${TODAY}): Omar completed+paid, Laila waiting+partial, Youssef in session (draft), Nour confirmed,`);
-  console.log(`  Hana cancelled, Salma waiting unpaid, Mostafa no-show, Tarek walk-in.`);
+  console.log(`\nToday (${TODAY}): Omar attended+paid+signed note, Laila attended+partial, Youssef attended (draft note),`);
+  console.log(`  Nour confirmed, Hana cancelled, Salma attended unpaid, Mostafa no-show, Tarek walk-in, Ola attend undone.`);
   console.log(`Tomorrow (${TOMORROW}): Omar with ${D2.name} (shared history), Rania, Sherif, Hossam, Dina (rescheduled).`);
   console.log(`Next working day (${NEXT_WORKDAY}): 4 PENDING public bookings incl. "Laila Mahmoud" (name mismatch).`);
 }

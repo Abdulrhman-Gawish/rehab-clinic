@@ -55,11 +55,6 @@ export function fmtDateTime(iso: string | null | undefined): string {
   }).format(new Date(iso));
 }
 
-/** [start of date, start of next day) in clinic time, as ISO with offset. */
-export function dayRange(from: string, to = from): { from: string; to: string } {
-  return { from: cairoIso(from, '00:00'), to: cairoIso(addDays(to, 1), '00:00') };
-}
-
 /** <input type="datetime-local"> value -> ISO with Cairo offset */
 export function localInputToIso(value: string): string {
   return cairoIso(value.slice(0, 10), value.slice(11, 16));

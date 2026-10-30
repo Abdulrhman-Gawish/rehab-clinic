@@ -47,7 +47,7 @@ export function PatientPage() {
   return (
     <>
       <h2>{patient.name} <small>{patient.phone}</small></h2>
-      <p>DOB {patient.dateOfBirth ?? '-'} · {patient.gender ?? '-'} · source {patient.createdSource} · notes: {patient.notes ?? '-'}</p>
+      <p>DOB {patient.dateOfBirth ?? '-'} · {patient.gender ?? '-'} · source {patient.createdSource}{patient.createdBy && ` by ${patient.createdBy.name}`} · notes: {patient.notes ?? '-'}</p>
       {balance && <p><b>Balance: {balance.balance}</b> (invoiced {balance.totalInvoiced}, paid {balance.totalPaid})</p>}
 
       <h3>Appointments</h3>
@@ -66,10 +66,10 @@ export function PatientPage() {
 
       <h3>Visits</h3>
       <table>
-        <thead><tr><th>Checked in</th><th>Doctor</th><th>Service</th><th>Status</th><th>Walk-in</th></tr></thead>
+        <thead><tr><th>Attended</th><th>Doctor</th><th>Service</th><th>Status</th><th>Walk-in</th></tr></thead>
         <tbody>
           {visits.items.map((v: any) => (
-            <tr key={v.id}><td>{fmtDateTime(v.checkedInAt)}</td><td>{v.doctor.name}</td><td>{v.service.name}</td><td>{v.status}</td><td>{v.isWalkIn ? 'yes' : ''}</td></tr>
+            <tr key={v.id}><td>{fmtDateTime(v.attendedAt)}</td><td>{v.doctor.name}</td><td>{v.service.name}</td><td>{v.status}</td><td>{v.isWalkIn ? 'yes' : ''}</td></tr>
           ))}
         </tbody>
       </table>

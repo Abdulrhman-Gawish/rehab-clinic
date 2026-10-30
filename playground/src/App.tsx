@@ -7,7 +7,7 @@ import { Booking } from './pages/Booking';
 import { Patients, PatientPage } from './pages/Patients';
 import { InvoicePage, ReceiptPage } from './pages/Invoice';
 import { Expenses } from './pages/Expenses';
-import { Queue } from './pages/Queue';
+import { NeedsNote } from './pages/NeedsNote';
 import { VisitPage } from './pages/Visit';
 import { Users, Doctors, DoctorPage, Services } from './pages/Owner';
 import { Summary, Attention, AuditLog } from './pages/Reports';
@@ -55,7 +55,8 @@ function Header() {
           <Link to="/reception/expenses">Expenses</Link>
           <Link to="/reception/summary">Daily summary</Link>
         </>}
-        {(role === 'DOCTOR' || role === 'OWNER') && <Link to="/doctor">Queue</Link>}
+        {role === 'DOCTOR' && <Link to="/doctor">My day</Link>}
+        {(role === 'DOCTOR' || role === 'OWNER') && <Link to="/doctor/needs-note">Needs a note</Link>}
         {role === 'OWNER' && <>
           <Link to="/owner/users">Users</Link>
           <Link to="/owner/doctors">Doctors</Link>
@@ -94,7 +95,8 @@ export function App() {
           <Route path="/reception/receipts/:id" element={<Protected><ReceiptPage /></Protected>} />
           <Route path="/reception/expenses" element={<Protected><Expenses /></Protected>} />
           <Route path="/reception/summary" element={<Protected><Summary /></Protected>} />
-          <Route path="/doctor" element={<Protected><Queue /></Protected>} />
+          <Route path="/doctor" element={<Protected><DayList /></Protected>} />
+          <Route path="/doctor/needs-note" element={<Protected><NeedsNote /></Protected>} />
           <Route path="/doctor/visits/:id" element={<Protected><VisitPage /></Protected>} />
           <Route path="/owner/summary" element={<Protected><Summary /></Protected>} />
           <Route path="/owner/users" element={<Protected><Users /></Protected>} />

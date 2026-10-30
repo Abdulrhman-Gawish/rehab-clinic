@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { act, get, patch, post, qs } from '../api';
-import { SlotPicker } from '../components';
+import { act, get, getSession, post, qs } from '../api';
+import { SlotPicker, useDoctors } from '../components';
 import { fmtTime, todayCairo } from '../time';
 import { useLoad } from '../util';
 
@@ -10,67 +10,118 @@ interface Row {
   startAt: string | null; endAt: string | null; bookedName: string | null; nameMismatch: boolean;
   patient: { id: string; name: string; phone: string }; doctor: { id: string; name: string };
   service: { id: string; name: string; durationMinutes: number }; notes: string | null; cancelReason: string | null;
-  visitId: string | null; visitStatus: string | null; checkedInAt: string | null;
-  invoiceId: string | null; invoiceTotal: string | null; amountPaid: string | null; balance: string | null; paymentStatus: string;
+  visitId: string | null; visitStatus: string | null; attendedAt: string | null; noteStatus: string | null;
+  allowedActions: string[];
+  // Not sent to doctors.
+  invoiceId?: string | null; invoiceTotal?: string | null; amountPaid?: string | null; balance?: string | null; paymentStatus?: string;
 }
 
+const STATUSES = ['PENDING', 'CONFIRMED', 'ATTENDED', 'NO_SHOW', 'CANCELLED', 'RESCHEDULED'];
 const reason = (what: string) => window.prompt(`Reason to ${what} (min 3 chars)`) ?? '';
-// Buttons follow appointment-state-machine.ts by hand (the API has no "allowed actions" per row, see FINDINGS.md).
 
+/**
+ * The day list. Every button comes from the row's `allowedActions` (computed by the API from the state machine and
+ * the time / undo rules), so the UI copies no rules. A DOCTOR gets their own rows, without billing columns.
+ */
 export function DayList() {
+  const isDoctor = getSession()?.user.role === 'DOCTOR';
   const [params, setParams] = useSearchParams();
   const date = params.get('date') ?? todayCairo();
-  const [rows, reload, loading] = useLoad(() => get<Row[]>(`/appointments/day${qs({ date })}`), [date]);
+  const status = params.getAll('status');
+  const doctorId = params.get('doctorId') ?? '';
+  const [doctors] = useDoctors();
+  const [rows, reload, loading] = useLoad(
+    () => get<Row[]>(`/appointments/day${qs({ date, status, doctorId: doctorId || undefined })}`),
+    [date, status.join(','), doctorId],
+  );
   const [resched, setResched] = useState<Row | null>(null);
   const run = async (fn: () => Promise<unknown>) => { await act(fn); reload(); };
+  const setFilter = (next: { date?: string; status?: string[]; doctorId?: string }) => {
+    const p = new URLSearchParams();
+    p.set('date', next.date ?? date);
+    (next.status ?? status).forEach((s) => p.append('status', s));
+    if ((next.doctorId ?? doctorId)) p.set('doctorId', next.doctorId ?? doctorId);
+    setParams(p);
+  };
+  const toggle = (s: string) => setFilter({ status: status.includes(s) ? status.filter((x) => x !== s) : [...status, s] });
+
+  const actions: Record<string, (r: Row) => Promise<unknown>> = {
+    confirm: (r) => post(`/appointments/${r.id}/confirm`),
+    cancel: (r) => post(`/appointments/${r.id}/cancel`, { reason: reason('cancel') }),
+    noShow: (r) => post(`/appointments/${r.id}/no-show`),
+    undoNoShow: (r) => post(`/appointments/${r.id}/undo-no-show`),
+    attend: (r) => post(`/appointments/${r.id}/attend`),
+    // A walk-in has no appointment: it is undone through its visit.
+    undoAttend: (r) => r.isWalkIn
+      ? post(`/visits/${r.visitId}/undo-attend`, { reason: reason('undo the walk-in') })
+      : post(`/appointments/${r.id}/undo-attend`, { reason: reason('undo attend') }),
+  };
 
   return (
     <>
-      <h2>Reception day list</h2>
+      <h2>{isDoctor ? 'My day' : 'Reception day list'}</h2>
       <div className="row">
-        <label>Date <input type="date" value={date} onChange={(e) => setParams({ date: e.target.value })} /></label>
+        <label>Date <input type="date" value={date} onChange={(e) => setFilter({ date: e.target.value })} /></label>
+        {!isDoctor && (
+          <label>Doctor
+            <select value={doctorId} onChange={(e) => setFilter({ doctorId: e.target.value })}>
+              <option value="">all</option>{doctors?.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </label>
+        )}
         <button onClick={reload} style={{ width: 'auto' }}>{loading ? '...' : 'Refresh'}</button>
-        <Link to="/reception/book">+ New booking / walk-in</Link>
+        {!isDoctor && <Link to="/reception/book">+ New booking / walk-in</Link>}
       </div>
-      <OpenVisits />
+      <div className="inline">
+        Status:{' '}
+        {STATUSES.map((s) => (
+          <label key={s} style={{ display: 'inline', marginRight: 12 }}>
+            <input type="checkbox" checked={status.includes(s)} onChange={() => toggle(s)} /> {s}
+          </label>
+        ))}
+        <small> (none = all; walk-ins count as ATTENDED)</small>
+      </div>
       <table>
         <thead>
-          <tr><th>Time</th><th>Patient</th><th>Phone</th><th>Doctor</th><th>Service</th><th>Appt</th><th>Visit</th><th>Payment</th><th>Balance</th><th>Actions</th></tr>
+          <tr>
+            <th>Time</th><th>Patient</th><th>Phone</th><th>Doctor</th><th>Service</th><th>Appt</th><th>Visit</th><th>Note</th>
+            {!isDoctor && <><th>Payment</th><th>Balance</th></>}
+            <th>Actions</th>
+          </tr>
         </thead>
         <tbody>
-          {rows?.map((r) => {
-            const st = r.status;
-            const canCheckIn = !r.isWalkIn && (st === 'PENDING' || st === 'CONFIRMED');
-            return (
-              <tr key={r.id ?? r.visitId!}>
-                <td>{r.isWalkIn ? <i>walk-in {fmtTime(r.checkedInAt)}</i> : `${fmtTime(r.startAt)}-${fmtTime(r.endAt)}`}<br /><small>{r.referenceCode} {r.source}</small></td>
-                <td>
-                  <Link to={`/reception/patients/${r.patient.id}`}>{r.patient.name}</Link>
-                  {r.nameMismatch && <div className="warn">⚠ booked as "{r.bookedName}"</div>}
-                </td>
-                <td>{r.patient.phone}</td>
-                <td>{r.doctor.name}</td>
-                <td>{r.service.name}</td>
-                <td>{st ?? '-'}{r.cancelReason && <div><small>{r.cancelReason}</small></div>}</td>
-                <td>{r.visitStatus ?? '-'}</td>
+          {rows?.map((r) => (
+            <tr key={r.id ?? r.visitId!}>
+              <td>
+                {r.isWalkIn ? <i>walk-in {fmtTime(r.attendedAt)}</i> : `${fmtTime(r.startAt)}-${fmtTime(r.endAt)}`}<br />
+                <small>{r.referenceCode} {r.source}</small>
+              </td>
+              <td>
+                {isDoctor ? r.patient.name : <Link to={`/reception/patients/${r.patient.id}`}>{r.patient.name}</Link>}
+                {r.nameMismatch && <div className="warn">⚠ booked as "{r.bookedName}"</div>}
+              </td>
+              <td>{r.patient.phone}</td>
+              <td>{r.doctor.name}</td>
+              <td>{r.service.name}</td>
+              <td>{r.status ?? '-'}{r.cancelReason && <div><small>{r.cancelReason}</small></div>}</td>
+              <td>{r.visitStatus ?? '-'}{r.attendedAt && !r.isWalkIn && <div><small>{fmtTime(r.attendedAt)}</small></div>}</td>
+              <td>{r.noteStatus ?? '-'}</td>
+              {!isDoctor && <>
                 <td>{r.paymentStatus}</td>
                 <td>{r.balance ?? '-'}{r.invoiceTotal && <div><small>of {r.invoiceTotal}</small></div>}</td>
-                <td>
-                  {st === 'PENDING' && <button onClick={() => run(() => patch(`/appointments/${r.id}/confirm`))}>confirm</button>}
-                  {(st === 'PENDING' || st === 'CONFIRMED') && <button onClick={() => run(() => patch(`/appointments/${r.id}/cancel`, { reason: reason('cancel') }))}>cancel</button>}
-                  {st === 'CONFIRMED' && <button onClick={() => run(() => patch(`/appointments/${r.id}/no-show`))}>no-show</button>}
-                  {canCheckIn && <button onClick={() => run(() => post(`/appointments/${r.id}/check-in`))}>check-in</button>}
-                  {r.visitStatus === 'WAITING' && !r.isWalkIn && <button onClick={() => run(() => post(`/visits/${r.visitId}/undo-check-in`, { reason: reason('undo check-in') }))}>undo check-in</button>}
-                  {r.visitStatus === 'WAITING' && <button onClick={() => run(() => post(`/visits/${r.visitId}/cancel`, { reason: reason('cancel the visit (patient left)') }))}>cancel visit</button>}
-                  {st === 'CONFIRMED' && <button onClick={() => setResched(r)}>reschedule</button>}
-                  {r.invoiceId && <Link role="button" to={`/reception/invoices/${r.invoiceId}`}>invoice</Link>}
-                  {!r.invoiceId && r.visitId && r.visitStatus !== 'CANCELLED' && (
-                    <button onClick={() => run(() => post(`/visits/${r.visitId}/invoice`))}>create invoice</button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
+              </>}
+              <td>
+                {r.allowedActions.map((a) => {
+                  if (a === 'reschedule') return <button key={a} onClick={() => setResched(r)}>reschedule</button>;
+                  if (a === 'writeNote' || a === 'viewNote') {
+                    return <Link key={a} role="button" to={`/doctor/visits/${r.visitId}`}>{a === 'writeNote' ? 'write note' : 'view note'}</Link>;
+                  }
+                  return <button key={a} onClick={() => run(() => actions[a](r))}>{a}</button>;
+                })}
+                {r.invoiceId && <Link role="button" to={`/reception/invoices/${r.invoiceId}`}>invoice</Link>}
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
       {rows?.length === 0 && <p>Nothing on this day.</p>}
@@ -85,8 +136,8 @@ function Reschedule({ row, onDone }: { row: Row; onDone: () => void }) {
   const [why, setWhy] = useState('');
   return (
     <div className="box">
-      <h4>Reschedule {row.referenceCode} — {row.patient.name} with {row.doctor.name} ({row.service.name})</h4>
-      <label><input type="checkbox" checked={outside} onChange={(e) => setOutside(e.target.checked)} /> outside schedule</label>
+      <h4>Reschedule {row.referenceCode} ({row.status}) — {row.patient.name} with {row.doctor.name} ({row.service.name})</h4>
+      <label><input type="checkbox" checked={outside} onChange={(e) => setOutside(e.target.checked)} /> outside schedule (past times too)</label>
       <SlotPicker doctorId={row.doctor.id} serviceId={row.service.id} outside={outside} value={startAt} onPick={setStartAt} />
       <input placeholder="reason (optional)" value={why} onChange={(e) => setWhy(e.target.value)} />
       <div className="inline">
@@ -95,17 +146,7 @@ function Reschedule({ row, onDone }: { row: Row; onDone: () => void }) {
         }}>Reschedule</button>
         <button onClick={onDone}>Close</button>
       </div>
-      <small>Same doctor only here (the API also accepts another doctorId).</small>
+      <small>Same doctor only here (the API also accepts another doctorId). The new appointment is CONFIRMED.</small>
     </div>
-  );
-}
-
-function OpenVisits() {
-  const [open] = useLoad(() => get<any[]>('/visits/open'), []);
-  if (!open?.length) return null;
-  return (
-    <p className="warn">
-      Forgotten open visits from previous days: {open.map((v) => `${v.patient.name} (${v.doctor.name}, ${v.status})`).join(', ')}
-    </p>
   );
 }

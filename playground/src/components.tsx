@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { get, qs } from './api';
-import { cairoIso, fmtTime, todayCairo } from './time';
+import { fmtTime, todayCairo } from './time';
 import { useLoad } from './util';
 
 export interface Doctor {
@@ -38,12 +38,11 @@ export function DoctorService({ doctorId, serviceId, onChange }: {
   );
 }
 
-/** Staff slot picker. With `outside`, reception may also type any time (availability never returns past times). */
+/** Staff slot picker. With `outside`, the whole day is listed, past dates and times included (back to BACKDATE_MAX_DAYS). */
 export function SlotPicker({ doctorId, serviceId, outside, value, onPick }: {
   doctorId: string; serviceId: string; outside: boolean; value: string; onPick: (startAt: string) => void;
 }) {
   const [date, setDate] = useState(todayCairo());
-  const [manual, setManual] = useState('');
   const [slots] = useLoad(
     () => (doctorId && serviceId && date
       ? get<{ startAt: string; endAt: string }[]>(`/appointments/availability${qs({ doctorId, serviceId, date, includeOutsideSchedule: outside || undefined })}`)
@@ -54,14 +53,6 @@ export function SlotPicker({ doctorId, serviceId, outside, value, onPick }: {
     <div>
       <div className="row">
         <label>Date <input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
-        {outside && (
-          <label>Or any time (outside schedule / past)
-            <span className="inline">
-              <input type="time" value={manual} onChange={(e) => setManual(e.target.value)} />
-              <button type="button" disabled={!manual} onClick={() => onPick(cairoIso(date, manual))}>use</button>
-            </span>
-          </label>
-        )}
       </div>
       <div className="slots">
         {!doctorId || !serviceId ? <small>Pick doctor and service first.</small> : slots?.length === 0 ? <small>No slots.</small> : null}

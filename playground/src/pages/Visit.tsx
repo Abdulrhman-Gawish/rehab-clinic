@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { act, ApiError, get, getSession, openFile, patch, post, put } from '../api';
+import { act, get, getSession, openFile, post, put } from '../api';
 import { fmtDateTime } from '../time';
-import { orNull, useLoad } from '../util';
+import { useLoad } from '../util';
 
 const NOTE_FIELDS = ['chiefComplaint', 'assessment', 'treatmentDone', 'progress', 'plan'] as const;
 const MED_FIELDS = ['allergies', 'chronicConditions', 'pastSurgeries', 'currentMedications', 'notes'] as const;
@@ -18,15 +18,11 @@ export function VisitPage() {
     <>
       <h2>Visit — {visit.patient.name} <small>{visit.patient.phone}</small></h2>
       <p>
-        {visit.service.name} with {visit.doctor.name} · <b>{visit.status}</b> · checked in {fmtDateTime(visit.checkedInAt)}
-        {visit.startedAt && ` · started ${fmtDateTime(visit.startedAt)}`}{visit.completedAt && ` · completed ${fmtDateTime(visit.completedAt)}`}
-        {' '}· <Link to="/doctor">back to queue</Link>
+        {visit.service.name} with {visit.doctor.name} · <b>{visit.status}</b> · attended {fmtDateTime(visit.attendedAt)} (sent in by {visit.attendedBy.name})
+        {visit.voidedAt && <span className="warn"> · voided by {visit.voidedBy?.name}: {visit.voidReason}</span>}
+        {' '}· <Link to="/doctor">my day</Link> · <Link to="/doctor/needs-note">needs a note</Link>
       </p>
-      <div className="inline">
-        <button disabled={visit.status !== 'WAITING'} onClick={() => act(() => post(`/visits/${id}/start`)).then(reloadAll)}>Start session</button>
-        <button disabled={visit.status !== 'IN_SESSION'} onClick={() => act(() => post(`/visits/${id}/complete`)).then(reloadAll)}>Complete visit</button>
-        <small> (Complete is refused with VISIT_COMPLETION_BLOCKED until the note is signed — the error shows at the top.)</small>
-      </div>
+      <small>Reception handles attendance; the doctor only writes and signs the note (any day after the visit).</small>
       <div className="cols">
         <div>
           <h3>Clinical history</h3>
@@ -47,7 +43,7 @@ function History({ history }: { history: any }) {
   return (
     <>
       <div className="box">
-        <h4>Medical info <small>{m.updatedAt ? `updated ${fmtDateTime(m.updatedAt)}` : 'never saved'}</small></h4>
+        <h4>Medical info <small>{m.updatedAt ? `updated ${fmtDateTime(m.updatedAt)} by ${m.updatedBy?.name}` : 'never saved'}</small></h4>
         {MED_FIELDS.map((f) => <div key={f}><b>{f}:</b> {m[f] ?? '-'}</div>)}
       </div>
       <h4>Signed notes ({history.notes.meta.total})</h4>
@@ -65,7 +61,7 @@ function History({ history }: { history: any }) {
         {history.attachments.map((a: any) => (
           <li key={a.id}>
             <a href="#" onClick={(e) => { e.preventDefault(); openFile(`/attachments/${a.id}/file`); }}>{a.title}</a>{' '}
-            <small>{a.mimeType}, {Math.round(a.sizeBytes / 1024)} KB, {fmtDateTime(a.createdAt)}{a.visitId && ', linked to a visit'}</small>
+            <small>{a.mimeType}, {Math.round(a.sizeBytes / 1024)} KB, {fmtDateTime(a.createdAt)} by {a.uploadedBy.name}{a.visitId && ', linked to a visit'}</small>
           </li>
         ))}
       </ul>
@@ -86,22 +82,21 @@ function AddAddendum({ noteId, onDone }: { noteId: string; onDone?: () => void }
 }
 
 function NoteForm({ visitId, onChange }: { visitId: string; onChange: () => void }) {
-  // 404 = no note yet (or someone else's draft — the API doesn't say which).
-  const [note, reload] = useLoad(
-    () => get(`/visits/${visitId}/note`, { quiet404: true }).catch((e) => (e instanceof ApiError && e.status === 404 ? null : Promise.reject(e))),
-    [visitId],
-  );
+  // null = no note yet. Another doctor's draft is 404 NOTE_NOT_VISIBLE (shown in the error bar).
+  const [note, reload] = useLoad(() => get(`/visits/${visitId}/note`), [visitId]);
   const empty = { chiefComplaint: '', assessment: '', treatmentDone: '', progress: '', plan: '', painScore: '' };
   const [v, setV] = useState<Record<string, string>>(empty);
   useEffect(() => {
     if (note) setV(Object.fromEntries(Object.keys(empty).map((k) => [k, note[k] == null ? '' : String(note[k])])));
   }, [note]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Blank text is sent as is: the API turns it into null.
   const body = () => ({
-    ...Object.fromEntries(NOTE_FIELDS.map((f) => [f, orNull(v[f])])),
+    ...Object.fromEntries(NOTE_FIELDS.map((f) => [f, v[f]])),
     painScore: v.painScore === '' ? null : Number(v.painScore),
   });
-  const save = () => (note ? patch(`/visits/${visitId}/note`, body()) : post(`/visits/${visitId}/note`, body()));
+  // PUT creates the draft on the first save and replaces it after.
+  const save = () => put(`/visits/${visitId}/note`, body());
   const done = () => { reload(); onChange(); };
   const signed = note?.status === 'SIGNED';
 
@@ -115,7 +110,7 @@ function NoteForm({ visitId, onChange }: { visitId: string; onChange: () => void
       {!signed && (
         <div className="inline">
           <button onClick={() => act(save).then(done)}>Save draft</button>
-          <button onClick={() => act(async () => { await save(); await post(`/visits/${visitId}/note/sign`); }).then(done)}>Save + sign</button>
+          <button onClick={() => act(() => post(`/visits/${visitId}/note/sign`, body())).then(done)}>Save + sign</button>
         </div>
       )}
       {signed && (
@@ -142,7 +137,7 @@ function MedicalInfo({ patientId, current, onSaved }: { patientId: string; curre
           {MED_FIELDS.map((f) => <label key={f}>{f}<textarea rows={2} value={v[f]} onChange={(e) => setV({ ...v, [f]: e.target.value })} /></label>)}
           <div className="inline">
             <button onClick={async () => {
-              if (await act(() => put(`/patients/${patientId}/medical-info`, Object.fromEntries(MED_FIELDS.map((f) => [f, orNull(v[f])]))))) { setEditing(false); onSaved(); }
+              if (await act(() => put(`/patients/${patientId}/medical-info`, Object.fromEntries(MED_FIELDS.map((f) => [f, v[f]]))))) { setEditing(false); onSaved(); }
             }}>Save</button>
             <button onClick={() => setEditing(false)}>Cancel</button>
           </div>
