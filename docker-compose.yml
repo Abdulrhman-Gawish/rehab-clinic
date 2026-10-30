@@ -3,7 +3,9 @@
 #
 #   db          PostgreSQL 16 (its own volume; not the dev database of backend/docker-compose.yml)
 #   backend     API on http://localhost:3000/api/v1 — runs migrations + the OWNER seed on start
-#   demo-seed   one-shot: demo staff, services, schedules and a sample day (skipped if already seeded)
+#   demo-seed   one-shot: demo staff, services, schedules, six weeks of patient history and a sample
+#               day (skipped if already seeded). It moves the history back in time with SQL, so it
+#               gets the DB_* settings too.
 #   playground  throwaway UI on http://localhost:5173
 #
 # Configuration comes from backend/.env (copy backend/.env.example). The DB_* values are overridden
@@ -60,6 +62,7 @@ services:
     image: rehab-clinic-playground
     env_file: ./backend/.env
     environment:
+      <<: *db-credentials
       API_URL: http://backend:3000/api/v1
     command: ['npm', 'run', 'seed:demo']
     restart: 'no'

@@ -10,12 +10,14 @@
   },
   "dependencies": {
     "@picocss/pico": "^2.1.1",
+    "pg": "^8.23.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.6.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.5.0",

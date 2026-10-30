@@ -1,8 +1,11 @@
-// Seeds demo data through the API only, as the OWNER from backend/.env. Run on a freshly migrated database.
+// Seeds demo data through the API, as the OWNER from backend/.env. Run on a freshly migrated database.
 //   npm run seed:demo            (API_URL defaults to http://localhost:3000/api/v1)
+// The API stamps everything with "now", so past days are built through the API too and then moved back
+// with SQL (timestamps only, see pastDay). That needs DB_* (backend/.env, or the environment in Docker).
 import { readFileSync } from 'node:fs';
+import pg from 'pg';
 import { DEMO_PASSWORD, DEMO_STAFF } from '../src/demo.ts';
-import { addDays, cairoIso, dayOfWeek, nowCairoHHmm, todayCairo } from '../src/time.ts';
+import { addDays, cairoIso, dayOfWeek, nowCairoHHmm, todayCairo, TZ } from '../src/time.ts';
 
 const API = process.env.API_URL ?? 'http://localhost:3000/api/v1';
 
@@ -55,6 +58,7 @@ const login = async (email: string, password: string) => (await call(null, 'POST
 // ---------- dates (clinic local)
 const TODAY = todayCairo();
 const TOMORROW = addDays(TODAY, 1);
+const YESTERDAY = addDays(TODAY, -1);
 const isWorkday = (d: string) => dayOfWeek(d) <= 4; // Sun..Thu
 let NEXT_WORKDAY = TOMORROW;
 while (!isWorkday(NEXT_WORKDAY)) NEXT_WORKDAY = addDays(NEXT_WORKDAY, 1);
@@ -110,7 +114,15 @@ async function main() {
       await call(owner, 'POST', `/doctors/${doc.id}/schedules`, { dayOfWeek: day, startTime: '17:00', endTime: '21:00' });
     }
   }
-  console.log('staff, services, schedules: done');
+  // Packages: physio for every doctor with an active 10% offer; massage with Dr. Mona only.
+  const pkgPhysio = await call(owner, 'POST', '/packages', {
+    name: '10 physio sessions', serviceId: svc.physio.id, sessionsCount: 10, price: '2700.00', allDoctors: true,
+    offer: { type: 'PERCENT', value: '10', startsOn: addDays(TODAY, -7), endsOn: addDays(TODAY, 30) },
+  });
+  const pkgMassage = await call(owner, 'POST', '/packages', {
+    name: '5 sports massages', serviceId: svc.massage.id, sessionsCount: 5, price: '1800.00', doctorIds: [D2.id],
+  });
+  console.log('staff, services, schedules, packages: done');
 
   const desk = await login(rec.email, DEMO_PASSWORD);
   const d1 = await login(docSpecs[0].email, DEMO_PASSWORD);
@@ -135,6 +147,7 @@ async function main() {
     dina: { name: 'Dina Wagdy', phone: phone(14) },
     hossam: { name: 'Hossam Zaki', phone: phone(15) },
     ola: { name: 'Ola Samy', phone: phone(16) },
+    kareem: { name: 'Kareem Wael', phone: phone(17) },
   };
 
   /** Reception booking, outside schedule; on SLOT_UNAVAILABLE try the next time (step minutes). */
@@ -147,7 +160,7 @@ async function main() {
           ...p, doctorId: doc.id, serviceId: s.id, startAt: cairoIso(date, t), allowOutsideSchedule: true, notes,
         });
       } catch (e) {
-        if (e instanceof HttpError && e.body?.code === 'SLOT_UNAVAILABLE') continue;
+        if (e instanceof HttpError && ['SLOT_UNAVAILABLE', 'PATIENT_OVERLAP'].includes(e.body?.code)) continue;
         throw e;
       }
     }
@@ -155,6 +168,9 @@ async function main() {
   }
   // Attend creates the visit and its invoice in one call (the response has invoiceId).
   const attend = (a: any) => call(desk, 'POST', `/appointments/${a.id}/attend`);
+
+  // ---------- history: six past days over the last ~6 weeks (so the reports span two months)
+  await seedHistory({ owner, desk, d1, d2, d3: await login(docSpecs[2].email, DEMO_PASSWORD) }, { D1, D2, D3 }, svc, P, book, attend);
 
   // ---------- public bookings first (they need real schedule slots on the next working day)
   const publicSlots = async (doc: any, s: any) =>
@@ -198,8 +214,10 @@ async function main() {
   const vYoussef = await attend(aYoussef);
   await call(d2, 'PUT', `/visits/${vYoussef.id}/note`, { chiefComplaint: 'Knee pain after running' });
 
-  // d) Nour: confirmed, not arrived yet.
-  await book(P.nour, D2, svc.massage, TODAY, '12:00');
+  // d) Nour: confirmed, not arrived yet. She bought the massage package (Dr. Mona only): attending her from the
+  //    day list uses a session.
+  const aNour = await book(P.nour, D2, svc.massage, TODAY, '12:00');
+  await call(desk, 'POST', `/patients/${aNour.patient.id}/packages`, { packageId: pkgMassage.id });
 
   // e) Hana: cancelled.
   const aHana = await book(P.hana, D3, svc.assessment, TODAY, '10:00');
@@ -219,6 +237,22 @@ async function main() {
     await book(P.mostafa, D3, svc.physio, TODAY, '19:00');
     console.log('  (too early in the day for a NO_SHOW example; Mostafa stays CONFIRMED)');
   }
+
+  // k) Kareem: mid-package. Physio package (offer price 2430.00), 1000.00 paid; attended today (0.00 line). Yesterday:
+  //    one no-show given back, one no-show still using a session (restoreSession on yesterday's day list). Works at any
+  //    hour: attend only needs today, a no-show only a start in the past.
+  const k1 = await book(P.kareem, D1, svc.physio, TODAY, '20:00');
+  const sold = await call(desk, 'POST', `/patients/${k1.patient.id}/packages`, { packageId: pkgPhysio.id });
+  await call(desk, 'POST', `/invoices/${sold.invoiceId}/payments`, { amount: '1000.00', method: 'CASH' });
+  await attend(k1);
+  const k2 = await book(P.kareem, D3, svc.physio, YESTERDAY, '17:00');
+  await call(desk, 'POST', `/appointments/${k2.id}/no-show`);
+  const { usages } = await call(desk, 'GET', `/patient-packages/${sold.id}`);
+  const missed = usages.find((u: any) => u.reason === 'NO_SHOW' && !u.restored);
+  await call(desk, 'POST', `/package-usages/${missed.id}/restore`, { reason: 'Called in sick, owner agreed' });
+  const k3 = await book(P.kareem, D1, svc.physio, YESTERDAY, '19:00');
+  await call(desk, 'POST', `/appointments/${k3.id}/no-show`);
+  await book(P.kareem, D3, svc.physio, TOMORROW, '17:30');
 
   // h) Tarek: walk-in with D1 (invoice created with it).
   await call(desk, 'POST', '/visits/walk-in', { ...P.tarek, doctorId: D1.id, serviceId: svc.assessment.id });
@@ -251,9 +285,168 @@ async function main() {
   console.log(`  OWNER         ${env.SEED_OWNER_EMAIL} / (SEED_OWNER_PASSWORD from backend/.env)`);
   for (const s of DEMO_STAFF) console.log(`  ${s.role.padEnd(13)} ${s.email} / ${DEMO_PASSWORD}   (${s.name})`);
   console.log(`\nToday (${TODAY}): Omar attended+paid+signed note, Laila attended+partial, Youssef attended (draft note),`);
-  console.log(`  Nour confirmed, Hana cancelled, Salma attended unpaid, Mostafa no-show, Tarek walk-in, Ola attend undone.`);
+  console.log(`  Nour confirmed (has a massage package), Hana cancelled, Salma attended unpaid, Mostafa no-show, Tarek walk-in,`);
+  console.log(`  Ola attend undone, Kareem mid-package (attended today; yesterday 1 no-show restored + 1 no-show; partial payment).`);
   console.log(`Tomorrow (${TOMORROW}): Omar with ${D2.name} (shared history), Rania, Sherif, Hossam, Dina (rescheduled).`);
   console.log(`Next working day (${NEXT_WORKDAY}): 4 PENDING public bookings incl. "Laila Mahmoud" (name mismatch).`);
+}
+
+// ---------- past days
+
+// Rows a past day writes, and their time columns. Rows are picked by `by >= marker`: nothing else
+// writes while the seed runs, and earlier days were already moved back.
+const SHIFTED: [table: string, columns: string[], by: string][] = [
+  ['patients', ['created_at', 'updated_at'], 'created_at'],
+  ['appointments', ['start_at', 'end_at', 'created_at', 'updated_at'], 'created_at'],
+  ['appointment_status_history', ['changed_at'], 'changed_at'],
+  ['visits', ['attended_at', 'voided_at', 'created_at', 'updated_at'], 'created_at'],
+  ['visit_status_history', ['changed_at'], 'changed_at'],
+  ['invoices', ['issued_at', 'cancelled_at', 'created_at', 'updated_at'], 'created_at'],
+  ['invoice_items', ['created_at', 'updated_at'], 'created_at'],
+  ['invoice_discounts', ['applied_at', 'removed_at', 'created_at', 'updated_at'], 'created_at'],
+  ['payments', ['received_at', 'voided_at', 'created_at', 'updated_at'], 'created_at'],
+  ['clinical_notes', ['signed_at', 'created_at', 'updated_at'], 'created_at'],
+  ['clinical_note_addenda', ['created_at'], 'created_at'],
+  ['patient_medical_info', ['updated_at'], 'updated_at'],
+  ['expenses', ['expense_date', 'voided_at', 'created_at', 'updated_at'], 'created_at'],
+  ['audit_logs', ['created_at'], 'created_at'],
+];
+
+/**
+ * Builds one past day through the API (so every rule and total is the real one), then moves everything
+ * it wrote back by `daysAgo` days in one transaction. The session runs in the clinic zone, so wall-clock
+ * times stay the same across DST.
+ */
+async function pastDay(db: pg.Client, daysAgo: number, label: string, build: () => Promise<void>) {
+  const { rows: [{ marker }] } = await db.query('SELECT now() AS marker');
+  await build();
+  await db.query('BEGIN');
+  for (const [table, columns, by] of SHIFTED) {
+    const set = columns
+      .map((c) => `${c} = ${c} - ${c.endsWith('_date') ? '$2::int' : 'make_interval(days => $2::int)'}`)
+      .join(', ');
+    await db.query(`UPDATE ${table} SET ${set} WHERE ${by} >= $1`, [marker, daysAgo]);
+  }
+  await db.query('COMMIT');
+  console.log(`  ${addDays(TODAY, -daysAgo)}: ${label}`);
+}
+
+type Tokens = { owner: string; desk: string; d1: string; d2: string; d3: string };
+type Person = { name: string; phone: string };
+
+/**
+ * Omar, Laila and Youssef get a rich history: several visits with different doctors, signed notes and
+ * addenda, discounts (one repeated), a voided payment, a refund, a reschedule, no-shows, a cancellation,
+ * unpaid balances, plus a few expenses. Everything happens "now" and is then moved back (pastDay).
+ */
+async function seedHistory(
+  t: Tokens,
+  doc: Record<'D1' | 'D2' | 'D3', any>,
+  svc: Record<'assessment' | 'physio' | 'massage', any>,
+  P: Record<'omar' | 'laila' | 'youssef' | 'hana', Person>,
+  book: (p: Person, doc: any, s: any, date: string, time: string, step?: number) => Promise<any>,
+  attend: (a: any) => Promise<any>,
+) {
+  const now = nowCairoHHmm();
+  if (now < '03:00') {
+    console.log('  (history skipped: it needs appointment times earlier today; run the seed after 03:00 Cairo time)');
+    return;
+  }
+  // Just before now, stepping back on conflicts: attend works the same day, no-show needs a passed start.
+  const recent = shift(`${now.slice(0, 2)}:${String(Math.floor(Number(now.slice(3)) / 15) * 15).padStart(2, '0')}`, -15);
+  const bookRecent = (p: Person, d: any, s: any) => book(p, d, s, TODAY, recent, -15);
+  const visit = async (p: Person, d: any, s: any) => attend(await bookRecent(p, d, s));
+  const walkIn = (p: Person, d: any, s: any) => call(t.desk, 'POST', '/visits/walk-in', { ...p, doctorId: d.id, serviceId: s.id });
+  const noShow = async (p: Person, d: any, s: any) => call(t.desk, 'POST', `/appointments/${(await bookRecent(p, d, s)).id}/no-show`);
+  const discount = (v: any, body: object) => call(t.desk, 'POST', `/invoices/${v.invoiceId}/discount`, body);
+  const pay = (v: any, amount: string, method: string) => call(t.desk, 'POST', `/invoices/${v.invoiceId}/payments`, { amount, method });
+  const payAll = async (v: any, method: string) => pay(v, (await call(t.desk, 'GET', `/invoices/${v.invoiceId}`)).balance, method);
+  const sign = (token: string, v: any, note: object) => call(token, 'POST', `/visits/${v.id}/note/sign`, note);
+  const addendum = (token: string, note: any, content: string) => call(token, 'POST', `/clinical-notes/${note.id}/addenda`, { content });
+  const cats = await call<any[]>(t.desk, 'GET', '/expense-categories');
+  const expense = (i: number, description: string, amount: string, paymentMethod: string) =>
+    call(t.desk, 'POST', '/expenses', { categoryId: cats[i % cats.length].id, description, amount, expenseDate: TODAY, paymentMethod });
+
+  const db = new pg.Client({
+    host: env.DB_HOST, port: Number(env.DB_PORT ?? 5432), user: env.DB_USERNAME, password: env.DB_PASSWORD, database: env.DB_DATABASE,
+  });
+  await db.connect();
+  await db.query(`SET TIME ZONE '${TZ}'`);
+  console.log('history (built now, moved back):');
+  try {
+    await pastDay(db, 41, 'Omar first assessment (Dr. Ahmed), Laila walk-in with discount', async () => {
+      const v = await visit(P.omar, doc.D1, svc.assessment);
+      await payAll(v, 'CASH');
+      await call(t.d1, 'PUT', `/patients/${v.patient.id}/medical-info`, { allergies: 'Penicillin', chronicConditions: 'Mild asthma' });
+      await sign(t.d1, v, {
+        chiefComplaint: 'Lower back pain after lifting', assessment: 'Mechanical low back pain, no red flags',
+        treatmentDone: 'Assessment, core activation', plan: 'Physio twice a week', painScore: 7,
+      });
+      const w = await walkIn(P.laila, doc.D3, svc.assessment);
+      await discount(w, { type: 'FIXED', value: '30.00', reason: 'Returning patient' });
+      await payAll(w, 'CARD');
+      await expense(1, 'Cleaning supplies', '120.00', 'CASH');
+    });
+    await pastDay(db, 34, 'Omar with Dr. Mona (student discount), Youssef massage, Laila no-show', async () => {
+      const v = await visit(P.omar, doc.D2, svc.physio);
+      await discount(v, { type: 'PERCENT', value: '10', reason: 'Student discount' });
+      await payAll(v, 'CASH');
+      await sign(t.d2, v, { assessment: 'Improving, pain 5/10', treatmentDone: 'Manual therapy, McKenzie extensions', painScore: 5 });
+      const y = await visit(P.youssef, doc.D2, svc.massage);
+      await payAll(y, 'INSTAPAY');
+      await sign(t.d2, y, { assessment: 'Tight hamstrings after running', treatmentDone: 'Sports massage' });
+      await noShow(P.laila, doc.D1, svc.physio);
+    });
+    await pastDay(db, 27, 'Omar no-show, Laila payment voided and re-entered, Hana cancelled', async () => {
+      await noShow(P.omar, doc.D1, svc.physio);
+      const v = await visit(P.laila, doc.D1, svc.physio);
+      const wrong = await pay(v, '300.00', 'CASH');
+      await call(t.desk, 'POST', `/payments/${wrong.id}/void`, { reason: 'Recorded on the wrong invoice' });
+      await payAll(v, 'CARD');
+      const note = await sign(t.d1, v, { assessment: 'Neck strain from desk work', treatmentDone: 'Mobilisation, posture advice' });
+      await addendum(t.d1, note, 'Patient called: pain much better the next day.');
+      const h = await bookRecent(P.hana, doc.D3, svc.assessment);
+      await call(t.desk, 'POST', `/appointments/${h.id}/cancel`, { reason: 'Patient travelling' });
+    });
+    await pastDay(db, 20, 'Omar rescheduled to Dr. Karim, refund; Youssef unpaid', async () => {
+      const a = await bookRecent(P.omar, doc.D3, svc.massage);
+      const moved = await call(t.desk, 'POST', `/appointments/${a.id}/reschedule`, {
+        startAt: cairoIso(TODAY, shift(recent, -90)), allowOutsideSchedule: true, reason: 'Patient asked for earlier',
+      });
+      const v = await attend(moved);
+      const paid = await payAll(v, 'CARD');
+      await call(t.owner, 'POST', `/payments/${paid.id}/refund`, { amount: '100.00', reason: 'Session cut short' });
+      const note = await sign(t.d3, v, { assessment: 'Paraspinal spasm', treatmentDone: 'Massage, stopped early (dizziness)' });
+      await addendum(t.d3, note, 'Dizziness resolved, cleared to continue.');
+      const y = await visit(P.youssef, doc.D1, svc.assessment);
+      await sign(t.d1, y, { assessment: 'Patellofemoral pain', treatmentDone: 'Assessment, taping' });
+      await expense(2, 'Printer ink', '250.00', 'CARD');
+    });
+    await pastDay(db, 13, 'Omar repeat discount, Laila partial payment, Youssef no-show', async () => {
+      const v = await visit(P.omar, doc.D2, svc.physio);
+      const last = await call(t.desk, 'GET', `/patients/${v.patient.id}/last-discount?excludeInvoiceId=${v.invoiceId}`);
+      await discount(v, { repeatFromDiscountId: last.id });
+      await payAll(v, 'WALLET');
+      await sign(t.d2, v, { assessment: 'Pain 3/10, back to light gym', treatmentDone: 'Progressive loading' });
+      await call(t.d2, 'PUT', `/patients/${v.patient.id}/medical-info`, {
+        allergies: 'Penicillin', chronicConditions: 'Mild asthma', currentMedications: 'Salbutamol inhaler as needed',
+      });
+      const w = await walkIn(P.laila, doc.D2, svc.massage);
+      await discount(w, { type: 'PERCENT', value: '15', reason: 'Loyal patient' });
+      await pay(w, '200.00', 'CASH');
+      await noShow(P.youssef, doc.D2, svc.physio);
+    });
+    await pastDay(db, 6, 'Laila with Dr. Karim, Youssef partial payment', async () => {
+      const v = await visit(P.laila, doc.D3, svc.physio);
+      await payAll(v, 'INSTAPAY');
+      const y = await visit(P.youssef, doc.D1, svc.physio);
+      await discount(y, { type: 'FIXED', value: '50.00', reason: 'Returning patient' });
+      await pay(y, '100.00', 'CASH');
+      await expense(0, 'Tea and water', '90.00', 'CASH');
+    });
+  } finally {
+    await db.end();
+  }
 }
 
 main().catch((e) => {

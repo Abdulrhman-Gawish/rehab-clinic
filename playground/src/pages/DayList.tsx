@@ -12,6 +12,8 @@ interface Row {
   service: { id: string; name: string; durationMinutes: number }; notes: string | null; cancelReason: string | null;
   visitId: string | null; visitStatus: string | null; attendedAt: string | null; noteStatus: string | null;
   allowedActions: string[];
+  // The package session this visit / no-show used.
+  package: { usageId: string; patientPackageId: string; name: string; used: number; total: number } | null;
   // Not sent to doctors.
   invoiceId?: string | null; invoiceTotal?: string | null; amountPaid?: string | null; balance?: string | null; paymentStatus?: string;
 }
@@ -35,6 +37,7 @@ export function DayList() {
     [date, status.join(','), doctorId],
   );
   const [resched, setResched] = useState<Row | null>(null);
+  const [attending, setAttending] = useState<Row | null>(null);
   const run = async (fn: () => Promise<unknown>) => { await act(fn); reload(); };
   const setFilter = (next: { date?: string; status?: string[]; doctorId?: string }) => {
     const p = new URLSearchParams();
@@ -50,7 +53,7 @@ export function DayList() {
     cancel: (r) => post(`/appointments/${r.id}/cancel`, { reason: reason('cancel') }),
     noShow: (r) => post(`/appointments/${r.id}/no-show`),
     undoNoShow: (r) => post(`/appointments/${r.id}/undo-no-show`),
-    attend: (r) => post(`/appointments/${r.id}/attend`),
+    restoreSession: (r) => post(`/package-usages/${r.package?.usageId}/restore`, { reason: reason('give the session back') }),
     // A walk-in has no appointment: it is undone through its visit.
     undoAttend: (r) => r.isWalkIn
       ? post(`/visits/${r.visitId}/undo-attend`, { reason: reason('undo the walk-in') })
@@ -84,7 +87,7 @@ export function DayList() {
       <table>
         <thead>
           <tr>
-            <th>Time</th><th>Patient</th><th>Phone</th><th>Doctor</th><th>Service</th><th>Appt</th><th>Visit</th><th>Note</th>
+            <th>Time</th><th>Patient</th><th>Phone</th><th>Doctor</th><th>Service</th><th>Appt</th><th>Visit</th><th>Note</th><th>Package</th>
             {!isDoctor && <><th>Payment</th><th>Balance</th></>}
             <th>Actions</th>
           </tr>
@@ -106,6 +109,7 @@ export function DayList() {
               <td>{r.status ?? '-'}{r.cancelReason && <div><small>{r.cancelReason}</small></div>}</td>
               <td>{r.visitStatus ?? '-'}{r.attendedAt && !r.isWalkIn && <div><small>{fmtTime(r.attendedAt)}</small></div>}</td>
               <td>{r.noteStatus ?? '-'}</td>
+              <td>{r.package ? <>{r.package.name}<div><small>{r.package.used}/{r.package.total} used</small></div></> : '-'}</td>
               {!isDoctor && <>
                 <td>{r.paymentStatus}</td>
                 <td>{r.balance ?? '-'}{r.invoiceTotal && <div><small>of {r.invoiceTotal}</small></div>}</td>
@@ -113,6 +117,7 @@ export function DayList() {
               <td>
                 {r.allowedActions.map((a) => {
                   if (a === 'reschedule') return <button key={a} onClick={() => setResched(r)}>reschedule</button>;
+                  if (a === 'attend') return <button key={a} onClick={() => setAttending(r)}>attend</button>;
                   if (a === 'writeNote' || a === 'viewNote') {
                     return <Link key={a} role="button" to={`/doctor/visits/${r.visitId}`}>{a === 'writeNote' ? 'write note' : 'view note'}</Link>;
                   }
@@ -126,7 +131,38 @@ export function DayList() {
       </table>
       {rows?.length === 0 && <p>Nothing on this day.</p>}
       {resched && <Reschedule row={resched} onDone={() => { setResched(null); reload(); }} />}
+      {attending && <Attend row={attending} onDone={() => { setAttending(null); reload(); }} />}
     </>
+  );
+}
+
+/**
+ * Attend, choosing who pays the session: the API's default (oldest usable package), a specific package, or none.
+ * "Usable" is worked out here from GET /patients/:id/packages (same service, doctor allowed, ACTIVE): see FINDINGS #23.
+ */
+function Attend({ row, onDone }: { row: Row; onDone: () => void }) {
+  const [packages] = useLoad(() => get<any[]>(`/patients/${row.patient.id}/packages`), [row.patient.id]);
+  const usable = (packages ?? []).filter((p) => p.status === 'ACTIVE' && p.service.id === row.service.id
+    && (p.allDoctors || p.doctors.some((d: any) => d.id === row.doctor.id)));
+  const [choice, setChoice] = useState('auto');
+  const body = choice === 'auto' ? {} : choice === 'none' ? { usePackage: false } : { patientPackageId: choice };
+  return (
+    <div className="box">
+      <h4>Attend {row.patient.name} with {row.doctor.name} ({row.service.name})</h4>
+      {!packages ? <p>Loading packages…</p> : usable.length === 0 ? <p>No usable package: the visit is billed normally.</p> : (
+        <div>
+          <label><input type="radio" checked={choice === 'auto'} onChange={() => setChoice('auto')} /> oldest usable package (default)</label>
+          {usable.map((p) => (
+            <label key={p.id}><input type="radio" checked={choice === p.id} onChange={() => setChoice(p.id)} /> {p.name} ({p.sessionsLeft} left)</label>
+          ))}
+          <label><input type="radio" checked={choice === 'none'} onChange={() => setChoice('none')} /> no package (bill the visit)</label>
+        </div>
+      )}
+      <div className="inline">
+        <button onClick={async () => { if (await act(() => post(`/appointments/${row.id}/attend`, body))) onDone(); }}>Attend</button>
+        <button onClick={onDone}>Close</button>
+      </div>
+    </div>
   );
 }
 
