@@ -1,12 +1,8 @@
-import { Controller, Get } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import {
-  HealthCheck,
-  HealthCheckService,
-  TypeOrmHealthIndicator,
-  type HealthCheckResult,
-} from '@nestjs/terminus';
+import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
+import { InjectDataSource } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import { Public } from '../../common/decorators/public.decorator.js';
 
 @ApiTags('Health')
@@ -14,15 +10,17 @@ import { Public } from '../../common/decorators/public.decorator.js';
 @Public()
 @SkipThrottle()
 export class HealthController {
-  constructor(
-    private readonly health: HealthCheckService,
-    private readonly db: TypeOrmHealthIndicator,
-  ) {}
+  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
   @Get()
-  @HealthCheck()
-  @ApiOperation({ summary: 'Liveness + database connectivity' })
-  check(): Promise<HealthCheckResult> {
-    return this.health.check([() => this.db.pingCheck('database')]);
+  @ApiOperation({ summary: 'Liveness + database connectivity (503 if down)' })
+  @ApiOkResponse({ schema: { example: { status: 'ok', database: 'up' } } })
+  async check(): Promise<{ status: 'ok'; database: 'up' }> {
+    try {
+      await this.dataSource.query('SELECT 1');
+    } catch {
+      throw new ServiceUnavailableException('Database unavailable');
+    }
+    return { status: 'ok', database: 'up' };
   }
 }

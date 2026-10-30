@@ -1,12 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, IsNull, Repository } from 'typeorm';
-import type { EnvironmentVariables } from '../../config/env.validation.js';
+import { REFRESH_TOKEN_TTL_DAYS } from './auth.constants.js';
 import { RefreshToken } from './entities/refresh-token.entity.js';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const TTL_MS = REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000;
 
 export interface IssuedRefreshToken {
   token: string;
@@ -17,15 +16,10 @@ export interface IssuedRefreshToken {
 // returned to the client; the DB keeps their SHA-256.
 @Injectable()
 export class RefreshTokensService {
-  private readonly ttlMs: number;
-
   constructor(
     @InjectRepository(RefreshToken)
     private readonly refreshTokens: Repository<RefreshToken>,
-    config: ConfigService<EnvironmentVariables, true>,
-  ) {
-    this.ttlMs = config.get('JWT_REFRESH_TTL_DAYS', { infer: true }) * DAY_MS;
-  }
+  ) {}
 
   static hash(token: string): string {
     return createHash('sha256').update(token).digest('hex');
@@ -40,7 +34,7 @@ export class RefreshTokensService {
       manager.getRepository(RefreshToken).create({
         userId,
         tokenHash: RefreshTokensService.hash(token),
-        expiresAt: new Date(Date.now() + this.ttlMs),
+        expiresAt: new Date(Date.now() + TTL_MS),
         revokedAt: null,
         replacedById: null,
       }),
@@ -53,14 +47,10 @@ export class RefreshTokensService {
     token: string,
     manager: EntityManager,
   ): Promise<RefreshToken | null> {
-    return manager
-      .getRepository(RefreshToken)
-      .createQueryBuilder('token')
-      .where('token.tokenHash = :hash', {
-        hash: RefreshTokensService.hash(token),
-      })
-      .setLock('pessimistic_write')
-      .getOne();
+    return manager.findOne(RefreshToken, {
+      where: { tokenHash: RefreshTokensService.hash(token) },
+      lock: { mode: 'pessimistic_write' },
+    });
   }
 
   async markRotated(

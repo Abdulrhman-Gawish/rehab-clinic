@@ -15,7 +15,7 @@ import {
 } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
 import { Gender } from '../../../common/enums/gender.enum.js';
-import { PersonNameField } from '../../users/dto/user-fields.js';
+import { PersonNameField } from '../../users/dto/user.dto.js';
 import { PatientSource, type Patient } from '../entities/patient.entity.js';
 
 const PHONE_DOC = {

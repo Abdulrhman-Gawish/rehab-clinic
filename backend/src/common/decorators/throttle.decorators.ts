@@ -1,7 +1,8 @@
 import { Throttle } from '@nestjs/throttler';
 
-// Stricter limits than the global default (THROTTLE_LIMIT per THROTTLE_TTL_MS).
-// All are per client IP.
+// Rate limits, all per client IP. DEFAULT_THROTTLE applies to every route;
+// login and public endpoints are stricter.
+export const DEFAULT_THROTTLE = { limit: 120, ttl: 60_000 };
 export const LOGIN_THROTTLE = { limit: 5, ttl: 60_000 };
 export const PUBLIC_THROTTLE = { limit: 30, ttl: 60_000 };
 // Creating appointments anonymously: a real person needs one or two.

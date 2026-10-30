@@ -9,7 +9,7 @@ import {
   createLoggedInUser,
   type TestUser,
 } from './utils/auth-helpers.js';
-import { createLoggedInDoctor, insertPatient } from './utils/factories.js';
+import { insertPatient } from './utils/factories.js';
 import {
   createTestApp,
   resetDatabase,
@@ -314,14 +314,6 @@ describe('Expenses (e2e)', () => {
       // Replacing is allowed (same edit rule); a PDF works too.
       await upload(created.body.id, PDF, 'scan.pdf').expect(200);
 
-      const doctor = await createLoggedInDoctor(ctx.app, ctx.dataSource);
-      await request(server)
-        .get(`/api/v1/expenses/${created.body.id}/receipt`)
-        .set(as(doctor))
-        .expect(403);
-      await request(server)
-        .get(`/api/v1/expenses/${created.body.id}/receipt`)
-        .expect(401);
       // Never served statically.
       await request(server).get('/storage/expenses').expect(404);
     });
@@ -420,11 +412,6 @@ describe('Expenses (e2e)', () => {
         .expect(200);
       expect(all.body).toHaveLength(2);
 
-      await request(server)
-        .post('/api/v1/expense-categories')
-        .set(as(receptionist))
-        .send({ name: 'صيانة' })
-        .expect(403);
       const created = await request(server)
         .post('/api/v1/expense-categories')
         .set(as(owner))

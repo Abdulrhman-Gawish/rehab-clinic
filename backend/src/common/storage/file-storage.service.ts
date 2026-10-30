@@ -6,28 +6,21 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { EnvironmentVariables } from '../../config/env.validation.js';
 
-/**
- * Private file storage. Files are only ever served through authorized
- * endpoints, never publicly. Bind another implementation (e.g. S3) to
- * STORAGE_SERVICE to change the backend.
- */
-export const STORAGE_SERVICE = Symbol('STORAGE_SERVICE');
-
 export interface StoredFile {
   stream: Readable;
   size: number;
 }
 
-export interface StorageService {
-  put(key: string, data: Buffer): Promise<void>;
-  get(key: string): Promise<StoredFile>;
-}
-
 // Keys are generated server-side; this also blocks path traversal.
 const SAFE_KEY = /^[a-z0-9][a-z0-9/_.-]*$/i;
 
+/**
+ * Private files on local disk under STORAGE_LOCAL_PATH (expense receipts;
+ * patient attachments later). Files are only ever streamed through
+ * authorized endpoints, never served statically.
+ */
 @Injectable()
-export class LocalDiskStorageService implements StorageService {
+export class FileStorage {
   private readonly root: string;
 
   constructor(config: ConfigService<EnvironmentVariables, true>) {

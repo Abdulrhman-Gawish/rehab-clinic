@@ -21,7 +21,7 @@ import {
   OptionalStaffPhoneField,
   PasswordField,
   PersonNameField,
-} from '../../users/dto/user-fields.js';
+} from '../../users/dto/user.dto.js';
 import type { DoctorClinicService } from '../entities/doctor-clinic-service.entity.js';
 import type { Doctor } from '../entities/doctor.entity.js';
 

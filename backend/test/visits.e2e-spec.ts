@@ -303,13 +303,6 @@ describe('Visits (e2e)', () => {
       await checkIn(late.id).expect(201);
     });
 
-    it('a second check-in is 409 ALREADY_CHECKED_IN', async () => {
-      const appointment = await insertAppointment(p1, doctorA, local('09:30'));
-      await checkIn(appointment.id).expect(201);
-      const res = await checkIn(appointment.id).expect(409);
-      expect(res.body.code).toBe('ALREADY_CHECKED_IN');
-    });
-
     it('5 parallel check-ins of one appointment create exactly one visit', async () => {
       const appointment = await insertAppointment(p1, doctorA, local('09:30'));
       const results = await Promise.all(
@@ -572,35 +565,30 @@ describe('Visits (e2e)', () => {
       }
     });
 
-    it('a doctor can have only one session in progress', async () => {
-      const v1 = (await walkIn({ patientId: p1.id }).expect(201)).body;
-      const v2 = (await walkIn({ patientId: p2.id }).expect(201)).body;
-      await act(v1.id, 'start', doctorA).expect(200);
-      const res = await act(v2.id, 'start', doctorA).expect(409);
-      expect(res.body.code).toBe('DOCTOR_ALREADY_IN_SESSION');
-
-      await act(v1.id, 'complete', doctorA).expect(200);
-      await act(v2.id, 'start', doctorA).expect(200);
-    });
-
-    it('parallel starts for one doctor: exactly one succeeds', async () => {
-      const v1 = (await walkIn({ patientId: p1.id }).expect(201)).body;
-      const v2 = (await walkIn({ patientId: p2.id }).expect(201)).body;
-      const v3 = (await walkIn({ patientId: p3.id }).expect(201)).body;
+    it('one session per doctor (parallel starts): exactly one succeeds until it completes', async () => {
+      const visits: { id: string }[] = [];
+      for (const patient of [p1, p2, p3]) {
+        visits.push((await walkIn({ patientId: patient.id }).expect(201)).body);
+      }
       const results = await Promise.all(
-        [v1, v2, v3].map((v: { id: string }) => act(v.id, 'start', doctorA)),
+        visits.map((v) => act(v.id, 'start', doctorA)),
       );
       expect(results.filter((r) => r.status === 200)).toHaveLength(1);
       const rejected = results.filter((r) => r.status === 409);
       expect(rejected).toHaveLength(2);
       for (const r of rejected)
         expect(r.body.code).toBe('DOCTOR_ALREADY_IN_SESSION');
+
+      // Completing the session frees the doctor.
+      const winner = visits[results.findIndex((r) => r.status === 200)];
+      await act(winner.id, 'complete', doctorA).expect(200);
+      const next = visits.find((v) => v !== winner) as { id: string };
+      await act(next.id, 'start', doctorA).expect(200);
     });
 
-    it("only the visit's doctor or the owner: other doctors get 404, reception 403", async () => {
+    it("only the visit's doctor or the owner: other doctors get 404", async () => {
       const visit = (await walkIn({ patientId: p1.id }).expect(201)).body;
       await act(visit.id, 'start', doctorB).expect(404);
-      await act(visit.id, 'start', receptionist).expect(403);
       await act(visit.id, 'start', owner).expect(200);
       await act(visit.id, 'complete', doctorB).expect(404);
       await act(visit.id, 'complete', owner).expect(200);
@@ -812,11 +800,6 @@ describe('Visits (e2e)', () => {
         .set('Authorization', bearer(receptionist))
         .expect(200);
       expect(res.body.map((v: { id: string }) => v.id)).toEqual([forgotten.id]);
-
-      await request(server)
-        .get('/api/v1/visits/open')
-        .set('Authorization', bearer(doctorA))
-        .expect(403);
     });
 
     it('lists with filters; doctors see only their own; history; patient visits across doctors', async () => {

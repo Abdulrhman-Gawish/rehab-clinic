@@ -118,11 +118,10 @@ export class ExpenseCategoriesService {
   ): Promise<ExpenseCategoryDto> {
     return this.dataSource.transaction(async (manager) => {
       const repository = manager.getRepository(ExpenseCategory);
-      const category = await repository
-        .createQueryBuilder('category')
-        .where('category.id = :id', { id })
-        .setLock('pessimistic_write')
-        .getOne();
+      const category = await repository.findOne({
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
       if (!category) throw new NotFoundException('Expense category not found');
       const values = apply(category);
       await repository.save(category);

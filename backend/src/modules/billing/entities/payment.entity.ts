@@ -14,8 +14,6 @@ import { User } from '../../users/entities/user.entity.js';
 import { PaymentMethod, PaymentStatus, PaymentType } from '../billing.enums.js';
 import { Invoice } from './invoice.entity.js';
 
-export const PAYMENT_IDEMPOTENCY_UNIQUE = 'uq_payments_idempotency_key';
-
 /**
  * Money received (PAYMENT) or returned (REFUND). Paid money is never edited
  * or deleted: a mistake is VOIDED (same local day), returned money is a new
@@ -23,7 +21,6 @@ export const PAYMENT_IDEMPOTENCY_UNIQUE = 'uq_payments_idempotency_key';
  */
 @Entity('payments')
 @Unique('uq_payments_receipt_number', ['receiptNumber'])
-@Unique(PAYMENT_IDEMPOTENCY_UNIQUE, ['idempotencyKey'])
 @Index('idx_payments_invoice', ['invoiceId'])
 @Index('idx_payments_received_at', ['receivedAt'])
 @Index('idx_payments_method_received_at', ['method', 'receivedAt'])
@@ -32,10 +29,6 @@ export const PAYMENT_IDEMPOTENCY_UNIQUE = 'uq_payments_idempotency_key';
 @Check(
   'chk_payments_refund_shape',
   `("type" = 'REFUND' AND "refund_of_id" IS NOT NULL AND "reason" IS NOT NULL) OR ("type" = 'PAYMENT' AND "refund_of_id" IS NULL)`,
-)
-@Check(
-  'chk_payments_reference',
-  `"type" <> 'PAYMENT' OR "method" = 'CASH' OR "reference" IS NOT NULL`,
 )
 @Check(
   'chk_payments_voided',
@@ -78,20 +71,13 @@ export class Payment extends BaseEntity {
   @Column({ type: 'enum', enum: PaymentMethod, enumName: 'payment_method' })
   method: PaymentMethod;
 
-  // Required for CARD / WALLET / INSTAPAY payments.
+  // Optional free text typed at the desk (e.g. a card slip number).
   @Column({ type: 'varchar', length: 100, nullable: true })
   reference: string | null;
 
   // Required for refunds.
   @Column({ type: 'varchar', length: 255, nullable: true })
   reason: string | null;
-
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  idempotencyKey: string | null;
-
-  // SHA-256 of the request that used the key (same key + other body = 409).
-  @Column({ type: 'varchar', length: 64, nullable: true })
-  idempotencyHash: string | null;
 
   @Column({ type: 'uuid', name: 'received_by' })
   receivedById: string;

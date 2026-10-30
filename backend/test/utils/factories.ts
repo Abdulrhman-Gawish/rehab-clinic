@@ -14,7 +14,7 @@ import { ClinicService } from '../../src/modules/clinic-services/entities/clinic
 import { DoctorClinicService } from '../../src/modules/doctors/entities/doctor-clinic-service.entity.js';
 import { Doctor } from '../../src/modules/doctors/entities/doctor.entity.js';
 import { DoctorSchedule } from '../../src/modules/schedules/entities/doctor-schedule.entity.js';
-import { insertUser, login, type TestUser } from './auth-helpers.js';
+import { accessTokenFor, insertUser, type TestUser } from './auth-helpers.js';
 
 // Direct DB inserts for test setup (bypassing the API).
 
@@ -45,13 +45,12 @@ export async function createLoggedInDoctor(
 ): Promise<TestUser & { doctorId: string }> {
   const user = await insertUser(dataSource, UserRole.DOCTOR);
   const doctor = await insertDoctor(dataSource, { userId: user.id });
-  const tokens = await login(app, user.email);
   return {
     id: user.id,
     email: user.email,
     role: UserRole.DOCTOR,
     doctorId: doctor.id,
-    ...tokens,
+    accessToken: accessTokenFor(app, user),
   };
 }
 

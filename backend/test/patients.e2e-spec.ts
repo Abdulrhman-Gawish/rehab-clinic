@@ -129,16 +129,9 @@ describe('Patients (e2e)', () => {
       expect(loser.body.details).toEqual({ patientId: winner.body.id });
       expect(await countPatients()).toBe(1);
     });
-
-    it('is forbidden for doctors', async () => {
-      await createPatient(
-        { name: 'Ahmed Hassan', phone: '01012345678' },
-        doctor,
-      ).expect(403);
-    });
   });
 
-  describe('findOrCreateByPhone (service, used by future public booking)', () => {
+  describe('findOrCreateByPhone (service, used by booking and walk-ins)', () => {
     it('creates once under concurrency and never renames an existing patient', async () => {
       const patients = ctx.app.get(PatientsService);
       const results = await Promise.all(

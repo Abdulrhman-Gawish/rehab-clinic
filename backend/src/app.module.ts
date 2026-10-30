@@ -9,6 +9,7 @@ import {
   type EnvironmentVariables,
 } from './config/env.validation.js';
 import { buildLoggerParams } from './config/logger.config.js';
+import { DEFAULT_THROTTLE } from './common/decorators/throttle.decorators.js';
 import { TimeModule } from './common/time/time.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { AppointmentsModule } from './modules/appointments/appointments.module.js';
@@ -42,13 +43,7 @@ import { VisitsModule } from './modules/visits/visits.module.js';
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService<EnvironmentVariables, true>) => ({
-        throttlers: [
-          {
-            name: 'default',
-            ttl: config.get('THROTTLE_TTL_MS', { infer: true }),
-            limit: config.get('THROTTLE_LIMIT', { infer: true }),
-          },
-        ],
+        throttlers: [{ name: 'default', ...DEFAULT_THROTTLE }],
         skipIf: () => !config.get('THROTTLE_ENABLED', { infer: true }),
       }),
     }),

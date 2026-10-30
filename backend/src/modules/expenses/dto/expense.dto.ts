@@ -10,7 +10,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { IsLocalDate } from '../../../common/decorators/date-time.decorators.js';
-import { IsMoney } from '../../../common/decorators/money.decorator.js';
+import { IsPositiveMoney } from '../../../common/decorators/money.decorator.js';
 import {
   OptionalNotNull,
   ToBoolean,
@@ -43,7 +43,7 @@ export class CreateExpenseDto {
   description: string;
 
   @ApiProperty({ example: '85.50', description: 'Decimal string, > 0' })
-  @IsMoney()
+  @IsPositiveMoney()
   amount: string;
 
   @ApiProperty({
@@ -88,7 +88,7 @@ export class UpdateExpenseDto {
 
   @ApiPropertyOptional({ example: '90.00' })
   @OptionalNotNull()
-  @IsMoney()
+  @IsPositiveMoney()
   amount?: string;
 
   @ApiPropertyOptional({ example: '2026-11-03' })

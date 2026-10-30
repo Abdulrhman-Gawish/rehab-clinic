@@ -19,7 +19,7 @@ import {
   TrimAndCollapse,
 } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
-import { PersonNameField } from '../../users/dto/user-fields.js';
+import { PersonNameField } from '../../users/dto/user.dto.js';
 import { AppointmentSource, AppointmentStatus } from '../appointment.enums.js';
 
 const START_DOC = {
@@ -114,14 +114,6 @@ export class PublicBookingDto {
   @IsOptional()
   @IsEmpty({ message: 'Invalid request' })
   website?: string;
-
-  @ApiPropertyOptional({
-    description: 'Reserved for a future CAPTCHA integration',
-  })
-  @IsOptional()
-  @IsString()
-  @MaxLength(4096)
-  captchaToken?: string;
 }
 
 export class CancelAppointmentDto {

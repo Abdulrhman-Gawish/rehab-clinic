@@ -1,7 +1,8 @@
 /**
- * Domain events for other modules (billing in Stage 6). They are emitted
- * through @nestjs/event-emitter ONLY after the transaction has committed,
- * so a listener always sees the persisted state. No listeners yet.
+ * Domain events for other modules. They are emitted through
+ * @nestjs/event-emitter ONLY after the transaction has committed, so a
+ * listener always sees the persisted state. Billing listens to CHECKED_IN
+ * (automatic invoice) and CANCELLED (cancel an unpaid invoice).
  */
 export enum VisitEvent {
   CHECKED_IN = 'visit.checked_in',

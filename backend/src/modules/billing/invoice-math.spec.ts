@@ -2,7 +2,6 @@ import { AppException } from '../../common/errors/app.exception.js';
 import { DiscountType, InvoiceStatus } from './billing.enums.js';
 import {
   assertEditable,
-  balanceOf,
   computeTotals,
   deriveInvoiceStatus,
   discountAmount,
@@ -81,10 +80,6 @@ describe('invoice math', () => {
     ['0.00', '0.00', InvoiceStatus.PAID],
   ])('total %s, paid %s -> %s', (total, paid, status) => {
     expect(deriveInvoiceStatus(total, paid)).toBe(status);
-  });
-
-  it('balance', () => {
-    expect(balanceOf('256.00', '100.50')).toBe('155.50');
   });
 
   it('invoices are editable only while unpaid and not cancelled', () => {

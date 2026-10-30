@@ -24,7 +24,7 @@ import { Public } from '../../common/decorators/public.decorator.js';
 import { ThrottleLogin } from '../../common/decorators/throttle.decorators.js';
 import { ErrorResponseDto } from '../../common/dto/error-response.dto.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
-import { UserResponseDto } from '../users/dto/user-response.dto.js';
+import { UserResponseDto } from '../users/dto/user.dto.js';
 import { AuthService } from './auth.service.js';
 import {
   AuthTokensDto,

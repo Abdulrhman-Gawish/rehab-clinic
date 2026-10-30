@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -60,6 +61,23 @@ export interface FindOrCreatePatientResult {
   nameMismatch: boolean;
 }
 
+// How reception identifies a patient: by id, or by name + phone.
+export interface DeskPatientInput {
+  patientId?: string;
+  name?: string;
+  phone?: string;
+}
+
+// Exactly one of: patientId, or name + phone. Call before any other work.
+export function assertDeskPatientInput(input: DeskPatientInput): void {
+  const byPhone = input.name !== undefined || input.phone !== undefined;
+  if (input.patientId ? byPhone : !(input.name && input.phone)) {
+    throw new BadRequestException(
+      'Provide either patientId, or both name and phone',
+    );
+  }
+}
+
 @Injectable()
 export class PatientsService {
   constructor(
@@ -75,7 +93,7 @@ export class PatientsService {
    * Race-safe: INSERT ... ON CONFLICT (phone) DO NOTHING waits for any
    * concurrent insert of the same phone, then the SELECT sees the winner.
    * Relies on READ COMMITTED (the default) when given a caller's manager.
-   * Intended for public booking (Stage 4+).
+   * Used by public booking, reception booking and walk-ins.
    */
   async findOrCreateByPhone(
     input: FindOrCreatePatientInput,
@@ -83,6 +101,36 @@ export class PatientsService {
   ): Promise<FindOrCreatePatientResult> {
     const run = (m: EntityManager) => this.findOrCreateWith(input, m);
     return manager ? run(manager) : this.dataSource.transaction(run);
+  }
+
+  /**
+   * Reception booking and walk-ins: the patient by id (404), or find-or-create
+   * by phone (source RECEPTION, never renamed). Input already checked with
+   * assertDeskPatientInput().
+   */
+  async resolveForDesk(
+    input: DeskPatientInput,
+    actor: Actor,
+    manager: EntityManager,
+  ): Promise<Patient> {
+    if (input.patientId) {
+      const patient = await manager.findOneBy(Patient, {
+        id: input.patientId,
+      });
+      if (!patient) throw new NotFoundException('Patient not found');
+      return patient;
+    }
+    const { patient } = await this.findOrCreateWith(
+      {
+        name: input.name as string,
+        phone: input.phone as string,
+        source: PatientSource.RECEPTION,
+        createdBy: actor.userId,
+        ip: actor.ip,
+      },
+      manager,
+    );
+    return patient;
   }
 
   async create(
@@ -189,11 +237,10 @@ export class PatientsService {
     try {
       const patient = await this.dataSource.transaction(async (manager) => {
         const repository = manager.getRepository(Patient);
-        const patient = await repository
-          .createQueryBuilder('patient')
-          .where('patient.id = :id', { id })
-          .setLock('pessimistic_write')
-          .getOne();
+        const patient = await repository.findOne({
+          where: { id },
+          lock: { mode: 'pessimistic_write' },
+        });
         if (!patient) throw new NotFoundException('Patient not found');
 
         const before = { ...patient };
@@ -243,13 +290,12 @@ export class PatientsService {
 
     if (inserted.length > 0) {
       const patient = await repository.findOneByOrFail({ id: inserted[0].id });
-      await this.auditService.log(
+      await this.auditService.logAction(
+        { userId: input.createdBy ?? null, ip: input.ip ?? null },
+        AuditAction.PATIENT_CREATED,
+        AuditEntityType.PATIENT,
+        patient.id,
         {
-          userId: input.createdBy ?? null,
-          ip: input.ip ?? null,
-          action: AuditAction.PATIENT_CREATED,
-          entityType: AuditEntityType.PATIENT,
-          entityId: patient.id,
           newValues: {
             ...pickValues(patient, PATIENT_AUDIT_FIELDS),
             createdSource: patient.createdSource,

@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  Inject,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import {
@@ -27,7 +22,7 @@ import type {
   AuthenticatedUser,
 } from '../../common/interfaces/authenticated-request.interface.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
-import { parseIsoWithOffset } from '../../common/time/clinic-time.util.js';
+import { isoToDate } from '../../common/time/clinic-time.util.js';
 import { isUniqueViolation } from '../../common/utils/pg-errors.js';
 import { AppointmentTrigger } from '../appointments/appointment-state-machine.js';
 import { AppointmentWriter } from '../appointments/appointment-writer.service.js';
@@ -37,8 +32,10 @@ import { Appointment } from '../appointments/entities/appointment.entity.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
 import { DoctorAccessService } from '../doctors/doctor-access.service.js';
-import { Patient, PatientSource } from '../patients/entities/patient.entity.js';
-import { PatientsService } from '../patients/patients.service.js';
+import {
+  assertDeskPatientInput,
+  PatientsService,
+} from '../patients/patients.service.js';
 import type {
   ListVisitsQueryDto,
   QueueEntryDto,
@@ -67,8 +64,6 @@ import {
   toVisitHistoryEntry,
   toVisitResponse,
 } from './visit.mapper.js';
-
-const toDate = (value: string) => parseIsoWithOffset(value) as Date;
 
 // Unique-index violations -> stable 409 codes. Mapped outside the failed
 // (aborted) transaction.
@@ -127,12 +122,10 @@ export class VisitsService {
    */
   checkIn(appointmentId: string, actor: Actor): Promise<VisitResponseDto> {
     return this.execute(async (manager) => {
-      const appointment = await manager
-        .getRepository(Appointment)
-        .createQueryBuilder('appointment')
-        .where('appointment.id = :appointmentId', { appointmentId })
-        .setLock('pessimistic_write')
-        .getOne();
+      const appointment = await manager.findOne(Appointment, {
+        where: { id: appointmentId },
+        lock: { mode: 'pessimistic_write' },
+      });
       if (!appointment) throw new NotFoundException('Appointment not found');
 
       const appointmentDate = this.time.localDate(appointment.startAt);
@@ -182,12 +175,7 @@ export class VisitsService {
 
   // Walk-in: no appointment, never blocks booking slots.
   walkIn(dto: WalkInDto, actor: Actor): Promise<VisitResponseDto> {
-    const byPhone = dto.name !== undefined || dto.phone !== undefined;
-    if (dto.patientId ? byPhone : !(dto.name && dto.phone)) {
-      throw new BadRequestException(
-        'Provide either patientId, or both name and phone',
-      );
-    }
+    assertDeskPatientInput(dto);
 
     return this.execute(async (manager) => {
       // Doctor active + offers the active service (404 / 422).
@@ -198,30 +186,10 @@ export class VisitsService {
         manager,
       );
 
-      let patientId: string;
-      if (dto.patientId) {
-        const found = await manager
-          .getRepository(Patient)
-          .existsBy({ id: dto.patientId });
-        if (!found) throw new NotFoundException('Patient not found');
-        patientId = dto.patientId;
-      } else {
-        const { patient } = await this.patients.findOrCreateByPhone(
-          {
-            name: dto.name as string,
-            phone: dto.phone as string,
-            source: PatientSource.RECEPTION,
-            createdBy: actor.userId,
-            ip: actor.ip,
-          },
-          manager,
-        );
-        patientId = patient.id;
-      }
-
+      const patient = await this.patients.resolveForDesk(dto, actor, manager);
       const visit = await this.insertVisit(manager, actor, {
         appointmentId: null,
-        patientId,
+        patientId: patient.id,
         doctorId: context.doctor.id,
         serviceId: context.service.id,
       });
@@ -371,9 +339,11 @@ export class VisitsService {
   ): Promise<Paginated<VisitResponseDto>> {
     const qb = await this.scopedQuery(user);
     if (query.from)
-      qb.andWhere('visit.checkedInAt >= :from', { from: toDate(query.from) });
+      qb.andWhere('visit.checkedInAt >= :from', {
+        from: isoToDate(query.from),
+      });
     if (query.to)
-      qb.andWhere('visit.checkedInAt < :to', { to: toDate(query.to) });
+      qb.andWhere('visit.checkedInAt < :to', { to: isoToDate(query.to) });
     if (query.doctorId)
       qb.andWhere('visit.doctorId = :doctorId', { doctorId: query.doctorId });
     if (query.patientId) {
@@ -601,12 +571,10 @@ export class VisitsService {
   }
 
   private async lockVisit(id: string, manager: EntityManager): Promise<Visit> {
-    const visit = await manager
-      .getRepository(Visit)
-      .createQueryBuilder('visit')
-      .where('visit.id = :id', { id })
-      .setLock('pessimistic_write')
-      .getOne();
+    const visit = await manager.findOne(Visit, {
+      where: { id },
+      lock: { mode: 'pessimistic_write' },
+    });
     if (!visit) throw new NotFoundException('Visit not found');
     return visit;
   }
@@ -629,12 +597,10 @@ export class VisitsService {
     id: string,
     manager: EntityManager,
   ): Promise<Appointment> {
-    return manager
-      .getRepository(Appointment)
-      .createQueryBuilder('appointment')
-      .where('appointment.id = :id', { id })
-      .setLock('pessimistic_write')
-      .getOneOrFail();
+    return manager.findOneOrFail(Appointment, {
+      where: { id },
+      lock: { mode: 'pessimistic_write' },
+    });
   }
 
   private baseQuery(): SelectQueryBuilder<Visit> {
@@ -651,7 +617,7 @@ export class VisitsService {
   private async scopedQuery(
     user: AuthenticatedUser,
   ): Promise<SelectQueryBuilder<Visit>> {
-    const qb = this.baseQuery().where('TRUE');
+    const qb = this.baseQuery();
     const ownDoctorId = await this.access.scopeFor(user);
     if (ownDoctorId) {
       qb.andWhere('visit.doctorId = :ownDoctorId', { ownDoctorId });

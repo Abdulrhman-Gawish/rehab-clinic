@@ -345,20 +345,16 @@ export class DoctorsService {
     id: string,
     manager: EntityManager,
   ): Promise<{ doctor: Doctor; user: User }> {
-    const doctor = await manager
-      .getRepository(Doctor)
-      .createQueryBuilder('doctor')
-      .where('doctor.id = :id', { id })
-      .setLock('pessimistic_write')
-      .getOne();
+    const doctor = await manager.findOne(Doctor, {
+      where: { id },
+      lock: { mode: 'pessimistic_write' },
+    });
     if (!doctor) throw new NotFoundException('Doctor not found');
 
-    const user = await manager
-      .getRepository(User)
-      .createQueryBuilder('user')
-      .where('user.id = :id', { id: doctor.userId })
-      .setLock('pessimistic_write')
-      .getOneOrFail();
+    const user = await manager.findOneOrFail(User, {
+      where: { id: doctor.userId },
+      lock: { mode: 'pessimistic_write' },
+    });
     return { doctor, user };
   }
 }

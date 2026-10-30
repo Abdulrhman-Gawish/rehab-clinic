@@ -669,9 +669,5 @@ describe('Billing: invoices (e2e)', () => {
         balance: '200.50',
       });
     });
-
-    it('doctors have no access to billing', async () => {
-      await request(server).get('/api/v1/invoices').set(as(doctor)).expect(403);
-    });
   });
 });

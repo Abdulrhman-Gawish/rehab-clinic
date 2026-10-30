@@ -4,7 +4,6 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
@@ -16,16 +15,16 @@ import {
   hashPassword,
   verifyPassword,
 } from '../../common/utils/password.util.js';
-import type { EnvironmentVariables } from '../../config/env.validation.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
-import { UserResponseDto } from '../users/dto/user-response.dto.js';
+import { UserResponseDto } from '../users/dto/user.dto.js';
 import { User } from '../users/entities/user.entity.js';
 import type {
   AuthTokensDto,
   LoginDto,
   LoginResponseDto,
 } from './dto/auth.dto.js';
+import { ACCESS_TOKEN_TTL_SECONDS } from './auth.constants.js';
 import { RefreshTokensService } from './refresh-tokens.service.js';
 
 const INVALID_CREDENTIALS = 'Invalid email or password';
@@ -38,7 +37,6 @@ type RefreshOutcome =
 
 @Injectable()
 export class AuthService {
-  private readonly accessTtlSeconds: number;
   // Hash verified when the email is unknown, so response time doesn't reveal
   // which emails exist.
   private dummyHash?: Promise<string>;
@@ -49,12 +47,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly refreshTokens: RefreshTokensService,
     private readonly auditService: AuditService,
-    config: ConfigService<EnvironmentVariables, true>,
-  ) {
-    this.accessTtlSeconds = config.get('JWT_ACCESS_TTL_SECONDS', {
-      infer: true,
-    });
-  }
+  ) {}
 
   async login(dto: LoginDto, ip: string | null): Promise<LoginResponseDto> {
     const email = dto.email.trim().toLowerCase();
@@ -196,7 +189,7 @@ export class AuthService {
     return {
       tokenType: 'Bearer',
       accessToken,
-      accessTokenExpiresIn: this.accessTtlSeconds,
+      accessTokenExpiresIn: ACCESS_TOKEN_TTL_SECONDS,
       refreshToken: refresh.token,
       refreshTokenExpiresAt: refresh.entity.expiresAt,
     };

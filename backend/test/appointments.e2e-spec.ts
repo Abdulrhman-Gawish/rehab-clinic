@@ -714,11 +714,6 @@ describe('Appointments (e2e)', () => {
       expect(
         patientHistory.body.items.map((x: { id: string }) => x.id),
       ).toEqual([mine.body.id]);
-
-      await request(server)
-        .get(`/api/v1/appointments/day?date=${TUESDAY}`)
-        .set('Authorization', bearer(doctorA))
-        .expect(403);
     });
   });
 

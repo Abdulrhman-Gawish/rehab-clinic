@@ -1,17 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsEnum,
-  IsOptional,
-  IsString,
-  IsUUID,
-  Length,
-  ValidateIf,
-} from 'class-validator';
+import { IsEnum, IsOptional, IsString, IsUUID, Length } from 'class-validator';
 import {
   IsIsoWithOffset,
   IsLocalDate,
 } from '../../../common/decorators/date-time.decorators.js';
-import { IsMoney } from '../../../common/decorators/money.decorator.js';
+import { IsPositiveMoney } from '../../../common/decorators/money.decorator.js';
 import { Trim } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
 import {
@@ -31,7 +24,7 @@ const MONEY = (example: string, description?: string) => ({
 
 export class RecordPaymentDto {
   @ApiProperty(MONEY('100.00', 'Must be > 0 and <= the remaining balance'))
-  @IsMoney()
+  @IsPositiveMoney()
   amount: string;
 
   @ApiProperty({ enum: PaymentMethod })
@@ -39,13 +32,11 @@ export class RecordPaymentDto {
   method: PaymentMethod;
 
   @ApiPropertyOptional({
-    example: 'TXN-88231',
-    description: 'Required for CARD, WALLET and INSTAPAY',
+    example: 'Card slip 88231',
+    description:
+      'Optional free text for any method (never validated against anything)',
   })
-  @ValidateIf(
-    (dto: RecordPaymentDto) =>
-      dto.method !== PaymentMethod.CASH || dto.reference !== undefined,
-  )
+  @IsOptional()
   @Trim()
   @IsString()
   @Length(1, 100)
@@ -54,7 +45,7 @@ export class RecordPaymentDto {
 
 export class RefundPaymentDto {
   @ApiProperty(MONEY('50.00', 'At most what is left unrefunded of the payment'))
-  @IsMoney()
+  @IsPositiveMoney()
   amount: string;
 
   @ApiProperty({

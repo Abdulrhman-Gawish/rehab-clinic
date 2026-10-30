@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { INestApplication } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import request from 'supertest';
 import type { DataSource } from 'typeorm';
 import { UserRole } from '../../src/common/enums/user-role.enum.js';
@@ -13,7 +14,6 @@ export interface TestUser {
   email: string;
   role: UserRole;
   accessToken: string;
-  refreshToken: string;
 }
 
 let cachedHash: Promise<string> | undefined;
@@ -52,14 +52,28 @@ export async function login(
   return res.body as { accessToken: string; refreshToken: string };
 }
 
+// An access token for an existing user, signed like AuthService does. Skips
+// the HTTP login (argon2 + refresh token): real login is covered by
+// auth.e2e-spec.ts. Use login() when a test needs a refresh token.
+export function accessTokenFor(
+  app: INestApplication,
+  user: Pick<User, 'id' | 'role'>,
+): string {
+  return app.get(JwtService).sign({ sub: user.id, role: user.role });
+}
+
 export async function createLoggedInUser(
   app: INestApplication,
   dataSource: DataSource,
   role: UserRole,
 ): Promise<TestUser> {
   const user = await insertUser(dataSource, role);
-  const tokens = await login(app, user.email);
-  return { id: user.id, email: user.email, role, ...tokens };
+  return {
+    id: user.id,
+    email: user.email,
+    role,
+    accessToken: accessTokenFor(app, user),
+  };
 }
 
 export const bearer = (user: Pick<TestUser, 'accessToken'>) =>

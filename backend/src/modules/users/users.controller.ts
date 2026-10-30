@@ -29,11 +29,13 @@ import {
 } from '../../common/dto/pagination.dto.js';
 import { UserRole } from '../../common/enums/user-role.enum.js';
 import type { Actor } from '../../common/interfaces/authenticated-request.interface.js';
-import { CreateUserDto } from './dto/create-user.dto.js';
-import { ListUsersQueryDto } from './dto/list-users-query.dto.js';
-import { ResetPasswordDto } from './dto/reset-password.dto.js';
-import { UpdateUserDto } from './dto/update-user.dto.js';
-import { UserResponseDto } from './dto/user-response.dto.js';
+import {
+  CreateUserDto,
+  ListUsersQueryDto,
+  ResetPasswordDto,
+  UpdateUserDto,
+  UserResponseDto,
+} from './dto/user.dto.js';
 import { UsersService } from './users.service.js';
 
 @ApiTags('Users')

@@ -25,14 +25,16 @@ import type {
 } from '../../common/interfaces/authenticated-request.interface.js';
 import { UserRole } from '../../common/enums/user-role.enum.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
-import { parseIsoWithOffset } from '../../common/time/clinic-time.util.js';
+import { addDays, isoToDate } from '../../common/time/clinic-time.util.js';
 import { normalizePersonName } from '../../common/utils/person-name.util.js';
 import type { EnvironmentVariables } from '../../config/env.validation.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
 import { DoctorAccessService } from '../doctors/doctor-access.service.js';
-import { Patient, PatientSource } from '../patients/entities/patient.entity.js';
-import { PatientsService } from '../patients/patients.service.js';
+import {
+  assertDeskPatientInput,
+  PatientsService,
+} from '../patients/patients.service.js';
 import { assertTransition } from './appointment-state-machine.js';
 import { AppointmentWriter } from './appointment-writer.service.js';
 import { InvoiceStatus } from '../billing/billing.enums.js';
@@ -59,9 +61,6 @@ import type {
 import { AppointmentStatusHistory } from './entities/appointment-status-history.entity.js';
 import { Appointment } from './entities/appointment.entity.js';
 import { normalizeReferenceCode } from './reference-code.util.js';
-
-// DTO validation already guarantees the format.
-const toDate = (value: string) => parseIsoWithOffset(value) as Date;
 
 @Injectable()
 export class AppointmentsService {
@@ -96,13 +95,8 @@ export class AppointmentsService {
     dto: CreateAppointmentDto,
     actor: Actor,
   ): Promise<AppointmentResponseDto> {
-    const byPhone = dto.name !== undefined || dto.phone !== undefined;
-    if (dto.patientId ? byPhone : !(dto.name && dto.phone)) {
-      throw new BadRequestException(
-        'Provide either patientId, or both name and phone',
-      );
-    }
-    const startAt = toDate(dto.startAt);
+    assertDeskPatientInput(dto);
+    const startAt = isoToDate(dto.startAt);
     const outside = dto.allowOutsideSchedule ?? false;
     if (outside) this.assertBackdateAllowed(startAt, actor);
 
@@ -118,30 +112,10 @@ export class AppointmentsService {
           await this.availability.assertBookable(context, startAt, manager);
         }
 
-        let patient: Patient;
-        let bookedName: string;
-        if (dto.patientId) {
-          const found = await manager
-            .getRepository(Patient)
-            .findOneBy({ id: dto.patientId });
-          if (!found) throw new NotFoundException('Patient not found');
-          patient = found;
-          bookedName = found.name;
-        } else {
-          patient = (
-            await this.patients.findOrCreateByPhone(
-              {
-                name: dto.name as string,
-                phone: dto.phone as string,
-                source: PatientSource.RECEPTION,
-                createdBy: actor.userId,
-                ip: actor.ip,
-              },
-              manager,
-            )
-          ).patient;
-          bookedName = normalizePersonName(dto.name as string);
-        }
+        const patient = await this.patients.resolveForDesk(dto, actor, manager);
+        const bookedName = dto.patientId
+          ? patient.name
+          : normalizePersonName(dto.name as string);
 
         const appointment = await this.writer.insert(
           manager,
@@ -208,7 +182,7 @@ export class AppointmentsService {
     dto: RescheduleAppointmentDto,
     actor: Actor,
   ): Promise<AppointmentResponseDto> {
-    const startAt = toDate(dto.startAt);
+    const startAt = isoToDate(dto.startAt);
     const outside = dto.allowOutsideSchedule ?? false;
     if (outside) this.assertBackdateAllowed(startAt, actor);
 
@@ -266,9 +240,11 @@ export class AppointmentsService {
   ): Promise<Paginated<AppointmentResponseDto>> {
     const qb = await this.scopedQuery(user);
     if (query.from)
-      qb.andWhere('appointment.startAt >= :from', { from: toDate(query.from) });
+      qb.andWhere('appointment.startAt >= :from', {
+        from: isoToDate(query.from),
+      });
     if (query.to)
-      qb.andWhere('appointment.startAt < :to', { to: toDate(query.to) });
+      qb.andWhere('appointment.startAt < :to', { to: isoToDate(query.to) });
     if (query.doctorId)
       qb.andWhere('appointment.doctorId = :doctorId', {
         doctorId: query.doctorId,
@@ -445,10 +421,7 @@ export class AppointmentsService {
    */
   private assertBackdateAllowed(startAt: Date, actor: Actor): void {
     if (actor.role === UserRole.OWNER) return;
-    const earliestDate = this.time.addDays(
-      this.time.today(),
-      -this.backdateMaxDays,
-    );
+    const earliestDate = addDays(this.time.today(), -this.backdateMaxDays);
     if (this.time.localDate(startAt) < earliestDate) {
       throw unprocessable(
         ErrorCode.BACKDATE_LIMIT_EXCEEDED,
@@ -500,12 +473,10 @@ export class AppointmentsService {
     id: string,
     manager: EntityManager,
   ): Promise<Appointment> {
-    const appointment = await manager
-      .getRepository(Appointment)
-      .createQueryBuilder('appointment')
-      .where('appointment.id = :id', { id })
-      .setLock('pessimistic_write')
-      .getOne();
+    const appointment = await manager.findOne(Appointment, {
+      where: { id },
+      lock: { mode: 'pessimistic_write' },
+    });
     if (!appointment) throw new NotFoundException('Appointment not found');
     return appointment;
   }
@@ -523,7 +494,7 @@ export class AppointmentsService {
   private async scopedQuery(
     user: AuthenticatedUser,
   ): Promise<SelectQueryBuilder<Appointment>> {
-    const qb = this.baseQuery().where('TRUE');
+    const qb = this.baseQuery();
     const ownDoctorId = await this.access.scopeFor(user);
     if (ownDoctorId) {
       qb.andWhere('appointment.doctorId = :ownDoctorId', { ownDoctorId });

@@ -7,7 +7,7 @@ import {
   Length,
   ValidateIf,
 } from 'class-validator';
-import { IsMoney } from '../../../common/decorators/money.decorator.js';
+import { IsPositiveMoney } from '../../../common/decorators/money.decorator.js';
 import { Trim } from '../../../common/decorators/transform.decorators.js';
 import { DiscountType } from '../billing.enums.js';
 
@@ -34,7 +34,7 @@ export class ApplyDiscountDto {
   @ValidateIf(
     (dto: ApplyDiscountDto) => !isRepeat(dto) || dto.value !== undefined,
   )
-  @IsMoney()
+  @IsPositiveMoney()
   value?: string;
 
   @ApiPropertyOptional({

@@ -10,7 +10,6 @@ import {
 } from './appointments.controller.js';
 import { AppointmentsService } from './appointments.service.js';
 import { AvailabilityService } from './availability/availability.service.js';
-import { BOOKING_VERIFIER, NoopBookingVerifier } from './booking-verifier.js';
 import { AppointmentStatusHistory } from './entities/appointment-status-history.entity.js';
 import { Appointment } from './entities/appointment.entity.js';
 import {
@@ -36,8 +35,6 @@ import { PublicBookingService } from './public-booking.service.js';
     AppointmentWriter,
     AppointmentsService,
     PublicBookingService,
-    // Swap for a CAPTCHA-backed implementation later.
-    { provide: BOOKING_VERIFIER, useClass: NoopBookingVerifier },
   ],
   exports: [AvailabilityService, AppointmentsService, AppointmentWriter],
 })

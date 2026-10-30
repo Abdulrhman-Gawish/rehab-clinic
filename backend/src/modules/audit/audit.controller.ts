@@ -7,8 +7,7 @@ import {
 } from '../../common/dto/pagination.dto.js';
 import { UserRole } from '../../common/enums/user-role.enum.js';
 import { AuditService } from './audit.service.js';
-import { AuditLogResponseDto } from './dto/audit-log-response.dto.js';
-import { ListAuditLogsQueryDto } from './dto/list-audit-logs-query.dto.js';
+import { AuditLogResponseDto, ListAuditLogsQueryDto } from './dto/audit.dto.js';
 
 @ApiTags('Audit logs')
 @Controller('audit-logs')
