@@ -292,6 +292,35 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
     path: `/expense-categories/${id}/deactivate`,
     allowed: [OWNER],
   },
+  // clinical: never RECEPTIONIST; OWNER reads (and uploads attachments);
+  // DOCTOR reads own patients (else 404) and writes notes on own visits
+  {
+    method: 'get',
+    path: `/patients/${id}/medical-info`,
+    allowed: [OWNER, DOCTOR],
+  },
+  { method: 'put', path: `/patients/${id}/medical-info`, allowed: [DOCTOR] },
+  {
+    method: 'get',
+    path: `/patients/${id}/clinical-history`,
+    allowed: [OWNER, DOCTOR],
+  },
+  {
+    method: 'post',
+    path: `/patients/${id}/attachments`,
+    allowed: [OWNER, DOCTOR],
+  },
+  {
+    method: 'get',
+    path: `/patients/${id}/attachments`,
+    allowed: [OWNER, DOCTOR],
+  },
+  { method: 'get', path: `/attachments/${id}/file`, allowed: [OWNER, DOCTOR] },
+  { method: 'get', path: `/visits/${id}/note`, allowed: [OWNER, DOCTOR] },
+  { method: 'post', path: `/visits/${id}/note`, allowed: [DOCTOR] },
+  { method: 'patch', path: `/visits/${id}/note`, allowed: [DOCTOR] },
+  { method: 'post', path: `/visits/${id}/note/sign`, allowed: [DOCTOR] },
+  { method: 'post', path: `/clinical-notes/${id}/addenda`, allowed: [DOCTOR] },
   // public: anyone
   { method: 'get', path: '/public/doctors', allowed: EVERYONE },
   { method: 'get', path: `/public/doctors/${id}`, allowed: EVERYONE },

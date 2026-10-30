@@ -45,12 +45,12 @@ import {
   ListExpensesQueryDto,
   UpdateExpenseDto,
 } from './dto/expense.dto.js';
-import { ExpenseCategoriesService } from './expense-categories.service.js';
 import {
-  ExpensesService,
-  MAX_RECEIPT_BYTES,
-  type UploadedReceipt,
-} from './expenses.service.js';
+  MAX_UPLOAD_BYTES,
+  type UploadedFileData,
+} from '../../common/storage/file-type.util.js';
+import { ExpenseCategoriesService } from './expense-categories.service.js';
+import { ExpensesService } from './expenses.service.js';
 
 const DESK = [UserRole.OWNER, UserRole.RECEPTIONIST];
 const EDIT_RULE =
@@ -139,7 +139,7 @@ export class ExpensesController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
-      limits: { fileSize: MAX_RECEIPT_BYTES, files: 1 },
+      limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
     }),
   )
   @ApiOperation({
@@ -163,7 +163,7 @@ export class ExpensesController {
   })
   uploadReceipt(
     @Param('id', ParseUUIDPipe) id: string,
-    @UploadedFile() file: UploadedReceipt | undefined,
+    @UploadedFile() file: UploadedFileData | undefined,
     @CurrentActor() actor: Actor,
   ): Promise<ExpenseResponseDto> {
     return this.expenses.uploadReceipt(id, file, actor);

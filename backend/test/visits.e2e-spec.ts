@@ -87,8 +87,14 @@ describe('Visits (e2e)', () => {
   let p3: Patient;
 
   beforeAll(async () => {
+    // These tests are about the visit lifecycle; "a signed note is required
+    // to complete" is tested in clinical.e2e-spec.ts.
     ctx = await createTestApp((builder) =>
-      builder.overrideProvider(CLOCK).useValue({ now: () => clock.current }),
+      builder
+        .overrideProvider(CLOCK)
+        .useValue({ now: () => clock.current })
+        .overrideProvider(VISIT_COMPLETION_POLICY)
+        .useValue({ check: () => Promise.resolve({ allowed: true }) }),
     );
     server = ctx.app.getHttpServer();
   });

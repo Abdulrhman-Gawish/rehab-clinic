@@ -41,7 +41,8 @@ a few staff users and at most a few hundred patients a day. `backend/README.md` 
 - **Errors:** business errors clients branch on use `conflict(...)`/`unprocessable(...)` with an `ErrorCode`, which gives a
   stable `code` in the error body. Validation errors are `400 { message: 'Validation failed', details: [{ field, errors }] }`.
 - **Access:** `@Auth(...roles)` on every non-public route, and `@Public()` opts out. A DOCTOR sees only their own data via
-  `DoctorAccessService`, and another doctor's data answers **404, not 403**.
+  `DoctorAccessService`, and another doctor's data answers **404, not 403**. Clinical data goes through
+  `ClinicalAccessService` (a doctor must have an appointment or visit with the patient; RECEPTIONIST never).
 - **Responses:** every input and output is a DTO. Map entities with `static fromEntity()` on the response DTO, or with a
   `<module>.mapper.ts` when the mapping needs `toIso` or several entities. Don't add a third style.
 - **Events:** cross-module side effects use domain events emitted **only after commit**. Listeners run their own

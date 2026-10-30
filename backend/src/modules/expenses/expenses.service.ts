@@ -1,9 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
@@ -16,9 +12,9 @@ import {
   type StoredFile,
 } from '../../common/storage/file-storage.service.js';
 import {
-  detectFileType,
-  extensionMatches,
+  checkUpload,
   mimeTypeOf,
+  type UploadedFileData,
 } from '../../common/storage/file-type.util.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
 import { addDays } from '../../common/time/clinic-time.util.js';
@@ -48,14 +44,6 @@ const EXPENSE_AUDIT_FIELDS = [
   'paymentMethod',
   'reference',
 ] as const satisfies readonly (keyof Expense)[];
-
-export const MAX_RECEIPT_BYTES = 5 * 1024 * 1024;
-
-export interface UploadedReceipt {
-  originalname: string;
-  size: number;
-  buffer: Buffer;
-}
 
 export interface ReceiptFile extends StoredFile {
   mimeType: string;
@@ -197,19 +185,11 @@ export class ExpensesService {
    */
   async uploadReceipt(
     id: string,
-    file: UploadedReceipt | undefined,
+    upload: UploadedFileData | undefined,
     actor: Actor,
   ): Promise<ExpenseResponseDto> {
-    if (!file)
-      throw new BadRequestException('A file is required (field "file")');
-    // Size: the upload interceptor already answered 413 above MAX_RECEIPT_BYTES.
-    const detected = detectFileType(file.buffer);
-    if (!detected || !extensionMatches(file.originalname, detected)) {
-      throw unprocessable(
-        ErrorCode.UNSUPPORTED_FILE_TYPE,
-        'Only JPG, PNG, WEBP or PDF files are accepted',
-      );
-    }
+    // Size: the upload interceptor already answered 413 above MAX_UPLOAD_BYTES.
+    const { file, type: detected } = checkUpload(upload);
 
     await this.dataSource.transaction(async (manager) => {
       const expense = await this.lockModifiable(id, actor, manager);
