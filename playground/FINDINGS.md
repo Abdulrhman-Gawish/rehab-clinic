@@ -205,6 +205,56 @@ start/complete buttons and the queue's waiting states from this UI.
 - Same pattern as #4, #8 and #12. A client branches on these 404s as normal flow, so each one deserves either a
   `code` or a `200 null`.
 
+## Sessions and packages (`feature/packages`)
+
+### 22. Staff were logged out after about 15 minutes (high)
+- **Status: fixed** (backend + `api.ts`). See the backend README, "Sessions and staying logged in".
+- **Screen:** any page, after the access token expired.
+- **Hard:** Every request on the page got 401 at once, and each one called `/auth/refresh` with the same refresh
+  token. The second refresh looked like a stolen token, so reuse detection revoked the whole session. Two tabs did
+  the same. A 429 on refresh also cleared the session here.
+- **Now:** One refresh in flight per tab, resend when someone else already refreshed, and the API answers
+  `401 REFRESH_RACE` (session kept) for a token rotated less than 30 s ago. Only a real 401 on refresh logs out.
+- The 403s were a playground effect: all tabs share one `localStorage` session, so logging in as another role in a
+  second tab made this tab send that role's token. The header now updates when another tab logs in or out.
+
+### 23. Attend can't tell which packages are usable for this row (med)
+- **Screen:** Day list → attend (choose / skip a package).
+- **Hard:** To offer a choice, the UI loads `GET /patients/:id/packages` and filters it itself (ACTIVE, same
+  service, doctor allowed or `allDoctors`): a copy of the API's rule, which can drift.
+- **Now:** `Attend` in `DayList.tsx` filters client-side; "oldest usable" leaves the choice to the API.
+- **Instead:** `usablePackages: [{ id, name, sessionsLeft }]` on PENDING/CONFIRMED day-list rows (desk only), or
+  `GET /patients/:id/packages?usableFor=<appointmentId>`.
+
+### 24. Day list `package.used` is today's count, not this visit's session number (low)
+- **Screen:** Day list, Package column.
+- **Hard:** The invoice line says "session 3/10" but a row from last week shows the package's *current* `used`
+  (e.g. 7/10), so older rows don't match their invoice.
+- **Instead:** Add `sessionNumber` (stored on `package_usages` at use time) next to `used` / `total`.
+
+### 25. Package money is not under its service or doctor in the reports (med)
+- **Screen:** Owner → Reports → revenue by service / doctor.
+- **Hard:** Revenue is grouped by the invoice's visit. A package sale invoice has no visit, so its money lands in
+  the "no visit" bucket (like a manual invoice), and the covered visits show 0.00 for their service and doctor.
+- **Instead:** Decide how the clinic wants it: package sales as their own row ("Packages") in the revenue report,
+  or spread per used session. Today it is just invisible per service.
+
+### 26. A package sale invoice looks like any manual invoice (low)
+- **Screen:** Invoice page, invoice lists.
+- **Hard:** Nothing on the invoice says it is a package sale (only the line text "Package: …"), so the UI can't
+  link back to the package or explain why items can't be edited (422 `PACKAGE_INVOICE` only on submit).
+- **Instead:** `patientPackageId` (nullable) on `GET /invoices/:id` and the summaries.
+
+### 27. Removing a doctor from a service leaves them on package doctor lists (low)
+- **Screen:** Owner → Services → doctors.
+- **Hard:** The package keeps listing a doctor who no longer offers its service. Harmless today (that doctor can't
+  be booked for it), but the Packages page shows them as offering it.
+- **Instead:** Either remove them from those package lists in the same transaction, or show a warning.
+
+### 28. Restoring a no-show session has no time limit, undo no-show is same day only (low, clinic decision)
+- Reception can give back a no-show session weeks later (with a reason, audited), while undo no-show only works the
+  same day. Probably right (the owner forgives late), but worth confirming with the clinic.
+
 ## Things that worked well
 - Error bodies (`status`, `code`, `message`, `details`) are easy to show as they are. `VISIT_COMPLETION_BLOCKED`,
   `NOTE_INCOMPLETE`, `OVERPAYMENT` and the others read clearly in the error bar.
@@ -214,3 +264,6 @@ start/complete buttons and the queue's waiting states from this UI.
 - `POST /visits/:id/invoice` being idempotent made the async-invoice workaround trivial.
 - The receipt endpoint returns exactly what a printed receipt needs.
 - CORS via `CORS_ORIGINS` worked first time.
+- Selling a package is one call that also creates the invoice; payments and discounts then work as for any invoice.
+- The covered visit's invoice line ("Sports massage — package 5 sports massages (session 1/5)", 0.00) reads well on
+  the invoice and the receipt without any UI work.

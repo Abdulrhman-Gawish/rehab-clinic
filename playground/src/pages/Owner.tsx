@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { act, del, get, patch, post, put, qs } from '../api';
-import type { Doctor } from '../components';
+import { doctorBody, DoctorPicker, type Doctor, type DoctorChoice } from '../components';
 import { DAYS, fmtDateTime, localInputToIso } from '../time';
 import { opt, useForm, useLoad } from '../util';
 
@@ -160,29 +160,57 @@ export function DoctorPage() {
 export function Services() {
   const [res, reload] = useLoad(() => get(`/clinic-services${qs({ limit: 100 })}`), []);
   const f = useForm({ name: '', description: '', durationMinutes: '30', basePrice: '' });
+  const [docs, setDocs] = useState<DoctorChoice>({ all: false, ids: [] });
+  // The service whose doctor list is being edited.
+  const [editing, setEditing] = useState<{ id: string; choice: DoctorChoice } | null>(null);
   const run = (fn: () => Promise<unknown>) => act(fn).then(reload);
   return (
     <>
       <h2>Services</h2>
-      <div className="row">
-        <input placeholder="name" {...f.bind('name')} /><input placeholder="description (optional)" {...f.bind('description')} />
-        <input placeholder="duration min" {...f.bind('durationMinutes')} /><input placeholder="price e.g. 300.00" {...f.bind('basePrice')} />
-        <button onClick={() => run(() => post('/clinic-services', { ...f.v, description: opt(f.v.description), durationMinutes: Number(f.v.durationMinutes) }))}>Create</button>
+      <div className="box">
+        <div className="row">
+          <input placeholder="name" {...f.bind('name')} /><input placeholder="description (optional)" {...f.bind('description')} />
+          <input placeholder="duration min" {...f.bind('durationMinutes')} /><input placeholder="price e.g. 300.00" {...f.bind('basePrice')} />
+        </div>
+        <DoctorPicker value={docs} onChange={setDocs} allLabel="all doctors active now" />
+        <button style={{ width: 'auto' }} onClick={() => run(() => post('/clinic-services', {
+          ...f.v, description: opt(f.v.description), durationMinutes: Number(f.v.durationMinutes),
+          ...(docs.all || docs.ids.length ? doctorBody(docs) : {}),
+        }))}>Create</button>
       </div>
       <table>
-        <thead><tr><th>Name</th><th>Duration</th><th>Base price</th><th>Active</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Duration</th><th>Base price</th><th>Doctors</th><th>Active</th><th></th></tr></thead>
         <tbody>
-          {res?.items.map((s: any) => (
+          {res?.items.map((s: any) => {
+            const choice = editing && editing.id === s.id ? editing.choice : null;
+            return (
             <tr key={s.id}>
-              <td>{s.name}</td><td>{s.durationMinutes}</td><td>{s.basePrice}</td><td>{String(s.isActive)}</td>
+              <td>{s.name}</td><td>{s.durationMinutes}</td><td>{s.basePrice}</td>
+              <td>
+                {choice ? (
+                  <>
+                    <DoctorPicker value={choice} onChange={(c) => setEditing({ id: s.id, choice: c })} allLabel="all doctors active now" />
+                    <button onClick={() => run(() => put(`/clinic-services/${s.id}/doctors`, doctorBody(choice))).then(() => setEditing(null))}>save</button>
+                    <button onClick={() => setEditing(null)}>close</button>
+                  </>
+                ) : (
+                  <>
+                    {s.doctors.map((d: any) => d.name).join(', ') || '-'}{' '}
+                    <button onClick={() => setEditing({ id: s.id, choice: { all: false, ids: s.doctors.map((d: any) => d.id) } })}>doctors</button>
+                  </>
+                )}
+              </td>
+              <td>{String(s.isActive)}</td>
               <td>
                 <button onClick={() => { const p = prompt('New base price', s.basePrice); if (p) run(() => patch(`/clinic-services/${s.id}`, { basePrice: p })); }}>change price</button>
                 <button onClick={() => run(() => patch(`/clinic-services/${s.id}/${s.isActive ? 'deactivate' : 'activate'}`))}>{s.isActive ? 'deactivate' : 'activate'}</button>
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
+      <small>Doctors who stay keep their price override (set on the doctor's page).</small>
     </>
   );
 }

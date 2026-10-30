@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { get, getSession, qs } from '../api';
+import { act, get, getSession, post, qs } from '../api';
 import { fmtDateTime } from '../time';
 import { useLoad } from '../util';
 
@@ -64,7 +64,96 @@ export function PatientPage() {
           </>}
         </div>
       </div>
+      <PatientPackages patientId={id!} role={role} />
       <Timeline patientId={id!} role={role} />
+    </>
+  );
+}
+
+/** Sold packages; the desk sells one, restores a no-show session; the owner cancels. A doctor gets no prices. */
+function PatientPackages({ patientId, role }: { patientId: string; role: string }) {
+  const desk = role !== 'DOCTOR';
+  const [list, reload] = useLoad(() => get<any[]>(`/patients/${patientId}/packages`), [patientId]);
+  const [catalog] = useLoad(() => (desk ? get(`/packages${qs({ isActive: true, limit: 100 })}`) : Promise.resolve(null)), [desk]);
+  const [packageId, setPackageId] = useState('');
+  const [open, setOpen] = useState<string | null>(null);
+  const [detail, setDetail] = useState<any>(null);
+  const showSessions = async (ppId: string) => {
+    if (open === ppId) { setOpen(null); return; }
+    setOpen(ppId);
+    setDetail(await get(`/patient-packages/${ppId}`).catch(() => null));
+  };
+  const after = async (ok: boolean) => { if (!ok) return; reload(); if (open) setDetail(await get(`/patient-packages/${open}`)); };
+  return (
+    <>
+      <h3>Packages</h3>
+      {desk && (
+        <div className="row">
+          <select value={packageId} onChange={(e) => setPackageId(e.target.value)}>
+            <option value="">-- package to sell --</option>
+            {catalog?.items.map((p: any) => (
+              <option key={p.id} value={p.id}>{p.name} · {p.sessionsCount} × {p.service.name} · {p.sellingPrice}{p.offerActive ? ` (offer, was ${p.price})` : ''}</option>
+            ))}
+          </select>
+          <button style={{ width: 'auto' }} disabled={!packageId}
+            onClick={() => act(() => post(`/patients/${patientId}/packages`, { packageId })).then((ok) => { if (ok) setPackageId(''); reload(); })}>
+            Sell (creates the invoice)
+          </button>
+        </div>
+      )}
+      <table>
+        <thead>
+          <tr>
+            <th>Package</th><th>Service</th><th>Sessions</th><th>Status</th><th>Doctors</th>
+            {desk && <><th>Price</th><th>Paid</th><th>Balance</th></>}<th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {list?.map((p) => (
+            <tr key={p.id}>
+              <td>{p.name}<div><small>sold {fmtDateTime(p.soldAt)} by {p.soldBy.name}</small></div></td>
+              <td>{p.service.name}</td>
+              <td>{p.usedSessions}/{p.totalSessions} used · <b>{p.sessionsLeft} left</b></td>
+              <td>{p.status}{p.cancelReason && <div><small>{p.cancelReason}</small></div>}</td>
+              <td>{p.allDoctors ? <i>all</i> : p.doctors.map((d: any) => d.name).join(', ')}</td>
+              {desk && <>
+                <td>{p.price}{p.offerAmount !== '0.00' && <div><small>list {p.listPrice} − {p.offerAmount}</small></div>}</td>
+                <td>{p.amountPaid}</td>
+                <td>{p.balance} <Link to={`/reception/invoices/${p.invoiceId}`}>invoice</Link></td>
+              </>}
+              <td>
+                <button onClick={() => showSessions(p.id)}>{open === p.id ? 'hide' : 'sessions'}</button>
+                {role === 'OWNER' && p.status !== 'CANCELLED' && (
+                  <button onClick={() => { const r = prompt('Reason to cancel the package (min 3 chars)'); if (r) act(() => post(`/patient-packages/${p.id}/cancel`, { reason: r })).then(after); }}>cancel package</button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {list?.length === 0 && <small>No packages.</small>}
+      {open && detail && (
+        <div className="box">
+          <b>Sessions of {detail.name}</b>
+          <table>
+            <thead><tr><th>Used</th><th>Reason</th><th>Doctor</th><th>By</th><th>Restored</th><th></th></tr></thead>
+            <tbody>
+              {detail.usages.map((u: any) => (
+                <tr key={u.id} style={u.restored ? { opacity: 0.5 } : {}}>
+                  <td>{fmtDateTime(u.usedAt)}</td><td>{u.reason}</td><td>{u.doctor.name}</td><td>{u.usedBy.name}</td>
+                  <td>{u.restored ? `${fmtDateTime(u.restoredAt)} by ${u.restoredBy.name}: ${u.restoreReason}` : '-'}</td>
+                  <td>
+                    {desk && !u.restored && u.reason === 'NO_SHOW' && (
+                      <button onClick={() => { const r = prompt('Reason to give the session back (min 3 chars)'); if (r) act(() => post(`/package-usages/${u.id}/restore`, { reason: r })).then(after); }}>restore</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {detail.usages.length === 0 && <small>No sessions used yet.</small>}
+        </div>
+      )}
     </>
   );
 }
@@ -75,6 +164,8 @@ const TYPE_GROUPS: Record<string, string[]> = {
   Visits: ['VISIT_ATTENDED', 'ATTEND_UNDONE'],
   Billing: ['INVOICE_ISSUED', 'INVOICE_CANCELLED', 'DISCOUNT_APPLIED', 'DISCOUNT_REMOVED', 'PAYMENT_RECORDED', 'PAYMENT_VOIDED', 'PAYMENT_REFUNDED'],
   Clinical: ['NOTE_SIGNED', 'ADDENDUM_ADDED', 'MEDICAL_INFO_UPDATED', 'ATTACHMENT_UPLOADED'],
+  // PACKAGE_SOLD is hidden from doctors by the API.
+  Packages: ['PACKAGE_SOLD', 'PACKAGE_SESSION_USED', 'PACKAGE_SESSION_RESTORED', 'PACKAGE_CANCELLED'],
 };
 // Only offer what the role can see (the API filters anyway).
 const HIDDEN_GROUP: Record<string, string> = { RECEPTIONIST: 'Clinical', DOCTOR: 'Billing' };
