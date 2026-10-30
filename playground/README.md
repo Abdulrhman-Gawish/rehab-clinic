@@ -130,8 +130,10 @@ To keep your dev data, use a separate database instead: prefix the backend comma
    to write) and the timeline. Filter by type or dates, and use "Load more". Log in as a doctor to see that billing
    events and the balance disappear; as reception, the clinical events.
 8. **Packages**:
-   - Owner → Services: pick the doctors when creating a service, or change them with "doctors" on a row.
-   - Owner → Packages: create / edit (doctors, offer with dates), deactivate. "Selling today" is the offer price.
+   - Owner → **Services & packages**: services on top, packages underneath. Each has one form for create and
+     **edit** (services: name, description, duration, price, doctors; packages: also sessions, offer with dates).
+     **Delete** deactivates after a confirm (nothing is hard deleted: history points at it); tick "show deleted" to
+     see and **restore** them. "Selling today" is the package's offer price.
    - Patient page → Packages: sell one (creates the invoice; pay part of it on the invoice page), "sessions" lists
      the usages with **restore** for a no-show; the owner can cancel a package.
    - Day list: **attend** opens a box to use the oldest usable package, pick one, or bill normally. The Package column
