@@ -1,6 +1,6 @@
 # Rehab Clinic — Backend
 
-NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, staff users, the audit trail, patients, doctors, the services catalog, doctor schedules, availability, appointments (online and reception booking), visits (attend, walk-ins, undo, the day list), billing (invoices, discounts, payments, refunds, cash-desk summary), clinic expenses and clinical records (medical info, session notes, addenda, attachments). Packages and reports will come later as new modules.
+NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, staff users, the audit trail, patients, doctors, the services catalog, doctor schedules, availability, appointments (online and reception booking), visits (attend, walk-ins, undo, the day list), billing (invoices, discounts, payments, refunds, cash-desk summary), clinic expenses, clinical records (medical info, session notes, addenda, attachments) and the patient history (overview and timeline). Packages will come later as a new module.
 
 - **Who logs in:** `OWNER`, `DOCTOR` and `RECEPTIONIST` staff.
 - **Patients never log in.** A patient is identified only by their phone number, which is unique.
@@ -152,6 +152,7 @@ Every route is under `/api/v1` and needs `Authorization: Bearer <accessToken>` u
 | `/clinical-notes/needs-attention` | R | – | R (own) | – |
 | clinical: `PUT …/medical-info`, notes (write, sign), addenda | – | – | W (notes: own visits) | – |
 | clinical: attachment upload | W | – | W (patients they treat) | – |
+| `/patients/:id/overview`, `/patients/:id/timeline` | R | R (no clinical data) | R (patients they treat, no billing) | – |
 
 Doctors have no access to billing or expenses. Receptionists have no access to clinical records.
 
@@ -521,6 +522,75 @@ A DRAFT note is visible **only to its author**: everyone else (other doctors, th
 
 Every write is audited in the same transaction (`CLINICAL_NOTE_*`, `PATIENT_MEDICAL_INFO_UPDATED`, `PATIENT_ATTACHMENT_UPLOADED`).
 
+### `patient-history` (patient page)
+
+Read-only views over the other modules' tables (no tables of its own). Access is checked by `ClinicalAccessService`: an unknown patient is 404 for everyone, and a DOCTOR without an appointment or visit with the patient also gets **404**.
+
+**`GET /patients/:id/overview`** is everything the patient page needs, in one request:
+
+| Field | Meaning | OWNER | RECEPTIONIST | DOCTOR |
+|---|---|---|---|---|
+| `patient` | `id, name, phone, createdSource, createdAt` | ✓ | ✓ | ✓ |
+| `nextAppointment` | earliest PENDING/CONFIRMED appointment starting from now (any doctor), or `null` | ✓ | ✓ | ✓ |
+| `lastVisit` | most recent ACTIVE visit (walk-ins included), or `null` | ✓ | ✓ | ✓ |
+| `counts` | `attended` (ACTIVE visits), `noShow` and `cancelled` (appointments in that status now) | ✓ | ✓ | ✓ |
+| `doctors` | doctors with an ACTIVE visit: `{ id, name, lastVisitAt }`, most recent first | ✓ | ✓ | ✓ |
+| `balance` | `{ totalInvoiced, totalPaid, balance }` over non-cancelled invoices (same as `/patients/:id/balance`) | ✓ | ✓ | `null` |
+| `notesNeedingAttention` | ACTIVE visits without a signed note (`noteStatus` `DRAFT` or `null`), oldest first | all doctors' | `null` | their own |
+
+**`GET /patients/:id/timeline?from=&to=&types=&cursor=&limit=`** lists everything that happened with the patient, newest first, across all modules. Every event has the same shape:
+
+```json
+{ "id": "PAYMENT_RECORDED:3f0c…", "type": "PAYMENT_RECORDED", "at": "2026-11-03T10:15:00+02:00",
+  "actor": { "id": "…", "name": "Mona Adel" }, "doctor": { "id": "…", "name": "Dr. Sara" },
+  "refs": { "visitId": "…", "invoiceId": "…", "paymentId": "…" },
+  "data": { "receiptNumber": "RCP-2026-000045", "amount": "100.00", "method": "CASH", "reference": null } }
+```
+
+- `id` is the type plus the source row id: stable and unique (one payment row can give `PAYMENT_RECORDED` and `PAYMENT_VOIDED`).
+- `actor` is who did it (`null` for an online booking). `doctor` is the doctor the event is about (`null` when there is none, e.g. a manual invoice). `refs` holds only the ids that apply.
+- In `data`, money is a decimal string and every `…At` field is ISO with offset.
+
+| Type | Source | `data` |
+|---|---|---|
+| `PATIENT_CREATED` | patients | `source` |
+| `PATIENT_UPDATED` | audit log, only when the name or phone changed | `oldValues`, `newValues` (`name` and/or `phone`) |
+| `APPOINTMENT_BOOKED` | appointments (not the new appointment of a reschedule) | `source`, `service`, `startAt`, `bookedName`, `referenceCode` |
+| `APPOINTMENT_CONFIRMED` | status history PENDING → CONFIRMED | `startAt` |
+| `APPOINTMENT_RESCHEDULED` | status history → RESCHEDULED; `refs.appointmentId` is the new appointment | `previousAppointmentId`, `oldStartAt`, `newStartAt`, `reason` |
+| `APPOINTMENT_CANCELLED` | status history → CANCELLED | `startAt`, `reason` |
+| `APPOINTMENT_NO_SHOW` | status history → NO_SHOW | `startAt` |
+| `NO_SHOW_UNDONE` | status history NO_SHOW → CONFIRMED | `startAt` |
+| `VISIT_ATTENDED` | visits (voided ones too) | `isWalkIn`, `service` |
+| `ATTEND_UNDONE` | visits, `voided_at` | `isWalkIn`, `service`, `reason` |
+| `INVOICE_ISSUED` | invoices; the actor of a visit's invoice is who attended the visit | `invoiceNumber`, `total` (current) |
+| `INVOICE_CANCELLED` | invoices, `cancelled_at` | `invoiceNumber`, `reason` |
+| `DISCOUNT_APPLIED` | invoice discounts | `invoiceNumber`, `type`, `value`, `amount`, `reason`, `isRepeat` |
+| `DISCOUNT_REMOVED` | invoice discounts, `removed_at` (also when replaced) | `invoiceNumber`, `amount`, `reason` |
+| `PAYMENT_RECORDED` | payments of type PAYMENT (voided ones too) | `receiptNumber`, `amount`, `method`, `reference` |
+| `PAYMENT_VOIDED` | payments, `voided_at` (a payment or a refund) | `receiptNumber`, `paymentType`, `amount`, `method`, `reason` |
+| `PAYMENT_REFUNDED` | payments of type REFUND | `receiptNumber`, `amount`, `method`, `reason`, `refundOfPaymentId` |
+| `NOTE_SIGNED` | clinical notes, SIGNED only | `assessment` (first 200 characters) |
+| `ADDENDUM_ADDED` | addenda | `content` (first 200 characters) |
+| `MEDICAL_INFO_UPDATED` | audit log | `fields` (names of the changed fields) |
+| `ATTACHMENT_UPLOADED` | attachments; `doctor` is the uploader when a doctor uploaded it | `attachmentId`, `title`, `mimeType` |
+
+**Visibility** is part of the query: only the event types the role may see are queried at all.
+
+| Role | Sees |
+|---|---|
+| OWNER | everything |
+| RECEPTIONIST | everything except `NOTE_SIGNED`, `ADDENDUM_ADDED`, `MEDICAL_INFO_UPDATED`, `ATTACHMENT_UPLOADED` |
+| DOCTOR (with access) | everything except `INVOICE_*`, `DISCOUNT_*`, `PAYMENT_*` |
+
+Draft notes never appear, for anyone (not even their author): a note shows up when it is signed.
+
+**Filters and paging:**
+- `types` takes several values (`?types=A&types=B` or `?types=A,B`). Types the role can't see are ignored (asking only for those gives an empty page).
+- `from`/`to` are clinic local dates, inclusive, applied to `at`.
+- Keyset pagination on `(at, id)`: `limit` defaults to 50 (max 200), and the response is `{ items, nextCursor }`. Pass `nextCursor` back as `cursor` for the next (older) page; it is `null` on the last page. The cursor is opaque and keeps the time to the microsecond, so events written in the same millisecond are never skipped or repeated. A malformed cursor is 400.
+- It is one `UNION ALL` query, one branch per event type, each filtered by the patient through existing indexes. No index was added.
+
 ## Project layout
 
 ```
@@ -529,7 +599,7 @@ src/
   common/      decorators, guards, filters, pipes, dto, errors, utils (money, phone...), time (clinic time zone), storage, base entity, enums
   config/      env validation (Joi), logger config
   database/    data-source.ts (TypeORM CLI), typeorm.options.ts, migrations/, seeds/
-  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, visits, billing, expenses, clinical, health
+  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, visits, billing, expenses, clinical, patient-history, health
 test/          e2e suites + global setup (test DB reset + migrations) + helpers
 ```
 

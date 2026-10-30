@@ -40,5 +40,6 @@ import { PatientAttachmentsService } from './patient-attachments.service.js';
     PatientAttachmentsService,
     FileStorage,
   ],
+  exports: [ClinicalAccessService],
 })
 export class ClinicalModule {}

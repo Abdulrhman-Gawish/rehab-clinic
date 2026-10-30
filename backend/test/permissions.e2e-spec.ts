@@ -319,6 +319,10 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
     path: '/clinical-notes/needs-attention',
     allowed: [OWNER, DOCTOR],
   },
+  // patient history: all staff (DOCTOR only with access to the patient,
+  // else 404; RECEPTIONIST without clinical, DOCTOR without billing data)
+  { method: 'get', path: `/patients/${id}/overview`, allowed: STAFF },
+  { method: 'get', path: `/patients/${id}/timeline`, allowed: STAFF },
   // public: anyone
   { method: 'get', path: '/public/doctors', allowed: EVERYONE },
   { method: 'get', path: `/public/doctors/${id}`, allowed: EVERYONE },

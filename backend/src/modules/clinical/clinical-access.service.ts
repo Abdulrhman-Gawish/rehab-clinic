@@ -8,8 +8,9 @@ import { Patient } from '../patients/entities/patient.entity.js';
 import { Visit } from '../visits/entities/visit.entity.js';
 
 /**
- * Who may see a patient's clinical data (RECEPTIONIST never reaches here:
- * the routes allow only OWNER and DOCTOR).
+ * Who may see a patient's clinical data (clinical routes allow only OWNER
+ * and DOCTOR; the patient overview and timeline also call it for a
+ * RECEPTIONIST, which is then only an existence check).
  * - OWNER: every patient (read-only by route).
  * - DOCTOR: only patients they have at least one appointment or visit with,
  *   in any status. Otherwise 404, so the patient's existence isn't revealed.
