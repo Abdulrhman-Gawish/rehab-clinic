@@ -22,6 +22,7 @@ const EVERYONE: Who[] = [...STAFF, 'ANONYMOUS'];
 
 const id = randomUUID();
 const otherId = randomUUID();
+const RANGE = '?from=2026-11-01&to=2026-11-30';
 
 // Mirrors the permissions matrix from the specification.
 const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
@@ -323,6 +324,13 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
   // else 404; RECEPTIONIST without clinical, DOCTOR without billing data)
   { method: 'get', path: `/patients/${id}/overview`, allowed: STAFF },
   { method: 'get', path: `/patients/${id}/timeline`, allowed: STAFF },
+  // reports: OWNER only
+  { method: 'get', path: `/reports/summary${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/revenue${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/attendance${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/discounts${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/expenses${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/outstanding${RANGE}`, allowed: [OWNER] },
   // public: anyone
   { method: 'get', path: '/public/doctors', allowed: EVERYONE },
   { method: 'get', path: `/public/doctors/${id}`, allowed: EVERYONE },

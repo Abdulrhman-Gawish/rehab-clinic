@@ -1,6 +1,6 @@
 # Rehab Clinic — Backend
 
-NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, staff users, the audit trail, patients, doctors, the services catalog, doctor schedules, availability, appointments (online and reception booking), visits (attend, walk-ins, undo, the day list), billing (invoices, discounts, payments, refunds, cash-desk summary), clinic expenses, clinical records (medical info, session notes, addenda, attachments) and the patient history (overview and timeline). Packages will come later as a new module.
+NestJS + PostgreSQL backend for a physiotherapy/medical clinic. It covers auth, staff users, the audit trail, patients, doctors, the services catalog, doctor schedules, availability, appointments (online and reception booking), visits (attend, walk-ins, undo, the day list), billing (invoices, discounts, payments, refunds, cash-desk summary), clinic expenses, clinical records (medical info, session notes, addenda, attachments), the patient history (overview and timeline) and the owner reports. Packages will come later as a new module.
 
 - **Who logs in:** `OWNER`, `DOCTOR` and `RECEPTIONIST` staff.
 - **Patients never log in.** A patient is identified only by their phone number, which is unique.
@@ -153,6 +153,7 @@ Every route is under `/api/v1` and needs `Authorization: Bearer <accessToken>` u
 | clinical: `PUT …/medical-info`, notes (write, sign), addenda | – | – | W (notes: own visits) | – |
 | clinical: attachment upload | W | – | W (patients they treat) | – |
 | `/patients/:id/overview`, `/patients/:id/timeline` | R | R (no clinical data) | R (patients they treat, no billing) | – |
+| `/reports/*` | R | – | – | – |
 
 Doctors have no access to billing or expenses. Receptionists have no access to clinical records.
 
@@ -591,6 +592,64 @@ Draft notes never appear, for anyone (not even their author): a note shows up wh
 - Keyset pagination on `(at, id)`: `limit` defaults to 50 (max 200), and the response is `{ items, nextCursor }`. Pass `nextCursor` back as `cursor` for the next (older) page; it is `null` on the last page. The cursor is opaque and keeps the time to the microsecond, so events written in the same millisecond are never skipped or repeated. A malformed cursor is 400.
 - It is one `UNION ALL` query, one branch per event type, each filtered by the patient through existing indexes. No index was added.
 
+### `reports` (OWNER only)
+
+Read-only aggregate queries; no tables of their own. Every report takes `from=YYYY-MM-DD&to=YYYY-MM-DD` (both **required**, clinic local dates, inclusive, DST-aware; `from` after `to` is 400) and echoes them back. Money is a decimal string.
+
+**Revenue means money actually collected:** valid payments minus valid refunds, by the time they were received. Voided payments and voided refunds never count. Invoiced amounts are shown next to it for comparison.
+
+Which rows count, everywhere:
+
+| Thing | Counted when | Excluded |
+|---|---|---|
+| Payment / refund | `received_at` in the range | VOIDED |
+| Invoice | `issued_at` in the range | CANCELLED (also those of undone visits) |
+| Discount | `applied_at` in the range | removed or replaced, or on a cancelled invoice |
+| Visit | `attended_at` in the range | VOIDED (undone) |
+| Appointment | `start_at` in the range | RESCHEDULED (the new appointment counts instead, if it is in the range) |
+| Expense | `expense_date` in the range | VOIDED |
+| Patient | `created_at` in the range | – |
+
+**`GET /reports/summary`**
+
+| Field | Definition |
+|---|---|
+| `collected` | Sum of valid payments |
+| `refunded` | Sum of valid refunds (whenever the original payment was made) |
+| `netCollected` | `collected − refunded` |
+| `expenses` | Sum of valid expenses |
+| `netAfterExpenses` | `netCollected − expenses` |
+| `invoiced` | Sum of `total` (after discounts) of the invoices issued in the range |
+| `outstanding` | Sum of `total − amount_paid` (as of now) of those same invoices |
+| `discountsGiven` | Sum of the discount amounts |
+| `attendedVisits` | Visits, walk-ins included |
+| `noShows` / `cancellations` | Appointments now in NO_SHOW / CANCELLED |
+| `newPatients` | Patients created |
+| `unsignedNotes` | Visits of the range without a SIGNED note (no note yet, or a draft) |
+
+**`GET /reports/revenue?groupBy=day|month|doctor|service|method`** (default `day`) returns `rows` of `{ key, label, collected, invoiced, visits }` plus `totals` (which match the summary's `netCollected`, `invoiced` and `attendedVisits`).
+- `collected` = payments − refunds, `invoiced` = invoice totals, `visits` = visits, each grouped by its own time column.
+- `day` (`YYYY-MM-DD`) and `month` (`YYYY-MM`) are clinic local dates, sorted by date. Only days or months with data appear.
+- `doctor` and `service`: a payment or invoice belongs to the doctor and service of its invoice's visit. Manual invoices (no visit) are one row with `key: null`, last. The other rows are sorted by `collected`, highest first.
+- `method`: `collected` per payment method (a refund counts against its own method). `invoiced` and `visits` are `null`.
+
+**`GET /reports/attendance?doctorId=`** returns one row per doctor with activity in the range (sorted by name), plus `totals`.
+- `booked` = appointments (any source, any status except RESCHEDULED). `attended`, `noShow` and `cancelled` are those of them now in that status, and `onlineBookings` + `receptionBookings` = `booked`.
+- `noShowRate` = `noShow / (attended + noShow) × 100`, 2 decimals, or `null` when both are 0.
+- `walkIns` = walk-in visits.
+
+**`GET /reports/discounts`** returns `count`, `totalAmount` and `repeats` (applied with "repeat last discount"), plus:
+- `byUser`: `{ user, count, amount }`, largest amount first.
+- `byReason`: the top 10 reasons, `{ reason, count, amount }`, most used first. Case and surrounding spaces are ignored ("Student" = " student ").
+
+**`GET /reports/expenses`** returns `count`, `total`, `byCategory` (`{ category, count, total }`, largest first) and `byMethod` (all four methods).
+
+**`GET /reports/outstanding?page=&limit=`** lists patients with an unpaid balance on invoices issued in the range, largest balance first, paginated like other lists.
+- Each row is `{ patient: { id, name, phone }, balance, oldestUnpaidInvoiceDate }` (a clinic local date).
+- The balances add up to the summary's `outstanding` for the same range. For everything owed regardless of date, use a wide range.
+
+Tests: `test/reports.e2e-spec.ts` builds one dataset through the API around Egypt's fall-back night (2026-10-29 lasts 25 hours). It has voided payments, a refund, cancelled invoices, an undone walk-in, a replaced discount and a rescheduled appointment, and checks every number.
+
 ## Project layout
 
 ```
@@ -599,7 +658,7 @@ src/
   common/      decorators, guards, filters, pipes, dto, errors, utils (money, phone...), time (clinic time zone), storage, base entity, enums
   config/      env validation (Joi), logger config
   database/    data-source.ts (TypeORM CLI), typeorm.options.ts, migrations/, seeds/
-  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, visits, billing, expenses, clinical, patient-history, health
+  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, visits, billing, expenses, clinical, patient-history, reports, health
 test/          e2e suites + global setup (test DB reset + migrations) + helpers
 ```
 

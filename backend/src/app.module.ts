@@ -21,6 +21,7 @@ import { ExpensesModule } from './modules/expenses/expenses.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { PatientHistoryModule } from './modules/patient-history/patient-history.module.js';
 import { PatientsModule } from './modules/patients/patients.module.js';
+import { ReportsModule } from './modules/reports/reports.module.js';
 import { SchedulesModule } from './modules/schedules/schedules.module.js';
 import { UsersModule } from './modules/users/users.module.js';
 import { VisitsModule } from './modules/visits/visits.module.js';
@@ -63,6 +64,7 @@ import { VisitsModule } from './modules/visits/visits.module.js';
     ExpensesModule,
     ClinicalModule,
     PatientHistoryModule,
+    ReportsModule,
   ],
 })
 export class AppModule {}
