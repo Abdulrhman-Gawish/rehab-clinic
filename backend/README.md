@@ -179,6 +179,7 @@ Business errors also carry a stable machine-readable `code`:
 
 | Code | Status | Meaning |
 |---|---|---|
+| `REFRESH_RACE` | 401 | `POST /auth/refresh` with a token rotated less than 30 s ago: re-read the newest tokens and retry (the session is kept) |
 | `SLOT_UNAVAILABLE` | 409 | The doctor already has an active appointment overlapping that time |
 | `PATIENT_OVERLAP` | 409 | The patient already has an active appointment overlapping that time |
 | `BOOKING_LIMIT_REACHED` | 409 | The phone already holds `BOOKING_MAX_ACTIVE_PER_PHONE` upcoming appointments (public booking) |
@@ -221,8 +222,17 @@ Business errors also carry a stable machine-readable `code`:
 
 ### `auth`
 - `POST /auth/login` (email + password) returns an access JWT (`{ sub, role }`, 15 min), an opaque refresh token and the user. Inactive users get 403. Wrong credentials get a generic 401, with equalized timing for unknown emails.
-- `POST /auth/refresh` **rotates** the refresh token: the old one is revoked and points to its replacement (`replaced_by_id`). Presenting an already revoked token is treated as theft. All of that user's tokens are revoked and the event is audited (`REFRESH_TOKEN_REUSE_DETECTED`).
+- `POST /auth/refresh` **rotates** the refresh token: the old one is revoked and points to its replacement (`replaced_by_id`). Presenting an already revoked token is treated as theft. All of that user's tokens are revoked and the event is audited (`REFRESH_TOKEN_REUSE_DETECTED`), except inside the grace window below.
 - `POST /auth/logout` revokes a refresh token and is idempotent. `GET /auth/me` returns the current user.
+
+#### Sessions and staying logged in
+- **Lifetimes:** the access token lives 15 minutes. Each refresh returns a *new* refresh token valid for 7 days from that moment (sliding expiry). A user who works every day never has to log in again. After 7 days without any request, the refresh token expires and they log in again.
+- **Grace window for races:** a refresh token that was rotated less than **30 s** ago answers `401` with `code: REFRESH_RACE` and **does not** revoke anything. This happens when two requests (or two tabs sharing storage) refresh with the same token at once: one wins, the other gets `REFRESH_RACE`. Reusing a rotated token after 30 s, or a logged-out token, is still treated as theft.
+- **What a client must do:**
+  - Keep one refresh in flight at a time; other requests that get a 401 wait for it and then resend with the new access token.
+  - If a request got a 401 but the stored access token has changed since it was sent, just resend (someone else already refreshed).
+  - On `REFRESH_RACE`, re-read the stored tokens (another tab saved newer ones) and retry once. Only a refresh 401 *without* that code means "log in again". A 429 or 5xx on refresh is not a logout.
+- Why staff got logged out before this: an expired access token made every parallel request on a page get 401 at once, and each called refresh with the same token. The first rotated it, the second looked like a replay, and reuse detection revoked the whole session (the next requests then failed with 401). Two tabs sharing one token did the same.
 - The user in the login response and in `/auth/me` has `doctorId`: the doctor profile id for DOCTOR accounts (for "my schedule" screens), `null` otherwise.
 - Only the SHA-256 of a refresh token is stored.
 - Global `JwtAuthGuard`: everything is protected unless marked `@Public()`. It re-reads the user from the DB on every request, so deactivations and role changes apply immediately.

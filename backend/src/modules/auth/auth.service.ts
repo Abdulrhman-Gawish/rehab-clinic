@@ -1,5 +1,6 @@
 import {
   ForbiddenException,
+  HttpStatus,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -8,6 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
 import { UserRole } from '../../common/enums/user-role.enum.js';
+import { AppException, ErrorCode } from '../../common/errors/app.exception.js';
 import type {
   Actor,
   JwtPayload,
@@ -27,7 +29,10 @@ import type {
   LoginDto,
   LoginResponseDto,
 } from './dto/auth.dto.js';
-import { ACCESS_TOKEN_TTL_SECONDS } from './auth.constants.js';
+import {
+  ACCESS_TOKEN_TTL_SECONDS,
+  REFRESH_RACE_GRACE_SECONDS,
+} from './auth.constants.js';
 import { RefreshTokensService } from './refresh-tokens.service.js';
 
 const INVALID_CREDENTIALS = 'Invalid email or password';
@@ -36,6 +41,7 @@ const INVALID_REFRESH_TOKEN = 'Invalid or expired refresh token';
 type RefreshOutcome =
   | { kind: 'ok'; tokens: AuthTokensDto }
   | { kind: 'invalid' }
+  | { kind: 'race' }
   | { kind: 'reused'; userId: string };
 
 @Injectable()
@@ -99,9 +105,11 @@ export class AuthService {
   }
 
   /**
-   * Rotates a refresh token: the presented token is revoked and replaced.
-   * Presenting an already-revoked token means it was stolen or replayed, so
-   * every token of that user is revoked (forcing a fresh login).
+   * Rotates a refresh token: the presented token is revoked and replaced by a
+   * new one valid for 7 more days (sliding expiry). A token rotated within the
+   * last REFRESH_RACE_GRACE_SECONDS answers REFRESH_RACE (the client lost a
+   * race against its own parallel refresh). Any other revoked token means it
+   * was stolen or replayed, so every token of that user is revoked.
    */
   async refresh(token: string, ip: string | null): Promise<AuthTokensDto> {
     const outcome = await this.dataSource.transaction(
@@ -111,6 +119,15 @@ export class AuthService {
           manager,
         );
         if (!stored) return { kind: 'invalid' };
+
+        if (
+          stored.revokedAt &&
+          stored.replacedById &&
+          Date.now() - stored.revokedAt.getTime() <
+            REFRESH_RACE_GRACE_SECONDS * 1000
+        ) {
+          return { kind: 'race' };
+        }
 
         if (stored.revokedAt) {
           await this.refreshTokens.revokeAllForUser(stored.userId, manager);
@@ -146,6 +163,13 @@ export class AuthService {
     );
 
     // Thrown after commit so revocations above are persisted.
+    if (outcome.kind === 'race') {
+      throw new AppException(
+        HttpStatus.UNAUTHORIZED,
+        ErrorCode.REFRESH_RACE,
+        'This refresh token was just rotated; retry with the newest one',
+      );
+    }
     if (outcome.kind !== 'ok') {
       throw new UnauthorizedException(INVALID_REFRESH_TOKEN);
     }

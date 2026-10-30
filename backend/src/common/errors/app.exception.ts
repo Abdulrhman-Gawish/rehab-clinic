@@ -2,6 +2,7 @@ import { HttpException, HttpStatus } from '@nestjs/common';
 
 // Machine-readable error codes returned in the `code` field of error bodies.
 export enum ErrorCode {
+  REFRESH_RACE = 'REFRESH_RACE',
   SLOT_UNAVAILABLE = 'SLOT_UNAVAILABLE',
   PATIENT_OVERLAP = 'PATIENT_OVERLAP',
   BOOKING_LIMIT_REACHED = 'BOOKING_LIMIT_REACHED',
