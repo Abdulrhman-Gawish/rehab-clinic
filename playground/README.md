@@ -112,7 +112,8 @@ To keep your dev data, use a separate database instead: prefix the backend comma
 
 1. **Public booking** (`/book`, no login): doctor → service → date → slot → name + phone → reference code. It starts
    PENDING.
-   - After the service, the patient can pick a package that doctor offers (or "no package"). It is only a request:
+   - Step 2 lists the doctor's services and, right under them, the packages that doctor offers ("Package (…): 10
+     sessions … for 2430.00 EGP"). Picking a package also picks its service. It is only a request:
      the day list shows "wants: …", and **attend** preselects "sell it and use it" (sells the package, then covers
      the visit with its first session). Nothing is paid online.
    - The demo schedule has no slots on Fri/Sat. On those days, add a range for today first (Owner → Doctors → doctor →

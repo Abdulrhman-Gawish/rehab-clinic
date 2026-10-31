@@ -16,9 +16,13 @@ export function PublicBooking() {
   const [packageId, setPackageId] = useState('');
   const [packages] = useLoad(() => get<any[]>('/public/packages', { noAuth: true }), []);
   const doctor = doctors?.find((d) => d.id === doctorId);
-  // Packages of the chosen service that this doctor offers.
-  const offered = (packages ?? []).filter((p) => p.service.id === serviceId
-    && (p.allDoctors || p.doctors.some((d: any) => d.id === doctorId)));
+  // Packages this doctor offers (for a service the doctor offers), listed right under the services.
+  const offered = (packages ?? []).filter((p) => (p.allDoctors || p.doctors.some((d: any) => d.id === doctorId))
+    && doctor?.services.some((s: any) => s.id === p.service.id));
+  // Picking a service clears the package; picking a package also picks its service.
+  const pick = (nextServiceId: string, nextPackageId: string) => {
+    setServiceId(nextServiceId); setPackageId(nextPackageId); setStartAt('');
+  };
   const [slots] = useLoad(
     () => (doctorId && serviceId ? get<any[]>(`/public/doctors/${doctorId}/slots${qs({ serviceId, date })}`, { noAuth: true }) : Promise.resolve([])),
     [doctorId, serviceId, date],
@@ -45,23 +49,17 @@ export function PublicBooking() {
       {doctor && <>
         <h4>2. Service</h4>
         {doctor.services.map((s: any) => (
-          <label key={s.id}><input type="radio" checked={serviceId === s.id} onChange={() => { setServiceId(s.id); setStartAt(''); setPackageId(''); }} /> {s.name} — {s.durationMinutes} min — {s.price} EGP</label>
+          <label key={s.id}><input type="radio" checked={serviceId === s.id && !packageId} onChange={() => pick(s.id, '')} /> {s.name} — {s.durationMinutes} min — {s.price} EGP</label>
         ))}
+        {offered.map((p) => (
+          <label key={p.id}>
+            <input type="radio" checked={packageId === p.id} onChange={() => pick(p.service.id, p.id)} />{' '}
+            <b>Package ({p.name})</b>: {p.sessionsCount} sessions {p.service.name} for <b>{p.sellingPrice} EGP</b>
+            {p.sellingPrice !== p.price && <> <s>{p.price}</s>{p.offerEndsOn && <small> (offer until {p.offerEndsOn})</small>}</>}
+          </label>
+        ))}
+        {packageId && <small>You pay for the package at the clinic; this visit is your first session.</small>}
       </>}
-      {offered.length > 0 && (
-        <div className="box">
-          <b>Save with a package (optional)</b>
-          <label><input type="radio" checked={packageId === ''} onChange={() => setPackageId('')} /> No package, pay per session</label>
-          {offered.map((p) => (
-            <label key={p.id}>
-              <input type="radio" checked={packageId === p.id} onChange={() => setPackageId(p.id)} />{' '}
-              {p.name}: {p.sessionsCount} sessions for <b>{p.sellingPrice} EGP</b>
-              {p.sellingPrice !== p.price && <> <s>{p.price}</s>{p.offerEndsOn && <small> (offer until {p.offerEndsOn})</small>}</>}
-            </label>
-          ))}
-          <small>You pay at the clinic; this visit is your first session.</small>
-        </div>
-      )}
       {serviceId && <>
         <h4>3. Date and time</h4>
         <input type="date" value={date} onChange={(e) => { setDate(e.target.value); setStartAt(''); }} />
