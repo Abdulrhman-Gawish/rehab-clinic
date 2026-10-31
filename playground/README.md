@@ -112,6 +112,9 @@ To keep your dev data, use a separate database instead: prefix the backend comma
 
 1. **Public booking** (`/book`, no login): doctor → service → date → slot → name + phone → reference code. It starts
    PENDING.
+   - After the service, the patient can pick a package that doctor offers (or "no package"). It is only a request:
+     the day list shows "wants: …", and **attend** preselects "sell it and use it" (sells the package, then covers
+     the visit with its first session). Nothing is paid online.
    - The demo schedule has no slots on Fri/Sat. On those days, add a range for today first (Owner → Doctors → doctor →
      Weekly schedule).
 2. **Receptionist**, Day list: the buttons on each row come from the API's `allowedActions`. Confirming is optional:

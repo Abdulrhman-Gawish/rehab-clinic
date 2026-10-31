@@ -12,6 +12,8 @@ export function PublicBooking() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [done, setDone] = useState<any>(null);
+  // '' = no package (pay per session).
+  const [packageId, setPackageId] = useState('');
   const [packages] = useLoad(() => get<any[]>('/public/packages', { noAuth: true }), []);
   const doctor = doctors?.find((d) => d.id === doctorId);
   // Packages of the chosen service that this doctor offers.
@@ -28,7 +30,8 @@ export function PublicBooking() {
         <h2>Booked!</h2>
         <p>Your reference code: <b style={{ fontSize: 28 }}>{done.referenceCode}</b></p>
         <p>{done.doctorName} — {done.serviceName}<br />{fmtDateTime(done.startAt)} – {fmtTime(done.endAt)}<br />Status: {done.status} (the clinic will confirm)</p>
-        <button style={{ width: 'auto' }} onClick={() => { setDone(null); setStartAt(''); }}>Book another</button>
+        {done.packageName && <p>Package requested: <b>{done.packageName}</b>. You buy it at reception; this visit is its first session.</p>}
+        <button style={{ width: 'auto' }} onClick={() => { setDone(null); setStartAt(''); setPackageId(''); }}>Book another</button>
       </>
     );
   }
@@ -37,24 +40,26 @@ export function PublicBooking() {
       <h2>Book an appointment (public, no login)</h2>
       <h4>1. Doctor</h4>
       {doctors?.map((d) => (
-        <label key={d.id}><input type="radio" checked={doctorId === d.id} onChange={() => { setDoctorId(d.id); setServiceId(''); setStartAt(''); }} /> <b>{d.name}</b> — {d.specialty} {d.bio && <small>({d.bio})</small>}</label>
+        <label key={d.id}><input type="radio" checked={doctorId === d.id} onChange={() => { setDoctorId(d.id); setServiceId(''); setStartAt(''); setPackageId(''); }} /> <b>{d.name}</b> — {d.specialty} {d.bio && <small>({d.bio})</small>}</label>
       ))}
       {doctor && <>
         <h4>2. Service</h4>
         {doctor.services.map((s: any) => (
-          <label key={s.id}><input type="radio" checked={serviceId === s.id} onChange={() => { setServiceId(s.id); setStartAt(''); }} /> {s.name} — {s.durationMinutes} min — {s.price} EGP</label>
+          <label key={s.id}><input type="radio" checked={serviceId === s.id} onChange={() => { setServiceId(s.id); setStartAt(''); setPackageId(''); }} /> {s.name} — {s.durationMinutes} min — {s.price} EGP</label>
         ))}
       </>}
       {offered.length > 0 && (
         <div className="box">
-          <b>Save with a package</b>
+          <b>Save with a package (optional)</b>
+          <label><input type="radio" checked={packageId === ''} onChange={() => setPackageId('')} /> No package, pay per session</label>
           {offered.map((p) => (
-            <div key={p.id}>
+            <label key={p.id}>
+              <input type="radio" checked={packageId === p.id} onChange={() => setPackageId(p.id)} />{' '}
               {p.name}: {p.sessionsCount} sessions for <b>{p.sellingPrice} EGP</b>
               {p.sellingPrice !== p.price && <> <s>{p.price}</s>{p.offerEndsOn && <small> (offer until {p.offerEndsOn})</small>}</>}
-            </div>
+            </label>
           ))}
-          <small>Ask at reception: packages are bought and paid at the clinic.</small>
+          <small>You pay at the clinic; this visit is your first session.</small>
         </div>
       )}
       {serviceId && <>
@@ -71,7 +76,7 @@ export function PublicBooking() {
           <input placeholder="full name" value={name} onChange={(e) => setName(e.target.value)} />
           <input placeholder="mobile 01xxxxxxxxx" value={phone} onChange={(e) => setPhone(e.target.value)} />
         </div>
-        <button onClick={() => act(async () => setDone(await api('POST', '/public/appointments', { name, phone, doctorId, serviceId, startAt }, { noAuth: true })))}>Book</button>
+        <button onClick={() => act(async () => setDone(await api('POST', '/public/appointments', { name, phone, doctorId, serviceId, startAt, packageId: packageId || undefined }, { noAuth: true })))}>Book</button>
       </>}
     </>
   );

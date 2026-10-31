@@ -255,6 +255,13 @@ start/complete buttons and the queue's waiting states from this UI.
 - Reception can give back a no-show session weeks later (with a reason, audited), while undo no-show only works the
   same day. Probably right (the owner forgives late), but worth confirming with the clinic.
 
+### 29. Selling the package asked for online and attending are two calls (med)
+- **Screen:** Day list → attend a row that has `requestedPackage` ("wants: …").
+- **Hard:** "Sell it and use it" is `POST /patients/:id/packages` then `POST /appointments/:id/attend
+  { patientPackageId }`. If the attend fails (wrong day, already attended), the package is already sold and its
+  invoice exists; reception has to cancel the package (owner) and the invoice by hand.
+- **Instead:** `POST /appointments/:id/attend { sellPackageId }`: sell and attend in one transaction.
+
 ## Things that worked well
 - Error bodies (`status`, `code`, `message`, `details`) are easy to show as they are. `VISIT_COMPLETION_BLOCKED`,
   `NOTE_INCOMPLETE`, `OVERPAYMENT` and the others read clearly in the error bar.
