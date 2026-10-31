@@ -68,7 +68,7 @@ export function toPackageResponse(
   };
 }
 
-// Requires service.
+// Requires service and doctors.doctor.user.
 export function toPublicPackage(pkg: Package, today: string): PublicPackageDto {
   if (!pkg.service) throw new Error('Package service is not loaded');
   const offer = offerOf(pkg);
@@ -81,6 +81,16 @@ export function toPublicPackage(pkg: Package, today: string): PublicPackageDto {
     price: pkg.price,
     sellingPrice: sellingPrice(pkg.price, offer, today),
     offerEndsOn: active ? (offer?.endsOn ?? null) : null,
+    allDoctors: pkg.allDoctors,
+    // Only doctors the website shows (active, public, account active).
+    doctors: pkg.allDoctors
+      ? []
+      : doctorRefs(pkg).filter((ref) => {
+          const doctor = pkg.doctors?.find(
+            (l) => l.doctorId === ref.id,
+          )?.doctor;
+          return doctor?.isActive && doctor.isPublic && doctor.user.isActive;
+        }),
   };
 }
 

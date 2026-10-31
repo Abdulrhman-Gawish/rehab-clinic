@@ -238,6 +238,9 @@ export class PackagesService {
     const rows = await this.packages
       .createQueryBuilder('pkg')
       .innerJoinAndSelect('pkg.service', 'service')
+      .leftJoinAndSelect('pkg.doctors', 'link')
+      .leftJoinAndSelect('link.doctor', 'doctor')
+      .leftJoinAndSelect('doctor.user', 'doctorUser')
       .where('pkg.isActive = true AND pkg.isPublic = true')
       .andWhere('service.isActive = true')
       .orderBy('pkg.name', 'ASC')

@@ -320,6 +320,16 @@ export class PublicPackageDto {
     description: 'Last day of the active offer (null: no offer or no end)',
   })
   offerEndsOn: string | null;
+
+  @ApiProperty({ description: 'Every doctor offers it' })
+  allDoctors: boolean;
+
+  @ApiProperty({
+    type: [UserRefDto],
+    description:
+      'The public doctors offering it ({ id: doctor id, name }); empty when allDoctors',
+  })
+  doctors: UserRefDto[];
 }
 
 export class PatientPackageDto {

@@ -9,6 +9,7 @@ import {
 } from '../src/modules/audit/audit.service.js';
 import { AuditLog } from '../src/modules/audit/entities/audit-log.entity.js';
 import { InvoiceItem } from '../src/modules/billing/entities/invoice-item.entity.js';
+import { Doctor } from '../src/modules/doctors/entities/doctor.entity.js';
 import { Invoice } from '../src/modules/billing/entities/invoice.entity.js';
 import { PatientPackage } from '../src/modules/packages/entities/patient-package.entity.js';
 import type { Patient } from '../src/modules/patients/entities/patient.entity.js';
@@ -44,6 +45,8 @@ interface DayRow {
 }
 
 const PUBLIC_KEYS = [
+  'allDoctors',
+  'doctors',
   'id',
   'name',
   'offerEndsOn',
@@ -414,7 +417,28 @@ describe('Packages (e2e)', () => {
         price: '900.00',
         sellingPrice: '810.00',
         offerEndsOn: '2026-11-30',
+        allDoctors: true,
+        doctors: [],
       });
+    });
+
+    it('GET /public/packages lists the doctors of a package, public ones only', async () => {
+      await createPackage({
+        allDoctors: undefined,
+        doctorIds: [doctorA.doctorId, doctorB.doctorId],
+      });
+      await ctx.dataSource
+        .getRepository(Doctor)
+        .update({ id: doctorB.doctorId }, { isPublic: false });
+
+      const res = await request(server)
+        .get('/api/v1/public/packages')
+        .expect(200);
+      expect(res.body[0]).toMatchObject({
+        allDoctors: false,
+        doctors: [{ id: doctorA.doctorId, name: expect.any(String) }],
+      });
+      expect(res.body[0].doctors).toHaveLength(1);
     });
   });
 
