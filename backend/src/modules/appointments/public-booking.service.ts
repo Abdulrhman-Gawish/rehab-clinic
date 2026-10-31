@@ -2,11 +2,16 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
-import { conflict, ErrorCode } from '../../common/errors/app.exception.js';
+import {
+  conflict,
+  ErrorCode,
+  unprocessable,
+} from '../../common/errors/app.exception.js';
 import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
 import { isoToDate } from '../../common/time/clinic-time.util.js';
 import { normalizePersonName } from '../../common/utils/person-name.util.js';
 import type { EnvironmentVariables } from '../../config/env.validation.js';
+import { Package } from '../packages/entities/package.entity.js';
 import { Patient, PatientSource } from '../patients/entities/patient.entity.js';
 import { PatientsService } from '../patients/patients.service.js';
 import { AppointmentWriter } from './appointment-writer.service.js';
@@ -59,6 +64,14 @@ export class PublicBookingService {
           manager,
         );
         await this.availability.assertBookable(context, startAt, manager);
+        const requested = dto.packageId
+          ? await this.offeredPackage(
+              dto.packageId,
+              context.doctor.id,
+              context.service.id,
+              manager,
+            )
+          : null;
 
         // Existing phone -> existing patient, never renamed.
         const { patient } = await this.patients.findOrCreateByPhone(
@@ -86,6 +99,7 @@ export class PublicBookingService {
             // Kept as typed so reception can review a name mismatch.
             bookedName: normalizePersonName(dto.name),
             bookedById: null,
+            requestedPackageId: requested?.id ?? null,
           },
           actor,
         );
@@ -97,9 +111,40 @@ export class PublicBookingService {
           startAt: this.time.toIso(appointment.startAt),
           endAt: this.time.toIso(appointment.endAt),
           status: appointment.status,
+          packageName: requested?.name ?? null,
         };
       }),
     );
+  }
+
+  // The package picked online must be one GET /public/packages offers for
+  // this doctor and service. Nothing is sold here: reception sells it.
+  private async offeredPackage(
+    packageId: string,
+    doctorId: string,
+    serviceId: string,
+    manager: EntityManager,
+  ): Promise<Package> {
+    const pkg = await manager
+      .getRepository(Package)
+      .createQueryBuilder('pkg')
+      .where('pkg.id = :packageId', { packageId })
+      .andWhere('pkg.isActive = true AND pkg.isPublic = true')
+      .andWhere('pkg.deletedAt IS NULL')
+      .andWhere('pkg.serviceId = :serviceId', { serviceId })
+      .andWhere(
+        `(pkg.allDoctors OR EXISTS (SELECT 1 FROM package_doctors pd
+          WHERE pd.package_id = pkg.id AND pd.doctor_id = :doctorId))`,
+        { doctorId },
+      )
+      .getOne();
+    if (!pkg) {
+      throw unprocessable(
+        ErrorCode.PACKAGE_NOT_OFFERED,
+        'This package is not offered for this doctor and service',
+      );
+    }
+    return pkg;
   }
 
   /**

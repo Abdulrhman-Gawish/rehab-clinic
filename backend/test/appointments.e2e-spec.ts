@@ -42,6 +42,7 @@ const at = (time: string, date = TUESDAY) => `${date}T${time}:00+02:00`;
 const PUBLIC_RESPONSE_KEYS = [
   'doctorName',
   'endAt',
+  'packageName',
   'referenceCode',
   'serviceName',
   'startAt',

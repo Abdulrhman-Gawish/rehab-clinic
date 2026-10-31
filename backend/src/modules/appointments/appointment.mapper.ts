@@ -21,13 +21,18 @@ import type { Appointment } from './entities/appointment.entity.js';
 
 type ToIso = (instant: Date) => string;
 
-// Requires patient, doctor.user, service and bookedBy to be loaded.
+// Requires patient, doctor.user, service, bookedBy and requestedPackage.
 export function toAppointmentResponse(
   appointment: Appointment,
   toIso: ToIso,
 ): AppointmentResponseDto {
-  const { patient, doctor, service } = appointment;
-  if (!patient || !doctor?.user || !service) {
+  const { patient, doctor, service, requestedPackage: requested } = appointment;
+  if (
+    !patient ||
+    !doctor?.user ||
+    !service ||
+    (appointment.requestedPackageId && !requested)
+  ) {
     throw new Error('Appointment relations are not loaded');
   }
   return {
@@ -50,6 +55,9 @@ export function toAppointmentResponse(
     rescheduledFromId: appointment.rescheduledFromId,
     cancelReason: appointment.cancelReason,
     notes: appointment.notes,
+    requestedPackage: requested
+      ? { id: requested.id, name: requested.name }
+      : null,
     createdAt: appointment.createdAt,
     updatedAt: appointment.updatedAt,
   };
@@ -149,6 +157,7 @@ export function toDayListEntry(
     service: dto.service,
     notes: dto.notes,
     cancelReason: dto.cancelReason,
+    requestedPackage: dto.requestedPackage,
     ...visitColumns(info, session, allowedActions, withBilling, toIso),
   };
 }
@@ -184,6 +193,7 @@ export function toWalkInDayListEntry(
     },
     notes: null,
     cancelReason: info.visit.voidReason,
+    requestedPackage: null,
     ...visitColumns(info, session, allowedActions, withBilling, toIso),
   };
 }

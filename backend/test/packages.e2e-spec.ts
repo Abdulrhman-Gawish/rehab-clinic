@@ -2,6 +2,7 @@
 import type { App } from 'supertest/types.js';
 import { UserRole } from '../src/common/enums/user-role.enum.js';
 import { CLOCK } from '../src/common/time/clinic-time.service.js';
+import { Appointment } from '../src/modules/appointments/entities/appointment.entity.js';
 import { AuditAction } from '../src/modules/audit/audit.constants.js';
 import {
   AuditService,
@@ -24,6 +25,7 @@ import {
   insertAppointment,
   insertPatient,
   insertService,
+  insertWeeklySchedule,
 } from './utils/factories.js';
 import {
   createTestApp,
@@ -439,6 +441,79 @@ describe('Packages (e2e)', () => {
         doctors: [{ id: doctorA.doctorId, name: expect.any(String) }],
       });
       expect(res.body[0].doctors).toHaveLength(1);
+    });
+  });
+
+  // ---------- picking a package when booking online ----------
+
+  describe('public booking', () => {
+    const book = (body: Record<string, unknown>) =>
+      request(server)
+        .post('/api/v1/public/appointments')
+        .send({
+          name: 'Omar Online',
+          phone: '01012345678',
+          doctorId: doctorA.doctorId,
+          serviceId: physioId,
+          startAt: '2026-11-04T10:00:00+02:00',
+          ...body,
+        });
+
+    beforeEach(async () => {
+      await insertWeeklySchedule(ctx.dataSource, doctorA.doctorId);
+      await insertWeeklySchedule(ctx.dataSource, doctorB.doctorId);
+    });
+
+    it('the patient can pick a package; reception sees the request, nothing is sold', async () => {
+      const pkg = await createPackage();
+      const res = await book({ packageId: pkg.id }).expect(201);
+      expect(res.body.packageName).toBe('3 physio sessions');
+
+      const found = await as(receptionist)
+        .get(`/appointments/by-reference/${res.body.referenceCode}`)
+        .expect(200);
+      expect(found.body.requestedPackage).toEqual({
+        id: pkg.id,
+        name: '3 physio sessions',
+      });
+      const day = await as(receptionist)
+        .get('/appointments/day?date=2026-11-04')
+        .expect(200);
+      expect(day.body[0].requestedPackage).toEqual(found.body.requestedPackage);
+      expect(await ctx.dataSource.getRepository(PatientPackage).count()).toBe(
+        0,
+      );
+      expect(await ctx.dataSource.getRepository(Invoice).count()).toBe(0);
+
+      // Without a package the booking works as before.
+      const plain = await book({
+        phone: '01112345678',
+        startAt: '2026-11-04T11:00:00+02:00',
+      }).expect(201);
+      expect(plain.body.packageName).toBeNull();
+    });
+
+    it('only a package offered for this doctor and service can be picked', async () => {
+      const onlyB = await createPackage({
+        allDoctors: undefined,
+        doctorIds: [doctorB.doctorId],
+      });
+      const massage = await createPackage({
+        name: 'Massage pack',
+        serviceId: massageId,
+      });
+      const hidden = await createPackage({ name: 'Hidden', isPublic: false });
+      const off = await createPackage({ name: 'Off' });
+      await as(owner).patch(`/packages/${off.id}/deactivate`).expect(200);
+
+      for (const pkg of [onlyB, massage, hidden, off]) {
+        const res = await book({ packageId: pkg.id }).expect(422);
+        expect(res.body.code).toBe('PACKAGE_NOT_OFFERED');
+      }
+      expect(await ctx.dataSource.getRepository(Appointment).count()).toBe(0);
+      await book({ packageId: onlyB.id, doctorId: doctorB.doctorId }).expect(
+        201,
+      );
     });
   });
 

@@ -66,6 +66,7 @@ export interface NewAppointment {
   bookedById: string | null;
   rescheduledFromId?: string | null;
   notes?: string | null;
+  requestedPackageId?: string | null;
 }
 
 /**
@@ -101,6 +102,7 @@ export class AppointmentWriter {
         rescheduledFromId: data.rescheduledFromId ?? null,
         cancelReason: null,
         notes: data.notes ?? null,
+        requestedPackageId: data.requestedPackageId ?? null,
       }),
     );
 
@@ -129,6 +131,7 @@ export class AppointmentWriter {
           source: appointment.source,
           bookedName: appointment.bookedName,
           rescheduledFromId: appointment.rescheduledFromId,
+          requestedPackageId: appointment.requestedPackageId,
         },
       },
       manager,

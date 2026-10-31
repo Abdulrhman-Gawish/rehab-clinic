@@ -114,6 +114,15 @@ export class PublicBookingDto {
   @IsIsoWithOffset()
   startAt: string;
 
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'A package the patient wants (GET /public/packages: same service, offered by this doctor). Only a request: it is sold and paid at the clinic.',
+  })
+  @IsOptional()
+  @IsUUID()
+  packageId?: string;
+
   // Honeypot: hidden in the website form, so humans leave it empty.
   @ApiPropertyOptional({
     description: 'Anti-bot honeypot. Must be omitted or empty.',
@@ -242,6 +251,14 @@ export class AppointmentServiceDto {
   durationMinutes: number;
 }
 
+export class RequestedPackageDto {
+  @ApiProperty({ format: 'uuid', description: 'The package (catalog) id' })
+  id: string;
+
+  @ApiProperty({ example: '10 physio sessions' })
+  name: string;
+}
+
 export class AppointmentResponseDto {
   @ApiProperty({ format: 'uuid' })
   id: string;
@@ -294,6 +311,14 @@ export class AppointmentResponseDto {
 
   @ApiProperty({ nullable: true, type: String })
   notes: string | null;
+
+  @ApiProperty({
+    type: RequestedPackageDto,
+    nullable: true,
+    description:
+      'Package picked when booking online: sell it at the desk (POST /patients/:id/packages)',
+  })
+  requestedPackage: RequestedPackageDto | null;
 
   @ApiProperty()
   createdAt: Date;
@@ -394,6 +419,13 @@ export class DayListEntryDto {
   })
   cancelReason: string | null;
 
+  @ApiProperty({
+    type: RequestedPackageDto,
+    nullable: true,
+    description: 'Package the patient asked for when booking online',
+  })
+  requestedPackage: RequestedPackageDto | null;
+
   @ApiProperty({ format: 'uuid', nullable: true, type: String })
   visitId: string | null;
 
@@ -481,4 +513,12 @@ export class PublicBookingResponseDto {
 
   @ApiProperty({ enum: [AppointmentStatus.PENDING] })
   status: AppointmentStatus;
+
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    example: '10 physio sessions',
+    description: 'The package requested (bought and paid at the clinic)',
+  })
+  packageName: string | null;
 }

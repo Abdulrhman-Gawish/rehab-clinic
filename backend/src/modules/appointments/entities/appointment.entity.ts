@@ -12,6 +12,7 @@ import {
 import { BaseEntity } from '../../../common/entities/base.entity.js';
 import { ClinicService } from '../../clinic-services/entities/clinic-service.entity.js';
 import { Doctor } from '../../doctors/entities/doctor.entity.js';
+import { Package } from '../../packages/entities/package.entity.js';
 import { Patient } from '../../patients/entities/patient.entity.js';
 import { User } from '../../users/entities/user.entity.js';
 import {
@@ -120,4 +121,13 @@ export class Appointment extends BaseEntity {
   // Administrative notes only, never medical information.
   @Column({ type: 'text', nullable: true })
   notes: string | null;
+
+  // The package the patient picked when booking online: only a request;
+  // reception sells it at the desk (nothing is sold or paid online).
+  @Column({ type: 'uuid', nullable: true })
+  requestedPackageId: string | null;
+
+  @ManyToOne(() => Package, { nullable: true, onDelete: 'RESTRICT' })
+  @JoinColumn({ foreignKeyConstraintName: 'fk_appointments_requested_package' })
+  requestedPackage?: Relation<Package> | null;
 }

@@ -225,6 +225,7 @@ Business errors also carry a stable machine-readable `code`:
 | `OFFER_EXCEEDS_PRICE` | 422 | A FIXED package offer above the package price |
 | `PACKAGE_INACTIVE` | 422 | Selling a deactivated package (or one whose service is inactive) |
 | `PACKAGE_NOT_USABLE` | 422 | The chosen `patientPackageId` can't pay this session: cancelled, no sessions left, other service, or the doctor isn't covered |
+| `PACKAGE_NOT_OFFERED` | 422 | Online booking picked a package that isn't active, public, for that service, or offered by that doctor |
 | `PACKAGE_CANCELLED` | 422 | Cancelling a package twice |
 | `PACKAGE_INVOICE` | 422 | Editing the items of a package sale's invoice, or cancelling it while the package isn't cancelled |
 | `SERVICE_HAS_PACKAGES` | 422 | Deleting a service that still has packages (delete them first) |
@@ -634,6 +635,7 @@ A package is **N sessions of one service for a total price**. Patients pay at th
 - **Offer:** `{ type: PERCENT | FIXED, value, startsOn?, endsOn? }` (local dates, inclusive, open-ended when null). While it is active, selling price = price − offer. PERCENT is at most 100 (400), FIXED at most the price (422 `OFFER_EXCEEDS_PRICE`); CHECK `chk_packages_offer` guards both.
 - `GET /packages` (paginated, `isActive` filter) and `GET /packages/:id` return the doctors, the offer, `offerActive` and today's `sellingPrice`.
 - `GET /public/packages`: active, public packages of an active service, with only `id, name, service { id, name }, sessionsCount, price, sellingPrice, offerEndsOn` (null without an active offer), `allDoctors` and `doctors [{ id, name }]` (only doctors the website shows), so the booking page can offer the packages of the chosen doctor and service. Packages are bought at the desk; there is no online sale.
+- **Picking a package when booking online:** `POST /public/appointments` takes an optional `packageId`. It must be one `/public/packages` offers for that doctor and service (else 422 `PACKAGE_NOT_OFFERED`). It is only a **request**, stored as `appointments.requested_package_id`: nothing is sold, no invoice is created. Appointments and day-list rows show `requestedPackage: { id, name }`, and a reschedule keeps it. Reception sells it at the desk (`POST /patients/:id/packages`) and attends with that patient package, so the first session is covered.
 
 **Selling** (`POST /patients/:id/packages { packageId }`, OWNER/RECEPTIONIST): one transaction creates the `patient_packages` row and its invoice (no visit, one line at today's selling price). Name, service, sessions, list price, offer amount and price are **snapshots**. The allowed doctors are **not**: a sold package follows the package's current doctor list. A deactivated package can't be sold (422 `PACKAGE_INACTIVE`).
 - The patient pays all or part with the normal payments; the rest is their balance. Reception can add a normal invoice discount. The line itself is fixed, and the invoice can be cancelled only after the package is (`PACKAGE_INVOICE`).

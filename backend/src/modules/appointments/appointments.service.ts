@@ -248,6 +248,7 @@ export class AppointmentsService {
             bookedById: actor.userId,
             rescheduledFromId: old.id,
             notes: old.notes,
+            requestedPackageId: old.requestedPackageId,
           },
           actor,
         );
@@ -615,7 +616,8 @@ export class AppointmentsService {
       .innerJoinAndSelect('appointment.doctor', 'doctor')
       .innerJoinAndSelect('doctor.user', 'doctorUser')
       .innerJoinAndSelect('appointment.service', 'service')
-      .leftJoinAndSelect('appointment.bookedBy', 'bookedBy');
+      .leftJoinAndSelect('appointment.bookedBy', 'bookedBy')
+      .leftJoinAndSelect('appointment.requestedPackage', 'requestedPackage');
   }
 
   // DOCTOR users only ever see their own appointments.
