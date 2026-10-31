@@ -12,7 +12,11 @@ export function PublicBooking() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [done, setDone] = useState<any>(null);
+  const [packages] = useLoad(() => get<any[]>('/public/packages', { noAuth: true }), []);
   const doctor = doctors?.find((d) => d.id === doctorId);
+  // Packages of the chosen service that this doctor offers.
+  const offered = (packages ?? []).filter((p) => p.service.id === serviceId
+    && (p.allDoctors || p.doctors.some((d: any) => d.id === doctorId)));
   const [slots] = useLoad(
     () => (doctorId && serviceId ? get<any[]>(`/public/doctors/${doctorId}/slots${qs({ serviceId, date })}`, { noAuth: true }) : Promise.resolve([])),
     [doctorId, serviceId, date],
@@ -41,6 +45,18 @@ export function PublicBooking() {
           <label key={s.id}><input type="radio" checked={serviceId === s.id} onChange={() => { setServiceId(s.id); setStartAt(''); }} /> {s.name} — {s.durationMinutes} min — {s.price} EGP</label>
         ))}
       </>}
+      {offered.length > 0 && (
+        <div className="box">
+          <b>Save with a package</b>
+          {offered.map((p) => (
+            <div key={p.id}>
+              {p.name}: {p.sessionsCount} sessions for <b>{p.sellingPrice} EGP</b>
+              {p.sellingPrice !== p.price && <> <s>{p.price}</s>{p.offerEndsOn && <small> (offer until {p.offerEndsOn})</small>}</>}
+            </div>
+          ))}
+          <small>Ask at reception: packages are bought and paid at the clinic.</small>
+        </div>
+      )}
       {serviceId && <>
         <h4>3. Date and time</h4>
         <input type="date" value={date} onChange={(e) => { setDate(e.target.value); setStartAt(''); }} />
