@@ -1,0 +1,13 @@
+// The blog's sections, in the order the website lists them. The frontend
+// translates the codes like every enum.
+export enum BlogCategory {
+  NEUROLOGICAL = 'NEUROLOGICAL',
+  ORTHOPEDIC_SPINE = 'ORTHOPEDIC_SPINE',
+  SPORTS_INJURIES = 'SPORTS_INJURIES',
+  NUTRITION_BODY_SHAPING = 'NUTRITION_BODY_SHAPING',
+  CHEST = 'CHEST',
+  OBSTETRICS_GYNECOLOGY = 'OBSTETRICS_GYNECOLOGY',
+  CARDIAC = 'CARDIAC',
+  INTERNAL_GERIATRIC = 'INTERNAL_GERIATRIC',
+  OTHER = 'OTHER',
+}

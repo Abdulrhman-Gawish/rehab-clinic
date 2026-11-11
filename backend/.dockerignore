@@ -1,0 +1,12 @@
+# Allow-list: only what the image build reads. Everything else (.env, storage/ uploads, node_modules, dist, tests,
+# coverage, docs) never enters the build context, so it can't leak into an image or bust the cache.
+*
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.build.json
+!nest-cli.json
+!src/
+!docker-entrypoint.sh
+# Unit tests live next to the code; the build ignores them anyway.
+src/**/*.spec.ts

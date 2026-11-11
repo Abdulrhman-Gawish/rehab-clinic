@@ -1,0 +1,27 @@
+# The whole clinic in containers. Each service is defined once, in its own folder; this file only puts them together.
+#
+#   database/docker-compose.yml   db        PostgreSQL 16, volume db_data, no published port
+#   backend/docker-compose.yml    backend   NestJS API; waits for the database, runs the pending migrations and creates
+#                                           the first OWNER on a fresh database; volume storage (uploads)
+#   frontend/docker-compose.yml   frontend  nginx: the UI on http://localhost:8080, forwards /api to the backend
+#
+#   docker compose up -d --build --wait   build, start everything and wait until all three are healthy
+#   docker compose logs -f                follow the logs
+#   docker compose down                   stop and remove the containers; the volumes (data, uploads) are kept
+#
+# No start order is needed: the backend waits for the database itself (docker-entrypoint.sh), and nginx starts without
+# the backend (the API answers 502 for the few seconds until it is up).
+#
+# Configuration: database/.env, backend/.env and frontend/.env, from the .env.example next to each.
+# Full guide: docs/DOCKER.md. Never add -v to `down` unless you mean to delete the database and the uploads.
+#
+# Networks: "data" (db + backend, internal) and "web" (backend + frontend); the frontend can't reach the database.
+# Everything is in one Compose project, "rehab-clinic", also when a service's own file is used: the containers,
+# volumes and networks are the same ones, never duplicates.
+
+name: rehab-clinic
+
+include:
+  - database/docker-compose.yml
+  - backend/docker-compose.yml
+  - frontend/docker-compose.yml

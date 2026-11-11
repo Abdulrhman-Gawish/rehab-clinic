@@ -1,0 +1,220 @@
+/* =========================================================
+   Rehab design tokens.
+   Source of truth: docs/visual-identity/DESIGN_SYSTEM_PROPOSAL.md (values identical to
+   FRONTEND_IMPLEMENTATION_GUIDE.md section 2). Components use the role tokens, never raw hex values:
+   if a value has no token, add a token.
+   ========================================================= */
+:root {
+  /* ---------- Brand green (primary) ---------- */
+  --color-green-50:  #EDF7F0;
+  --color-green-100: #D2EDDB;
+  --color-green-200: #A6DBB8;
+  --color-green-300: #72C390;
+  --color-green-400: #47AC6A;
+  --color-green-500: #309C53; /* legacy --Primary-Color; logo #309C52 */
+  --color-green-600: #278545; /* white text 4.64:1, primary buttons */
+  --color-green-700: #1F6C38;
+  --color-green-800: #18552C;
+  --color-green-900: #113D20;
+
+  /* ---------- Brand orange (accent) ---------- */
+  --color-orange-50:  #FEF4EA;
+  --color-orange-100: #FDE4CA;
+  --color-orange-200: #FCCB97;
+  --color-orange-300: #FAB365;
+  --color-orange-400: #F9A54C;
+  --color-orange-500: #F89A3A; /* legacy --Main-Color; exact logo orange */
+  --color-orange-600: #E07F1F;
+  --color-orange-700: #B4621A;
+  --color-orange-800: #874A16;
+  --color-orange-900: #5F3511;
+
+  /* ---------- Neutrals (cool grey) ---------- */
+  --color-white:       #FFFFFF;
+  --color-neutral-50:  #F6F8F8;
+  --color-neutral-100: #EDF1F1; /* legacy input fill */
+  --color-neutral-200: #DDE3E4;
+  --color-neutral-300: #C4CDCF;
+  --color-neutral-400: #85929A;
+  --color-neutral-500: #5F6C72;
+  --color-neutral-600: #4C585E;
+  --color-neutral-700: #3D474C;
+  --color-neutral-800: #2B3235;
+  --color-neutral-900: #232323; /* legacy --Headlines-Color */
+  --color-slate:       #4A6F8A; /* legacy --Regular-Font-Color */
+
+  /* ---------- Error / info scales ---------- */
+  --color-error-50:  #FDECEC;
+  --color-error-100: #F9CFCF;
+  --color-error-600: #DA1B1B;
+  --color-error-700: #B71717;
+  --color-error-800: #8F1212;
+  --color-info-50:   #EAF3FD;
+  --color-info-100:  #C8E0FA;
+  --color-info-600:  #1E6FC2;
+  --color-info-700:  #185A9E;
+  --color-info-800:  #11437A;
+
+  /* ---------- Semantic aliases ---------- */
+  --color-success-bg:     var(--color-green-50);
+  --color-success-border: var(--color-green-200);
+  --color-success-solid:  var(--color-green-600);
+  --color-success-text:   var(--color-green-700);
+  --color-warning-bg:     var(--color-orange-50);
+  --color-warning-border: var(--color-orange-300);
+  --color-warning-solid:  var(--color-orange-500);
+  --color-warning-text:   var(--color-orange-800);
+  --color-error-bg:       var(--color-error-50);
+  --color-error-border:   var(--color-error-100);
+  --color-error-solid:    var(--color-error-600);
+  --color-error-text:     var(--color-error-700);
+  --color-info-bg:        var(--color-info-50);
+  --color-info-border:    var(--color-info-100);
+  --color-info-solid:     var(--color-info-600);
+  --color-info-text:      var(--color-info-700);
+
+  /* ---------- Role tokens (use these in components) ---------- */
+  --color-bg:              var(--color-white);
+  --color-bg-subtle:       var(--color-neutral-50);
+  --color-surface:         var(--color-white);
+  --color-surface-muted:   var(--color-neutral-100);
+  --color-surface-brand:   var(--color-green-50);
+  --color-surface-accent:  var(--color-orange-50);
+  --color-surface-inverse: var(--color-green-700);
+  --color-text:            var(--color-neutral-900);
+  --color-text-secondary:  var(--color-slate);
+  --color-text-muted:      var(--color-neutral-500);
+  --color-text-inverse:    var(--color-white);
+  --color-text-link:       var(--color-green-700);
+  --color-text-brand:      var(--color-green-600);
+  --color-border:          var(--color-neutral-200);
+  --color-border-input:    var(--color-neutral-300);
+  --color-border-strong:   var(--color-neutral-400);
+  --color-brand:           var(--color-green-500);
+  --color-primary:         var(--color-green-600);
+  --color-primary-hover:   var(--color-green-700);
+  --color-primary-active:  var(--color-green-800);
+  --color-primary-subtle:  var(--color-green-50);
+  --color-on-primary:      var(--color-white);
+  --color-accent:          var(--color-orange-500);
+  --color-accent-hover:    var(--color-orange-600);
+  --color-on-accent:       var(--color-neutral-900);
+  --color-focus:           var(--color-green-600);
+  --color-overlay:         rgba(35, 35, 35, 0.5);
+  --color-banner-overlay:  rgba(17, 61, 32, 0.62);
+
+  /* ---------- Typography ---------- */
+  --font-arabic: "Noto Kufi Arabic";
+  --font-latin:  "Inter";
+  --font-sans:   var(--font-arabic), var(--font-latin), system-ui, -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+  --font-mono:   ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  --font-weight-regular:   400;
+  --font-weight-medium:    500;
+  --font-weight-semibold:  600;
+  --font-weight-bold:      700;
+  --font-weight-extrabold: 800;
+
+  --text-display: clamp(2.25rem, 1.8rem + 2vw, 3.5rem);    --leading-display: 1.25;
+  --text-h1:      clamp(1.875rem, 1.6rem + 1.25vw, 2.75rem); --leading-h1: 1.3;
+  --text-h2:      clamp(1.5rem, 1.35rem + 0.75vw, 2.125rem); --leading-h2: 1.35;
+  --text-h3:      clamp(1.25rem, 1.18rem + 0.35vw, 1.5rem);  --leading-h3: 1.4;
+  --text-h4:      1.125rem;  --leading-h4: 1.5;
+  --text-body-lg: 1.125rem;  --leading-body-lg: 1.8;
+  --text-body:    1rem;      --leading-body: 1.75;
+  --text-body-sm: 0.875rem;  --leading-body-sm: 1.7;
+  --text-caption: 0.75rem;   --leading-caption: 1.6;
+  --text-label:   0.875rem;  --leading-label: 1.5;
+  --text-button:  1rem;      --leading-button: 1.25;
+  --text-stat:    clamp(1.75rem, 1.4rem + 1.4vw, 2.5rem); --leading-stat: 1.2;
+
+  /* ---------- Spacing (4px base) ---------- */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+  --space-32: 128px;
+
+  /* ---------- Layout ---------- */
+  --container-sm: 640px;
+  --container-md: 768px;
+  --container-lg: 1024px;
+  --container-xl: 1280px;
+  --container-2xl: 1440px;
+  --gutter: 16px;            /* 24px >=640, 32px >=1024 */
+  --section-space: var(--space-16); /* 96px >=1024 */
+
+  --control-h-sm: 36px;
+  --control-h-md: 44px;
+  --control-h-lg: 52px;
+  --input-h: 48px;
+  --input-h-dense: 40px;
+  --header-h: 64px;          /* 72px >=1024 */
+  --utility-bar-h: 40px;
+  --sidebar-w: 264px;
+  --sidebar-w-collapsed: 72px;
+  --topbar-h: 64px;
+
+  --icon-xs: 16px;
+  --icon-sm: 20px;
+  --icon-md: 24px;
+  --icon-lg: 32px;
+  --icon-xl: 48px;
+
+  /* ---------- Radius ---------- */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;         /* legacy signature radius */
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
+
+  /* ---------- Borders & focus ---------- */
+  --border-width: 1px;
+  --border-width-strong: 2px;
+  --focus-ring: 2px solid var(--color-focus);
+  --ring-input-focus: 0 0 0 3px rgba(48, 156, 83, 0.25);
+
+  /* ---------- Shadows ---------- */
+  --shadow-xs: 0 1px 2px rgba(35, 35, 35, 0.05);
+  --shadow-sm: 0 1px 3px rgba(35, 35, 35, 0.06), 0 1px 2px rgba(35, 35, 35, 0.04);
+  --shadow-md: 0 4px 20px rgba(35, 35, 35, 0.07);
+  --shadow-lg: 0 12px 32px rgba(35, 35, 35, 0.10);
+  --shadow-xl: 0 24px 48px rgba(35, 35, 35, 0.14);
+
+  /* ---------- Motion ---------- */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+
+  /* ---------- Z-index ---------- */
+  --z-raised: 10;
+  --z-dropdown: 1000;
+  --z-sticky: 1100;
+  --z-fab: 1150;
+  --z-overlay: 1200;
+  --z-modal: 1300;
+  --z-popover: 1400;
+  --z-toast: 1500;
+}
+
+/* Breakpoints (mobile-first). CSS variables cannot be used inside media queries:
+   sm 640px · md 768px · lg 1024px · xl 1280px · 2xl 1536px */
+@media (min-width: 640px)  { :root { --gutter: 24px; } }
+@media (min-width: 1024px) { :root { --gutter: 32px; --section-space: var(--space-24); --header-h: 72px; } }
+
+/* Script-aware font stacks */
+:root:lang(en) {
+  --font-sans: var(--font-latin), var(--font-arabic), system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+}

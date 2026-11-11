@@ -1,0 +1,3 @@
+# The image copies nothing from this folder; keep the build context empty (and .env out of it).
+*
+!Dockerfile

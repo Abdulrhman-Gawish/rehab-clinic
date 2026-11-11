@@ -1,0 +1,9 @@
+node_modules
+dist
+.vite
+# Local settings (frontend/.env.example is the template)
+.env
+.env.*
+!.env.example
+# Originals copied once from the legacy website; large, not served.
+design-source

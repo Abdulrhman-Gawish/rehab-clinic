@@ -1,0 +1,56 @@
+# The backend API on its own. The root docker-compose.yml includes this file (project "rehab-clinic"), so both manage
+# the same container and the same uploads volume.
+#
+#   docker compose -f backend/docker-compose.yml build
+#   docker compose -f backend/docker-compose.yml up -d      # needs the db service up: database/docker-compose.yml
+#   docker compose -f backend/docker-compose.yml logs -f
+#
+# On every start the container waits for the database, runs the pending migrations and creates the first OWNER on a
+# fresh database (docker-entrypoint.sh); then it serves http://127.0.0.1:${BACKEND_PORT:-3000}/api/v1.
+#
+# Configuration:
+#   backend/.env    application settings and secrets (copy backend/.env.example)
+#   database/.env   DB_DATABASE / DB_USERNAME / DB_PASSWORD, shared with the db service; it is loaded after
+#                   backend/.env, so its values win over the DB_* lines there (those are for running without Docker)
+# The values under `environment:` are fixed by this Docker setup and win over both files.
+#
+# Local development without Docker for the API uses docker-compose.dev.yml (a separate database) instead.
+
+name: rehab-clinic
+
+services:
+  backend:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - path: .env
+      - path: ../database/.env
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      # The db service on the internal "data" network.
+      DB_HOST: db
+      DB_PORT: '5432'
+      STORAGE_LOCAL_PATH: /app/storage
+      # Requests arrive through the frontend's nginx (one proxy hop), so the audit log records the client IP.
+      TRUST_PROXY: 'true'
+    ports:
+      # Loopback only: for Swagger and checks from this machine. Browsers reach the API through the frontend (/api).
+      - '127.0.0.1:${BACKEND_PORT:-3000}:3000'
+    volumes:
+      # Uploaded files (expense receipts, patient attachments, blog covers). Survives recreation and rebuilds.
+      - storage:/app/storage
+    networks:
+      - data
+      - web
+    stop_grace_period: 30s
+
+networks:
+  # To the database (internal: no route outside Docker).
+  data:
+    internal: true
+  # To the frontend's nginx.
+  web:
+
+volumes:
+  storage:

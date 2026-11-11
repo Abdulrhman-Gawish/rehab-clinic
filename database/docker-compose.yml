@@ -1,0 +1,41 @@
+# The clinic database on its own (PostgreSQL 16). The root docker-compose.yml includes this file, so both manage the
+# same container and the same volume (project "rehab-clinic"): running one after the other never creates a second
+# database.
+#
+#   docker compose -f database/docker-compose.yml build
+#   docker compose -f database/docker-compose.yml up -d
+#   docker compose -f database/docker-compose.yml ps          # STATUS shows (healthy)
+#   docker compose -f database/docker-compose.yml stop        # keeps the container and the data
+#
+# Configuration: database/.env (copy database/.env.example). The backend container reads the same file, so the
+# credentials are written once.
+#
+# No port is published: only containers on the "data" network (the backend) can connect. For a psql shell use
+#   docker compose -f database/docker-compose.yml exec db psql -U clinic_user -d clinic_db
+
+name: rehab-clinic
+
+services:
+  db:
+    build: .
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-clinic_db}
+      POSTGRES_USER: ${DB_USERNAME:-clinic_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in database/.env (copy database/.env.example)}
+    volumes:
+      # Survives `docker compose down`, container recreation and image rebuilds. Only `down -v` or
+      # `docker volume rm` delete it.
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - data
+    # Let PostgreSQL finish a clean shutdown instead of being killed after Docker's default 10 s.
+    stop_grace_period: 1m
+
+networks:
+  # Database traffic only (db + backend). Internal: no route to or from outside Docker.
+  data:
+    internal: true
+
+volumes:
+  db_data:

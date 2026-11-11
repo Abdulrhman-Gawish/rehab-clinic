@@ -1,0 +1,305 @@
+import {
+  ForbiddenException,
+  HttpStatus,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
+import { UserRole } from '../../common/enums/user-role.enum.js';
+import { AppException, ErrorCode } from '../../common/errors/app.exception.js';
+import type {
+  Actor,
+  JwtPayload,
+} from '../../common/interfaces/authenticated-request.interface.js';
+import {
+  hashPassword,
+  verifyPassword,
+} from '../../common/utils/password.util.js';
+import { diffValues } from '../audit/audit-diff.util.js';
+import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
+import { AuditService } from '../audit/audit.service.js';
+import { Doctor } from '../doctors/entities/doctor.entity.js';
+import { UserResponseDto } from '../users/dto/user.dto.js';
+import { User } from '../users/entities/user.entity.js';
+import type {
+  AuthUserDto,
+  IssuedTokens,
+  LoginDto,
+  UpdateMeDto,
+} from './dto/auth.dto.js';
+import {
+  ACCESS_TOKEN_TTL_SECONDS,
+  REFRESH_RACE_GRACE_SECONDS,
+} from './auth.constants.js';
+import { RefreshTokensService } from './refresh-tokens.service.js';
+
+const INVALID_CREDENTIALS = 'Invalid email or password';
+const INVALID_REFRESH_TOKEN = 'Invalid or expired refresh token';
+
+type RefreshOutcome =
+  | { kind: 'ok'; tokens: IssuedTokens }
+  | { kind: 'invalid' }
+  | { kind: 'race' }
+  | { kind: 'reused'; userId: string };
+
+@Injectable()
+export class AuthService {
+  // Hash verified when the email is unknown, so response time doesn't reveal
+  // which emails exist.
+  private dummyHash?: Promise<string>;
+
+  constructor(
+    @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly jwtService: JwtService,
+    private readonly refreshTokens: RefreshTokensService,
+    private readonly auditService: AuditService,
+  ) {}
+
+  async login(
+    dto: LoginDto,
+    ip: string | null,
+  ): Promise<IssuedTokens & { user: AuthUserDto }> {
+    const email = dto.email.trim().toLowerCase();
+    const user = await this.users
+      .createQueryBuilder('user')
+      .addSelect('user.passwordHash')
+      .where('user.email = :email', { email })
+      .getOne();
+
+    const passwordOk = user
+      ? await verifyPassword(user.passwordHash, dto.password)
+      : await this.burnPasswordCheck(dto.password);
+
+    if (!user || !passwordOk) {
+      await this.logLoginFailure(
+        user?.id ?? null,
+        email,
+        'INVALID_CREDENTIALS',
+        ip,
+      );
+      throw new UnauthorizedException(INVALID_CREDENTIALS);
+    }
+    if (!user.isActive) {
+      await this.logLoginFailure(user.id, email, 'ACCOUNT_INACTIVE', ip);
+      throw new ForbiddenException('This account is deactivated');
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      user.lastLoginAt = new Date();
+      await manager.getRepository(User).update(user.id, {
+        lastLoginAt: user.lastLoginAt,
+      });
+      const tokens = await this.issueTokens(user, manager);
+      await this.auditService.log(
+        {
+          userId: user.id,
+          action: AuditAction.LOGIN,
+          entityType: AuditEntityType.USER,
+          entityId: user.id,
+          ip,
+        },
+        manager,
+      );
+      return { ...tokens, user: await this.toAuthUser(user, manager) };
+    });
+  }
+
+  /**
+   * Rotates a refresh token: the presented token is revoked and replaced by a
+   * new one valid for 7 more days (sliding expiry). A token rotated within the
+   * last REFRESH_RACE_GRACE_SECONDS answers REFRESH_RACE (the client lost a
+   * race against its own parallel refresh). Any other revoked token means it
+   * was stolen or replayed, so every token of that user is revoked.
+   */
+  async refresh(
+    token: string | null,
+    ip: string | null,
+  ): Promise<IssuedTokens> {
+    if (!token) throw new UnauthorizedException(INVALID_REFRESH_TOKEN);
+    const outcome = await this.dataSource.transaction(
+      async (manager): Promise<RefreshOutcome> => {
+        const stored = await this.refreshTokens.findByTokenForUpdate(
+          token,
+          manager,
+        );
+        if (!stored) return { kind: 'invalid' };
+
+        if (
+          stored.revokedAt &&
+          stored.replacedById &&
+          Date.now() - stored.revokedAt.getTime() <
+            REFRESH_RACE_GRACE_SECONDS * 1000
+        ) {
+          return { kind: 'race' };
+        }
+
+        if (stored.revokedAt) {
+          await this.refreshTokens.revokeAllForUser(stored.userId, manager);
+          await this.auditService.log(
+            {
+              userId: stored.userId,
+              action: AuditAction.REFRESH_TOKEN_REUSE_DETECTED,
+              entityType: AuditEntityType.USER,
+              entityId: stored.userId,
+              newValues: { refreshTokenId: stored.id },
+              ip,
+            },
+            manager,
+          );
+          return { kind: 'reused', userId: stored.userId };
+        }
+
+        if (stored.expiresAt.getTime() <= Date.now()) {
+          return { kind: 'invalid' };
+        }
+
+        const user = await manager
+          .getRepository(User)
+          .findOneBy({ id: stored.userId });
+        if (!user?.isActive) {
+          await this.refreshTokens.revokeAllForUser(stored.userId, manager);
+          return { kind: 'invalid' };
+        }
+
+        const tokens = await this.issueTokens(user, manager, stored.id);
+        return { kind: 'ok', tokens };
+      },
+    );
+
+    // Thrown after commit so revocations above are persisted.
+    if (outcome.kind === 'race') {
+      throw new AppException(
+        HttpStatus.UNAUTHORIZED,
+        ErrorCode.REFRESH_RACE,
+        'This refresh token was just rotated; retry with the newest one',
+      );
+    }
+    if (outcome.kind !== 'ok') {
+      throw new UnauthorizedException(INVALID_REFRESH_TOKEN);
+    }
+    return outcome.tokens;
+  }
+
+  // Idempotent: unknown or already revoked tokens are silently ignored.
+  async logout(token: string | null, ip: string | null): Promise<void> {
+    if (!token) return;
+    const userId = await this.refreshTokens.revokeToken(token);
+    if (userId) {
+      await this.auditService.log({
+        userId,
+        action: AuditAction.LOGOUT,
+        entityType: AuditEntityType.USER,
+        entityId: userId,
+        ip,
+      });
+    }
+  }
+
+  async me(actor: Actor): Promise<AuthUserDto> {
+    const user = actor.userId
+      ? await this.users.findOneBy({ id: actor.userId })
+      : null;
+    if (!user) throw new NotFoundException('User not found');
+    return this.toAuthUser(user, this.dataSource.manager);
+  }
+
+  /**
+   * The caller's own settings (only the language for now). The user id comes
+   * from the token, never from the request, so nobody can change another
+   * user's settings. Audited as USER_UPDATED when something changed.
+   */
+  async updateMe(actor: Actor, dto: UpdateMeDto): Promise<AuthUserDto> {
+    const user = await this.dataSource.transaction(async (manager) => {
+      const user = actor.userId
+        ? await manager.findOne(User, {
+            where: { id: actor.userId },
+            lock: { mode: 'pessimistic_write' },
+          })
+        : null;
+      if (!user) throw new NotFoundException('User not found');
+      const before = { ...user };
+      user.preferredLanguage = dto.preferredLanguage;
+      const changes = diffValues(before, user, ['preferredLanguage']);
+      if (!changes) return user;
+      const saved = await manager.getRepository(User).save(user);
+      await this.auditService.logAction(
+        actor,
+        AuditAction.USER_UPDATED,
+        AuditEntityType.USER,
+        user.id,
+        changes,
+        manager,
+      );
+      return saved;
+    });
+    return this.toAuthUser(user, this.dataSource.manager);
+  }
+
+  private async toAuthUser(
+    user: User,
+    manager: EntityManager,
+  ): Promise<AuthUserDto> {
+    const doctor =
+      user.role === UserRole.DOCTOR
+        ? await manager.findOne(Doctor, {
+            where: { userId: user.id },
+            select: { id: true },
+          })
+        : null;
+    return {
+      ...UserResponseDto.fromEntity(user),
+      doctorId: doctor?.id ?? null,
+    };
+  }
+
+  private async issueTokens(
+    user: User,
+    manager: EntityManager,
+    rotatedTokenId?: string,
+  ): Promise<IssuedTokens> {
+    const payload: JwtPayload = { sub: user.id, role: user.role };
+    const accessToken = await this.jwtService.signAsync(payload);
+    const refresh = await this.refreshTokens.issue(user.id, manager);
+    if (rotatedTokenId) {
+      await this.refreshTokens.markRotated(
+        rotatedTokenId,
+        refresh.entity.id,
+        manager,
+      );
+    }
+    return {
+      accessToken,
+      accessTokenExpiresIn: ACCESS_TOKEN_TTL_SECONDS,
+      refreshToken: refresh.token,
+      refreshTokenExpiresAt: refresh.entity.expiresAt,
+    };
+  }
+
+  private async burnPasswordCheck(password: string): Promise<false> {
+    this.dummyHash ??= hashPassword('timing-equalizer-not-a-real-password');
+    await verifyPassword(await this.dummyHash, password);
+    return false;
+  }
+
+  private logLoginFailure(
+    userId: string | null,
+    email: string,
+    reason: 'INVALID_CREDENTIALS' | 'ACCOUNT_INACTIVE',
+    ip: string | null,
+  ): Promise<void> {
+    // userId stays null: the caller is not authenticated. entityId points to
+    // the targeted account when it exists.
+    return this.auditService.log({
+      userId: null,
+      action: AuditAction.LOGIN_FAILED,
+      entityType: AuditEntityType.USER,
+      entityId: userId,
+      newValues: { email, reason },
+      ip,
+    });
+  }
+}

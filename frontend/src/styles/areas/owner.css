@@ -1,0 +1,75 @@
+/* Owner pages (users, doctors, services, packages, reports, audit): small additions on top of the shared components.
+   Tokens and logical properties only. */
+
+/* A muted note under a table. */
+.owner-note { display: flex; gap: var(--space-2); align-items: flex-start; margin-block-start: var(--space-3); font-size: var(--text-body-sm); color: var(--color-text-muted); }
+.owner-note .icon { --icon-size: 16px; margin-block-start: 4px; }
+
+.owner-badges { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.owner-override { width: 9rem; }
+
+/* Inline add forms at the bottom of a card: fields side by side, the button aligned with the inputs. */
+.owner-inline-form { display: grid; gap: var(--space-3); grid-template-columns: 1fr; }
+@media (min-width: 640px) { .owner-inline-form { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); } }
+.owner-submit { display: flex; align-items: flex-end; }
+.owner-submit .btn { width: 100%; }
+
+/* Weekly schedule: one line per weekday, its ranges as chips. */
+.owner-week { display: grid; }
+.owner-week > li { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: var(--space-3); align-items: center; padding-block: var(--space-3); border-block-end: var(--border-width) solid var(--color-border); }
+.owner-week > li:first-child { padding-block-start: 0; }
+.owner-week > li:last-child { border-block-end: 0; }
+.owner-week__day { font-weight: var(--font-weight-semibold); }
+.owner-week__ranges { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.owner-slot {
+  display: inline-flex; align-items: center; gap: 2px; min-height: 32px; padding-inline: 12px 2px; border-radius: var(--radius-full);
+  background: var(--color-success-bg); color: var(--color-success-text); font-size: var(--text-body-sm); font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+.owner-slot.is-inactive { background: var(--color-surface-muted); color: var(--color-text-muted); }
+.owner-slot.is-inactive bdi { text-decoration: line-through; }
+.owner-slot .icon-btn { width: 28px; height: 28px; color: inherit; border-radius: 50%; }
+.owner-slot .icon-btn .icon { --icon-size: 16px; }
+
+/* Extra line at the bottom of a flush (table) card. */
+.owner-card-foot { padding: var(--space-3) var(--space-4); border-block-start: var(--border-width) solid var(--color-border); background: var(--color-bg-subtle); }
+
+/* Date controls */
+.owner-day { flex-wrap: nowrap; }
+.owner-day .input { min-width: 9.5rem; }
+.owner-range { display: flex; flex-wrap: wrap; gap: var(--space-4); align-items: flex-end; }
+.owner-range > .field { flex: 1 1 10rem; max-width: 14rem; }
+.owner-presets { padding-block-end: 4px; }
+
+/* Revenue charts (no library): columns for time series, labelled bars for categories. */
+.owner-chart { display: grid; gap: var(--space-1); }
+.owner-chart__max { font-size: var(--text-caption); color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+/* A time axis is never mirrored: oldest on the left in both languages. */
+.owner-columns { direction: ltr; display: flex; align-items: flex-end; gap: 2px; height: 180px; border-block-end: var(--border-width) solid var(--color-border-input); }
+.owner-columns__col { flex: 1 1 0; min-width: 2px; height: 100%; display: flex; align-items: flex-end; }
+.owner-columns__bar { display: block; width: 100%; min-height: 2px; border-radius: 3px 3px 0 0; background: var(--color-brand); transition: height var(--duration-slow) var(--ease-standard); }
+.owner-columns__col:hover .owner-columns__bar { background: var(--color-green-700); }
+.owner-columns__axis { direction: ltr; display: flex; justify-content: space-between; gap: var(--space-4); font-size: var(--text-caption); color: var(--color-text-muted); }
+
+.owner-bars { display: grid; gap: var(--space-3); }
+.owner-bars li { display: grid; grid-template-columns: minmax(6rem, 30%) minmax(0, 1fr) auto; gap: var(--space-3); align-items: center; font-size: var(--text-body-sm); }
+.owner-bars__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owner-bars__track { display: block; height: 10px; border-radius: var(--radius-full); background: var(--color-surface-muted); overflow: hidden; }
+.owner-bars__fill { display: block; height: 100%; border-radius: inherit; background: var(--color-brand); }
+@media (max-width: 639.98px) {
+  .owner-bars li { grid-template-columns: minmax(0, 1fr) auto; row-gap: var(--space-1); }
+  .owner-bars__track { grid-column: 1 / -1; grid-row: 2; }
+}
+
+/* Expenses by payment method */
+.owner-methods { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(min(100%, 130px), 1fr)); }
+.owner-methods > div { padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-bg-subtle); }
+.owner-methods dt { font-size: var(--text-caption); color: var(--color-text-muted); }
+.owner-methods dd { font-weight: var(--font-weight-bold); font-variant-numeric: tabular-nums; }
+
+/* Audit log: old / new values under the row. */
+.table tr.owner-audit-detail > td, .table tbody tr.owner-audit-detail:hover > td { background: var(--color-bg-subtle); padding-block: var(--space-3) var(--space-4); }
+.owner-values { display: grid; gap: var(--space-4); grid-template-columns: 1fr; }
+@media (min-width: 768px) { .owner-values { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.owner-values > div { min-width: 0; overflow-wrap: anywhere; padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-surface); border: var(--border-width) solid var(--color-border); }
+.owner-values h3 { font-size: var(--text-caption); font-weight: var(--font-weight-semibold); color: var(--color-text-muted); margin-block-end: var(--space-1); }

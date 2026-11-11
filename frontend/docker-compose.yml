@@ -1,0 +1,29 @@
+# The clinic UI on its own (nginx serving the production build). The root docker-compose.yml includes this file
+# (project "rehab-clinic"), so both manage the same container.
+#
+#   docker compose -f frontend/docker-compose.yml build
+#   docker compose -f frontend/docker-compose.yml up -d      # http://localhost:${FRONTEND_PORT:-8080}
+#
+# It starts without the backend: the pages load, and /api answers 502 until the backend service is up on the "web"
+# network (backend/docker-compose.yml).
+#
+# Optional configuration: frontend/.env (copy frontend/.env.example). Nothing in it reaches the browser.
+
+name: rehab-clinic
+
+services:
+  frontend:
+    build: .
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: ${BACKEND_URL:-http://backend:3000}
+    ports:
+      # The public entry point (website + staff app + /api). Set FRONTEND_PORT=127.0.0.1:8080 to accept only
+      # connections from this machine (e.g. when cloudflared or a TLS reverse proxy runs here).
+      - '${FRONTEND_PORT:-8080}:8080'
+    networks:
+      - web
+
+networks:
+  # To the backend.
+  web:

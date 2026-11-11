@@ -1,0 +1,570 @@
+import { randomUUID } from 'node:crypto';
+import request from 'supertest';
+import type { App } from 'supertest/types.js';
+import { UserRole } from '../src/common/enums/user-role.enum.js';
+import {
+  bearer,
+  createLoggedInUser,
+  type TestUser,
+} from './utils/auth-helpers.js';
+import {
+  createTestApp,
+  resetDatabase,
+  type TestApp,
+} from './utils/test-app.js';
+
+type Method = 'get' | 'post' | 'patch' | 'put' | 'delete';
+type Who = UserRole | 'ANONYMOUS';
+
+const { OWNER, RECEPTIONIST, DOCTOR } = UserRole;
+const STAFF = [OWNER, RECEPTIONIST, DOCTOR];
+const EVERYONE: Who[] = [...STAFF, 'ANONYMOUS'];
+
+const id = randomUUID();
+const otherId = randomUUID();
+const RANGE = '?from=2026-11-01&to=2026-11-30';
+
+// Mirrors the permissions matrix from the specification.
+const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
+  // users: OWNER RW
+  { method: 'get', path: '/users', allowed: [OWNER] },
+  { method: 'post', path: '/users', allowed: [OWNER] },
+  { method: 'get', path: `/users/${id}`, allowed: [OWNER] },
+  { method: 'patch', path: `/users/${id}`, allowed: [OWNER] },
+  { method: 'patch', path: `/users/${id}/activate`, allowed: [OWNER] },
+  { method: 'patch', path: `/users/${id}/deactivate`, allowed: [OWNER] },
+  { method: 'post', path: `/users/${id}/reset-password`, allowed: [OWNER] },
+  // own account settings: any logged in user
+  { method: 'patch', path: '/auth/me', allowed: STAFF },
+  // audit-logs: OWNER R
+  { method: 'get', path: '/audit-logs', allowed: [OWNER] },
+  { method: 'get', path: `/audit-logs?patientId=${id}`, allowed: [OWNER] },
+  // patients: OWNER/RECEPTIONIST RW, DOCTOR R
+  { method: 'get', path: '/patients', allowed: STAFF },
+  { method: 'get', path: '/patients/lookup?phone=01012345678', allowed: STAFF },
+  { method: 'get', path: `/patients/${id}`, allowed: STAFF },
+  { method: 'post', path: '/patients', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'patch', path: `/patients/${id}`, allowed: [OWNER, RECEPTIONIST] },
+  // doctors (staff): OWNER RW, others R
+  { method: 'get', path: '/doctors', allowed: STAFF },
+  { method: 'get', path: `/doctors/${id}`, allowed: STAFF },
+  { method: 'post', path: '/doctors', allowed: [OWNER] },
+  { method: 'patch', path: `/doctors/${id}`, allowed: [OWNER] },
+  { method: 'patch', path: `/doctors/${id}/activate`, allowed: [OWNER] },
+  { method: 'patch', path: `/doctors/${id}/deactivate`, allowed: [OWNER] },
+  { method: 'delete', path: `/doctors/${id}`, allowed: [OWNER] },
+  {
+    method: 'put',
+    path: `/doctors/${id}/services/${otherId}`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'delete',
+    path: `/doctors/${id}/services/${otherId}`,
+    allowed: [OWNER],
+  },
+  // clinic services (staff): OWNER RW, others R
+  { method: 'get', path: '/clinic-services', allowed: STAFF },
+  { method: 'get', path: `/clinic-services/${id}`, allowed: STAFF },
+  { method: 'post', path: '/clinic-services', allowed: [OWNER] },
+  { method: 'patch', path: `/clinic-services/${id}`, allowed: [OWNER] },
+  { method: 'put', path: `/clinic-services/${id}/doctors`, allowed: [OWNER] },
+  { method: 'delete', path: `/clinic-services/${id}`, allowed: [OWNER] },
+  {
+    method: 'patch',
+    path: `/clinic-services/${id}/activate`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'patch',
+    path: `/clinic-services/${id}/deactivate`,
+    allowed: [OWNER],
+  },
+  // schedules / time off: OWNER, RECEPTIONIST RW; DOCTOR R (own, else 404)
+  { method: 'get', path: `/doctors/${id}/schedules`, allowed: STAFF },
+  {
+    method: 'post',
+    path: `/doctors/${id}/schedules`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/doctors/${id}/schedules/${otherId}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/doctors/${id}/schedules/${otherId}/activate`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/doctors/${id}/schedules/${otherId}/deactivate`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'get', path: `/doctors/${id}/time-off`, allowed: STAFF },
+  {
+    method: 'post',
+    path: `/doctors/${id}/time-off`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/doctors/${id}/time-off/${otherId}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'delete',
+    path: `/doctors/${id}/time-off/${otherId}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  // availability (staff): all staff, DOCTOR own only
+  {
+    method: 'get',
+    path: `/appointments/availability?doctorId=${id}&serviceId=${otherId}&date=2026-11-05`,
+    allowed: STAFF,
+  },
+  // appointments: OWNER, RECEPTIONIST W; DOCTOR R own only (else 404)
+  { method: 'post', path: '/appointments', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: '/appointments', allowed: STAFF },
+  // day list: DOCTOR gets their own rows without billing
+  { method: 'get', path: '/appointments/day?date=2026-11-05', allowed: STAFF },
+  {
+    method: 'get',
+    path: '/appointments/by-reference/APT-AAAAAA',
+    allowed: STAFF,
+  },
+  { method: 'get', path: `/appointments/${id}`, allowed: STAFF },
+  { method: 'get', path: `/appointments/${id}/history`, allowed: STAFF },
+  {
+    method: 'post',
+    path: `/appointments/${id}/confirm`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/appointments/${id}/cancel`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/appointments/${id}/no-show`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/appointments/${id}/reschedule`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'get', path: `/patients/${id}/appointments`, allowed: STAFF },
+  {
+    method: 'post',
+    path: `/appointments/${id}/undo-no-show`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  // attendance: reception only (doctors never start or complete visits)
+  {
+    method: 'post',
+    path: `/appointments/${id}/attend`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/appointments/${id}/undo-attend`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'post', path: '/visits/walk-in', allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'post',
+    path: `/visits/${id}/undo-attend`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'get', path: '/visits/queue', allowed: STAFF },
+  { method: 'get', path: '/visits', allowed: STAFF },
+  { method: 'get', path: `/visits/${id}`, allowed: STAFF },
+  { method: 'get', path: `/visits/${id}/history`, allowed: STAFF },
+  { method: 'get', path: `/patients/${id}/visits`, allowed: STAFF },
+  // billing (doctors have no access): OWNER, RECEPTIONIST
+  { method: 'post', path: '/invoices', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: '/invoices', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: `/invoices/${id}`, allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'post',
+    path: `/invoices/${id}/items`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/invoices/${id}/items/${otherId}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'delete',
+    path: `/invoices/${id}/items/${otherId}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/invoices/${id}/cancel`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: `/invoices/${id}/replacement`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/invoices/${id}/correct`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/invoices/${id}/reissue`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: `/patients/${id}/invoices`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: `/patients/${id}/balance`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: `/patients/${id}/last-discount`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: `/patients/${id}/discounts`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/invoices/${id}/discount`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/invoices/${id}/discount/remove`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/invoices/${id}/payments`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/payments/${id}/void`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'post', path: `/payments/${id}/refund`, allowed: [OWNER] },
+  { method: 'get', path: '/payments', allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'get',
+    path: `/payments/${id}/receipt`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'get', path: '/billing/attention', allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'get',
+    path: '/billing/daily-summary',
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  // expenses: OWNER, RECEPTIONIST; categories: OWNER writes
+  { method: 'post', path: '/expenses', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: '/expenses', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: `/expenses/${id}`, allowed: [OWNER, RECEPTIONIST] },
+  { method: 'patch', path: `/expenses/${id}`, allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'post',
+    path: `/expenses/${id}/void`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/expenses/${id}/receipt`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: `/expenses/${id}/receipt`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: '/expense-categories',
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'post', path: '/expense-categories', allowed: [OWNER] },
+  { method: 'patch', path: `/expense-categories/${id}`, allowed: [OWNER] },
+  {
+    method: 'patch',
+    path: `/expense-categories/${id}/activate`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'patch',
+    path: `/expense-categories/${id}/deactivate`,
+    allowed: [OWNER],
+  },
+  // clinical: never RECEPTIONIST; OWNER reads (and uploads attachments);
+  // DOCTOR reads own patients (else 404) and writes notes on own visits
+  {
+    method: 'get',
+    path: `/patients/${id}/medical-info`,
+    allowed: [OWNER, DOCTOR],
+  },
+  { method: 'put', path: `/patients/${id}/medical-info`, allowed: [DOCTOR] },
+  {
+    method: 'get',
+    path: `/patients/${id}/clinical-history`,
+    allowed: [OWNER, DOCTOR],
+  },
+  {
+    method: 'get',
+    path: `/patients/${id}/clinical-notes`,
+    allowed: [OWNER, DOCTOR],
+  },
+  {
+    method: 'post',
+    path: `/patients/${id}/attachments`,
+    allowed: [OWNER, DOCTOR],
+  },
+  {
+    method: 'get',
+    path: `/patients/${id}/attachments`,
+    allowed: [OWNER, DOCTOR],
+  },
+  { method: 'get', path: `/attachments/${id}/file`, allowed: [OWNER, DOCTOR] },
+  { method: 'get', path: `/visits/${id}/note`, allowed: [OWNER, DOCTOR] },
+  { method: 'put', path: `/visits/${id}/note`, allowed: [DOCTOR] },
+  { method: 'post', path: `/visits/${id}/note/sign`, allowed: [DOCTOR] },
+  { method: 'post', path: `/clinical-notes/${id}/addenda`, allowed: [DOCTOR] },
+  {
+    method: 'get',
+    path: '/clinical-notes/needs-attention',
+    allowed: [OWNER, DOCTOR],
+  },
+  // patient history: all staff (DOCTOR only with access to the patient,
+  // else 404; RECEPTIONIST without clinical, DOCTOR without billing data)
+  { method: 'get', path: `/patients/${id}/overview`, allowed: STAFF },
+  { method: 'get', path: `/patients/${id}/timeline`, allowed: STAFF },
+  // reports: OWNER only
+  { method: 'get', path: `/reports/summary${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/revenue${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/attendance${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/discounts${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/expenses${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/outstanding${RANGE}`, allowed: [OWNER] },
+  // packages: OWNER writes the catalog; the desk sells and restores; DOCTOR
+  // reads a patient's packages (patients they treat, else 404)
+  { method: 'get', path: '/packages', allowed: [OWNER, RECEPTIONIST] },
+  { method: 'get', path: `/packages/${id}`, allowed: [OWNER, RECEPTIONIST] },
+  { method: 'post', path: '/packages', allowed: [OWNER] },
+  { method: 'patch', path: `/packages/${id}`, allowed: [OWNER] },
+  { method: 'delete', path: `/packages/${id}`, allowed: [OWNER] },
+  { method: 'patch', path: `/packages/${id}/activate`, allowed: [OWNER] },
+  { method: 'patch', path: `/packages/${id}/deactivate`, allowed: [OWNER] },
+  {
+    method: 'post',
+    path: `/patients/${id}/packages`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'get', path: `/patients/${id}/packages`, allowed: STAFF },
+  { method: 'get', path: `/patient-packages/${id}`, allowed: STAFF },
+  {
+    method: 'post',
+    path: `/patient-packages/${id}/cancel`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'post',
+    path: `/package-usages/${id}/restore`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  // acquisition sources: the desk records them; DOCTOR none
+  {
+    method: 'get',
+    path: `/patients/${id}/acquisition`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/patients/${id}/acquisition-sources`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'patch',
+    path: `/acquisition-sources/${id}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/acquisition-sources/${id}/remove`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  // referring doctors: OWNER manages; RECEPTIONIST reads (to pick one and
+  // load the defaults); DOCTOR none
+  { method: 'get', path: '/referring-doctors', allowed: [OWNER, RECEPTIONIST] },
+  {
+    method: 'get',
+    path: `/referring-doctors/${id}`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  { method: 'post', path: '/referring-doctors', allowed: [OWNER] },
+  { method: 'patch', path: `/referring-doctors/${id}`, allowed: [OWNER] },
+  {
+    method: 'patch',
+    path: `/referring-doctors/${id}/activate`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'patch',
+    path: `/referring-doctors/${id}/deactivate`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'get',
+    path: `/referring-doctors/${id}/agreements`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'post',
+    path: `/referring-doctors/${id}/agreements`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'get',
+    path: `/referring-doctors/${id}/patients`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'get',
+    path: `/referring-doctors/${id}/commissions`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'get',
+    path: `/referring-doctors/${id}/commission-balance`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'post',
+    path: `/referring-doctors/${id}/commission-adjustments`,
+    allowed: [OWNER],
+  },
+  { method: 'get', path: `/referring-doctors/${id}/payouts`, allowed: [OWNER] },
+  {
+    method: 'post',
+    path: `/referring-doctors/${id}/payouts`,
+    allowed: [OWNER],
+  },
+  { method: 'post', path: `/referral-payouts/${id}/void`, allowed: [OWNER] },
+  // patient referrals: the desk assigns, overrides and ends; OWNER reads the
+  // financial statement
+  {
+    method: 'get',
+    path: `/patients/${id}/referrals`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/patients/${id}/referrals`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/patient-referrals/${id}/terms`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'post',
+    path: `/patient-referrals/${id}/end`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  {
+    method: 'get',
+    path: `/patients/${id}/referral-statement`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'post',
+    path: `/invoices/${id}/referral`,
+    allowed: [OWNER, RECEPTIONIST],
+  },
+  // marketing and referral reports: OWNER
+  { method: 'get', path: `/reports/acquisition${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/campaigns${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/referrals${RANGE}`, allowed: [OWNER] },
+  // blog: the OWNER writes posts (the website reads them below)
+  { method: 'get', path: '/blog-posts', allowed: [OWNER] },
+  { method: 'post', path: '/blog-posts', allowed: [OWNER] },
+  { method: 'get', path: `/blog-posts/${id}`, allowed: [OWNER] },
+  { method: 'patch', path: `/blog-posts/${id}`, allowed: [OWNER] },
+  { method: 'delete', path: `/blog-posts/${id}`, allowed: [OWNER] },
+  // public: anyone
+  { method: 'get', path: '/public/packages', allowed: EVERYONE },
+  { method: 'get', path: '/public/doctors', allowed: EVERYONE },
+  { method: 'get', path: `/public/doctors/${id}`, allowed: EVERYONE },
+  { method: 'get', path: '/public/services', allowed: EVERYONE },
+  {
+    method: 'get',
+    path: `/public/doctors/${id}/slots?serviceId=${otherId}&date=2026-11-05`,
+    allowed: EVERYONE,
+  },
+  { method: 'post', path: '/public/appointments', allowed: EVERYONE },
+  { method: 'get', path: '/public/blog-posts', allowed: EVERYONE },
+  { method: 'get', path: `/public/blog-posts/${id}`, allowed: EVERYONE },
+  { method: 'get', path: `/public/blog-posts/${id}/cover`, allowed: EVERYONE },
+];
+
+const CASES = MATRIX.flatMap((route) =>
+  EVERYONE.map((who) => ({
+    ...route,
+    who,
+    expectAllowed: route.allowed.includes(who),
+  })),
+);
+
+describe('Permissions matrix (e2e)', () => {
+  let ctx: TestApp;
+  let server: App;
+  const users = new Map<UserRole, TestUser>();
+
+  beforeAll(async () => {
+    ctx = await createTestApp();
+    server = ctx.app.getHttpServer();
+    await resetDatabase(ctx.dataSource);
+    for (const role of STAFF) {
+      users.set(role, await createLoggedInUser(ctx.app, ctx.dataSource, role));
+    }
+  });
+
+  afterAll(async () => {
+    await ctx.app.close();
+  });
+
+  it.each(CASES)(
+    '$who $method $path -> allowed: $expectAllowed',
+    async ({ method, path, who, expectAllowed }) => {
+      let req = request(server)[method](`/api/v1${path}`).send({});
+      if (who !== 'ANONYMOUS') {
+        req = req.set('Authorization', bearer(users.get(who)!));
+      }
+      const { status } = await req;
+
+      if (expectAllowed) {
+        // Past the guards: may still be 200/201/204/400/404/409.
+        expect([401, 403]).not.toContain(status);
+      } else {
+        expect(status).toBe(who === 'ANONYMOUS' ? 401 : 403);
+      }
+    },
+  );
+});
