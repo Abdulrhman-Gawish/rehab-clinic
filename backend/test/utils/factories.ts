@@ -4,6 +4,7 @@ import { UserRole } from '../../src/common/enums/user-role.enum.js';
 import {
   AppointmentSource,
   AppointmentStatus,
+  type AppointmentType,
 } from '../../src/modules/appointments/appointment.enums.js';
 import { Appointment } from '../../src/modules/appointments/entities/appointment.entity.js';
 import {
@@ -125,6 +126,7 @@ export async function insertPatient(
 let referenceSequence = 0;
 
 // A CONFIRMED (by default) reception appointment, bypassing slot checks.
+// Its type is not set unless given (like an appointment from before types).
 export async function insertAppointment(
   dataSource: DataSource,
   data: {
@@ -134,6 +136,7 @@ export async function insertAppointment(
     startAt: Date;
     durationMinutes?: number;
     status?: AppointmentStatus;
+    type?: AppointmentType | null;
   },
 ): Promise<Appointment> {
   referenceSequence += 1;
@@ -150,6 +153,7 @@ export async function insertAppointment(
       ),
       status: data.status ?? AppointmentStatus.CONFIRMED,
       source: AppointmentSource.RECEPTION,
+      type: data.type ?? null,
       bookedName: 'Booked Name',
       bookedById: null,
       rescheduledFromId: null,
@@ -160,6 +164,9 @@ export async function insertAppointment(
 }
 
 // A walk-in visit (ACTIVE by default), bypassing the API (no invoice).
+// With appointmentId: that appointment's visit (then `type` must stay unset:
+// the visit takes the appointment's type). A walk-in's type is not set
+// unless given.
 export async function insertVisit(
   dataSource: DataSource,
   data: {
@@ -169,6 +176,8 @@ export async function insertVisit(
     attendedById: string;
     status?: VisitStatus;
     attendedAt?: Date;
+    appointmentId?: string | null;
+    type?: AppointmentType | null;
   },
 ): Promise<Visit> {
   const status = data.status ?? VisitStatus.ACTIVE;
@@ -177,7 +186,8 @@ export async function insertVisit(
   const repository = dataSource.getRepository(Visit);
   return repository.save(
     repository.create({
-      appointmentId: null,
+      appointmentId: data.appointmentId ?? null,
+      type: data.type ?? null,
       patientId: data.patientId,
       doctorId: data.doctorId,
       serviceId: data.serviceId,

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { act, get, post, qs } from '../api';
-import { DoctorService, SlotPicker } from '../components';
+import { CheckInDetailsFields, PatientCode, useCheckInDetails } from '../checkInDetails';
+import { AppointmentTypePicker, DoctorService, SlotPicker, TypeBadge, useDoctors } from '../components';
 import { fmtDateTime, fmtNumber } from '../format';
 import { useI18n } from '../i18n';
 import {
@@ -78,12 +79,19 @@ function PatientByPhone({ initialPhone = '', onChange }: { initialPhone?: string
   );
 }
 
-/** Reception booking and walk-ins. ?phone= prefills the patient (link from the patient record). */
+/** Where the booking form starts: a free slot clicked on the desk calendar (doctor, day, HH:MM), or nothing. */
+interface Prefill { doctorId: string; date: string; time: string }
+
+/**
+ * Reception booking and walk-ins. ?phone= prefills the patient (link from the patient record); the desk calendar adds
+ * ?doctorId=, ?date= and ?time= (a free slot or a column's +) and ?mode=walkIn (the walk-ins column's +).
+ */
 export function Booking() {
   const { t } = useI18n();
   const [params] = useSearchParams();
   const phone = params.get('phone') ?? '';
-  const [mode, setMode] = useState<'appointment' | 'walkIn'>('appointment');
+  const prefill: Prefill = { doctorId: params.get('doctorId') ?? '', date: params.get('date') ?? '', time: params.get('time') ?? '' };
+  const [mode, setMode] = useState<'appointment' | 'walkIn'>(params.get('mode') === 'walkIn' ? 'walkIn' : 'appointment');
   const tb = t.booking;
   return (
     <>
@@ -99,7 +107,7 @@ export function Booking() {
         ]}
       />
       {/* Both stay mounted, so switching back keeps what was typed. */}
-      <div hidden={mode !== 'appointment'}><NewBooking initialPhone={phone} /></div>
+      <div hidden={mode !== 'appointment'}><NewBooking initialPhone={phone} prefill={prefill} /></div>
       <div hidden={mode !== 'walkIn'}><WalkIn initialPhone={phone} /></div>
     </>
   );
@@ -111,26 +119,38 @@ function useScrollTo(dep: unknown) {
   return ref;
 }
 
-function NewBooking({ initialPhone }: { initialPhone: string }) {
+function NewBooking({ initialPhone, prefill }: { initialPhone: string; prefill: Prefill }) {
   const { t } = useI18n();
   const [patient, setPatient] = useState<PatientPick>({});
-  const [ds, setDs] = useState({ doctorId: '', serviceId: '' });
+  const [ds, setDs] = useState({ doctorId: prefill.doctorId, serviceId: '' });
+  // The calendar's doctor offers one service only: choose it, so the clicked time can be picked straight away.
+  const [doctors] = useDoctors();
+  const autoService = useRef(!!prefill.doctorId);
+  useEffect(() => {
+    if (!autoService.current || !doctors) return;
+    autoService.current = false;
+    const services = doctors.find((d) => d.id === prefill.doctorId)?.services.filter((s) => s.isActive) ?? [];
+    if (services.length === 1) setDs((x) => (x.doctorId === prefill.doctorId && !x.serviceId ? { ...x, serviceId: services[0].serviceId } : x));
+  }, [doctors, prefill.doctorId]);
   const [outside, setOutside] = useState(false);
   const [startAt, setStartAt] = useState('');
+  // Required, no default.
+  const [type, setType] = useState('');
   const [notes, setNotes] = useState('');
   const [result, setResult] = useState<any>(null);
   const [key, setKey] = useState(0);
   const resultRef = useScrollTo(result);
-  const ready = !!startAt && !!(patient.patientId || patient.name);
+  const ready = !!startAt && !!type && !!(patient.patientId || patient.name);
   const book = async (e: FormEvent) => {
     e.preventDefault();
     if (!ready) return;
     await act(async () => {
-      const r = await post('/appointments', { ...patient, ...ds, startAt, notes: notes || undefined, allowOutsideSchedule: outside || undefined });
+      const r = await post('/appointments', { ...patient, ...ds, type, startAt, notes: notes || undefined, allowOutsideSchedule: outside || undefined });
       setResult(r);
-      // A fresh form for the next patient; doctor and service stay (often the same).
+      // A fresh form for the next patient; doctor and service stay (often the same). The type is chosen again.
       setPatient({});
       setStartAt('');
+      setType('');
       setNotes('');
       setKey((k) => k + 1);
     });
@@ -155,6 +175,7 @@ function NewBooking({ initialPhone }: { initialPhone: string }) {
                 [t.fields.startAt, <span className="tabular">{fmtDateTime(result.startAt)}</span>],
                 [t.fields.doctorId, result.doctor.name],
                 [t.fields.serviceId, result.service.name],
+                [t.apptType.label, <TypeBadge type={result.type} />],
                 [t.fields.status, <StatusBadge kind="AppointmentStatus" value={result.status} />],
               ]}
             />
@@ -173,14 +194,20 @@ function NewBooking({ initialPhone }: { initialPhone: string }) {
               onChange={(doctorId, serviceId) => { setDs({ doctorId, serviceId }); setStartAt(''); }}
             />
           </StepSection>
-          <StepSection n={3} title={tb.stepTime}>
+          <StepSection n={3} title={tb.stepType}>
+            <AppointmentTypePicker value={type} onChange={setType} hint={t.apptType.pickHint} />
+          </StepSection>
+          <StepSection n={4} title={tb.stepTime}>
             <div className="stack-sm">
               <Switch label={tb.outsideSchedule} checked={outside} onChange={(v) => { setOutside(v); setStartAt(''); }} />
               <span className="field__help">{tb.outsideHint}</span>
             </div>
-            <SlotPicker doctorId={ds.doctorId} serviceId={ds.serviceId} outside={outside} value={startAt} onPick={setStartAt} />
+            <SlotPicker
+              doctorId={ds.doctorId} serviceId={ds.serviceId} outside={outside} value={startAt} onPick={setStartAt}
+              initialDate={prefill.date || undefined} preferTime={prefill.time || undefined}
+            />
           </StepSection>
-          <StepSection n={4} title={tb.stepNotes}>
+          <StepSection n={5} title={tb.stepNotes}>
             <Field label={tb.notesPh} optional>
               <Textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
             </Field>
@@ -198,16 +225,23 @@ function WalkIn({ initialPhone }: { initialPhone: string }) {
   const { t } = useI18n();
   const [patient, setPatient] = useState<PatientPick>({});
   const [ds, setDs] = useState({ doctorId: '', serviceId: '' });
+  // Chosen by reception at check-in: required, no default.
+  const [type, setType] = useState('');
   const [result, setResult] = useState<any>(null);
   const [key, setKey] = useState(0);
   const resultRef = useScrollTo(result);
-  const ready = !!ds.serviceId && !!(patient.patientId || patient.name);
+  const chosen = !!(patient.patientId || patient.name);
+  // A walk-in enters the doctor at once: the details are collected here when missing (sent with the walk-in).
+  const details = useCheckInDetails(patient.patientId ?? null, 'checkIn', key);
+  const ready = !!ds.serviceId && !!type && chosen && !details.loading;
   const create = async (e: FormEvent) => {
     e.preventDefault();
-    if (!ready) return;
+    if (!ready || !details.validate()) return;
     await act(async () => {
-      setResult(await post('/visits/walk-in', { ...patient, ...ds }));
+      const patientDetails = details.payload();
+      setResult(await post('/visits/walk-in', { ...patient, ...ds, type, ...(patientDetails && { patientDetails }) }));
       setPatient({});
+      setType('');
       setKey((k) => k + 1);
     });
   };
@@ -233,6 +267,24 @@ function WalkIn({ initialPhone }: { initialPhone: string }) {
           <StepSection n={2} title={tb.stepService}>
             <DoctorService doctorId={ds.doctorId} serviceId={ds.serviceId} onChange={(doctorId, serviceId) => setDs({ doctorId, serviceId })} />
           </StepSection>
+          <StepSection n={3} title={tb.stepType}>
+            <AppointmentTypePicker value={type} onChange={setType} hint={t.apptType.pickHint} />
+          </StepSection>
+          {chosen && !details.loading && (
+            <StepSection n={4} title={t.checkIn.title}>
+              {details.complete ? (
+                <div className="checkin-status">
+                  <Badge tone="success" icon="check-circle">{t.checkIn.complete}</Badge>
+                  <PatientCode code={details.patient?.patientCode} />
+                </div>
+              ) : (
+                <div className="stack">
+                  <span className="field__help">{t.checkIn.hint}</span>
+                  <CheckInDetailsFields state={details} />
+                </div>
+              )}
+            </StepSection>
+          )}
           <div className="form-actions form-actions--end">
             <Button type="submit" variant="primary" size="lg" icon="user-check" disabled={!ready}>{tb.createWalkIn}</Button>
           </div>

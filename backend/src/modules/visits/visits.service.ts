@@ -34,7 +34,10 @@ import {
   AppointmentWriter,
   mapBookingError,
 } from '../appointments/appointment-writer.service.js';
-import { AppointmentStatus } from '../appointments/appointment.enums.js';
+import {
+  AppointmentStatus,
+  type AppointmentType,
+} from '../appointments/appointment.enums.js';
 import { AvailabilityService } from '../appointments/availability/availability.service.js';
 import { Appointment } from '../appointments/entities/appointment.entity.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
@@ -44,8 +47,11 @@ import { DiscountsService } from '../billing/discounts.service.js';
 import { InvoicesService } from '../billing/invoices.service.js';
 import { ClinicalAccessService } from '../clinical/clinical-access.service.js';
 import { ClinicalNote } from '../clinical/entities/clinical-note.entity.js';
+import { AcquisitionSourcesService } from '../acquisition/acquisition-sources.service.js';
 import { DoctorAccessService } from '../doctors/doctor-access.service.js';
 import type { PackageChoiceDto } from '../packages/dto/package.dto.js';
+import type { CheckInDetailsDto } from '../patients/dto/patient.dto.js';
+import { PatientReferralsService } from '../referrals/patient-referrals.service.js';
 import {
   assertPackageChoice,
   PatientPackagesService,
@@ -55,6 +61,7 @@ import {
   PatientsService,
 } from '../patients/patients.service.js';
 import type {
+  AttendDto,
   AttendResponseDto,
   ListVisitsQueryDto,
   QueueEntryDto,
@@ -99,6 +106,8 @@ export class VisitsService {
     private readonly access: DoctorAccessService,
     private readonly clinicalAccess: ClinicalAccessService,
     private readonly packages: PatientPackagesService,
+    private readonly acquisition: AcquisitionSourcesService,
+    private readonly referrals: PatientReferralsService,
     private readonly auditService: AuditService,
     private readonly time: ClinicTimeService,
   ) {}
@@ -112,7 +121,7 @@ export class VisitsService {
    */
   async attend(
     appointmentId: string,
-    choice: PackageChoiceDto,
+    choice: AttendDto,
     actor: Actor,
   ): Promise<AttendResponseDto> {
     assertPackageChoice(choice);
@@ -128,6 +137,13 @@ export class VisitsService {
       assertDeskAction(DeskAction.ATTEND, appointment.status, {
         isToday: this.isToday(appointment.startAt),
       });
+      await this.prepareCheckIn(
+        manager,
+        appointment.patientId,
+        choice.patientDetails,
+        actor,
+        true,
+      );
       await this.appointmentWriter.changeStatus(
         manager,
         appointment,
@@ -143,6 +159,8 @@ export class VisitsService {
           patientId: appointment.patientId,
           doctorId: appointment.doctorId,
           serviceId: appointment.serviceId,
+          // The visit takes the appointment's type (never its own copy).
+          type: null,
         },
         choice,
       );
@@ -164,6 +182,13 @@ export class VisitsService {
         manager,
       );
       const patient = await this.patients.resolveForDesk(dto, actor, manager);
+      await this.prepareCheckIn(
+        manager,
+        patient.id,
+        dto.patientDetails,
+        actor,
+        !!dto.patientId,
+      );
       return this.insertVisit(
         manager,
         actor,
@@ -172,6 +197,7 @@ export class VisitsService {
           patientId: patient.id,
           doctorId: context.doctor.id,
           serviceId: context.service.id,
+          type: dto.type,
         },
         dto,
       );
@@ -236,6 +262,47 @@ export class VisitsService {
           invoice !== null && !isZeroMoney(invoice.amountPaid),
       });
       return this.voidVisit(manager, visit, invoice, reason, actor);
+    });
+    return this.load(visitId);
+  }
+
+  /**
+   * RECEPTIONIST (by route): sets or changes a walk-in's type, in any status
+   * (voided too). A visit of an appointment changes its appointment's type,
+   * exactly like PATCH /appointments/:id/type. Audited.
+   */
+  async changeType(
+    visitId: string,
+    type: AppointmentType,
+    actor: Actor,
+  ): Promise<VisitResponseDto> {
+    await this.dataSource.transaction(async (manager) => {
+      const found = await manager.findOneBy(Visit, { id: visitId });
+      if (!found) throw new NotFoundException('Visit not found');
+      if (found.appointmentId) {
+        const appointment = await this.lockAppointment(
+          found.appointmentId,
+          manager,
+        );
+        await this.appointmentWriter.changeType(
+          manager,
+          appointment,
+          type,
+          actor,
+        );
+        return;
+      }
+      const visit = await manager.findOneOrFail(Visit, {
+        where: { id: visitId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      const from = visit.type;
+      if (from === type) return;
+      await manager.getRepository(Visit).update(visit.id, { type });
+      await this.audit(manager, actor, AuditAction.VISIT_TYPE_CHANGED, visit, {
+        oldValues: { type: from },
+        newValues: { type },
+      });
     });
     return this.load(visitId);
   }
@@ -450,13 +517,65 @@ export class VisitsService {
     return visit;
   }
 
+  /**
+   * Before the patient enters the doctor: the details reception collected
+   * (if any) are saved (the referral source is added to the patient's
+   * sources, primary when it is the first: it never replaces one; a doctor
+   * referral is recorded with its terms, before the visit's invoice), then
+   * the patient must be complete (422 PATIENT_DETAILS_REQUIRED). All in the
+   * visit's transaction: a refused check-in saves nothing.
+   */
+  private async prepareCheckIn(
+    manager: EntityManager,
+    patientId: string,
+    details: CheckInDetailsDto | undefined,
+    actor: Actor,
+    patientExisted: boolean,
+  ): Promise<void> {
+    if (details) {
+      await this.patients.applyCheckInDetails(
+        manager,
+        patientId,
+        details,
+        actor,
+      );
+      // Before the visit: insertVisit covers its invoice with this referral.
+      if (details.referral) {
+        await this.referrals.assignWith(
+          manager,
+          patientId,
+          details.referral,
+          actor,
+        );
+      }
+      if (details.referralSource) {
+        await this.acquisition.ensureChannel(
+          manager,
+          patientId,
+          details.referralSource.channel,
+          details.referralSource.details ?? null,
+          false,
+          actor,
+        );
+      }
+    }
+    await this.patients.assertReadyForCheckIn(
+      manager,
+      patientId,
+      patientExisted,
+    );
+  }
+
   // The visit, then the package session it uses (if any), then its invoice
   // (which bills a package session at 0.00), then the doctor referral that
   // covers the session, if any (terms + discount on the invoice).
   private async insertVisit(
     manager: EntityManager,
     actor: Actor,
-    data: Pick<Visit, 'appointmentId' | 'patientId' | 'doctorId' | 'serviceId'>,
+    data: Pick<
+      Visit,
+      'appointmentId' | 'patientId' | 'doctorId' | 'serviceId' | 'type'
+    >,
     choice: PackageChoiceDto,
   ): Promise<{ visit: Visit; invoiceId: string }> {
     const repository = manager.getRepository(Visit);
@@ -486,6 +605,7 @@ export class VisitsService {
         doctorId: visit.doctorId,
         serviceId: visit.serviceId,
         walkIn: visit.appointmentId === null,
+        ...(visit.appointmentId === null && { type: visit.type }),
         attendedAt: visit.attendedAt.toISOString(),
       },
     });

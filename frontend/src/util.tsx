@@ -65,7 +65,7 @@ const MONEY_KEYS = new Set(['amount', 'total', 'price', 'listPrice', 'offerAmoun
 // Any other UPPER_CASE value (statuses of any entity, triggers, reasons): the first enum that knows it.
 const FALLBACK_ENUMS: (keyof Messages['enums'])[] = [
   'AppointmentStatus', 'VisitStatus', 'InvoiceStatus', 'PaymentStatus', 'PaymentType', 'PaymentMethod', 'NoteStatus',
-  'PatientPackageStatus', 'PackageUsageReason', 'DiscountType', 'ExpenseStatus', 'AppointmentSource', 'AuditValue',
+  'PatientPackageStatus', 'PackageUsageReason', 'DiscountType', 'ExpenseStatus', 'AppointmentSource', 'AppointmentType', 'AuditValue',
   'UserRole', 'Gender', 'PatientReferralStatus', 'CommissionStatus', 'CommissionKind', 'ReferralRateType',
   'ReferralApplicability', 'AcquisitionChannel',
 ];

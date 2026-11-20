@@ -162,6 +162,14 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
     path: `/appointments/${id}/undo-no-show`,
     allowed: [OWNER, RECEPTIONIST],
   },
+  // appointment type (set at booking by whoever books): changed later by
+  // RECEPTIONIST only
+  {
+    method: 'patch',
+    path: `/appointments/${id}/type`,
+    allowed: [RECEPTIONIST],
+  },
+  { method: 'patch', path: `/visits/${id}/type`, allowed: [RECEPTIONIST] },
   // attendance: reception only (doctors never start or complete visits)
   {
     method: 'post',
@@ -361,7 +369,18 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
   { method: 'get', path: `/reports/attendance${RANGE}`, allowed: [OWNER] },
   { method: 'get', path: `/reports/discounts${RANGE}`, allowed: [OWNER] },
   { method: 'get', path: `/reports/expenses${RANGE}`, allowed: [OWNER] },
-  { method: 'get', path: `/reports/outstanding${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/money-flow${RANGE}`, allowed: [OWNER] },
+  { method: 'get', path: `/reports/transactions${RANGE}`, allowed: [OWNER] },
+  {
+    method: 'get',
+    path: '/reports/patients-owe?asOf=2026-11-01',
+    allowed: [OWNER],
+  },
+  {
+    method: 'get',
+    path: '/reports/clinic-owes?asOf=2026-11-01',
+    allowed: [OWNER],
+  },
   // packages: OWNER writes the catalog; the desk sells and restores; DOCTOR
   // reads a patient's packages (patients they treat, else 404)
   { method: 'get', path: '/packages', allowed: [OWNER, RECEPTIONIST] },

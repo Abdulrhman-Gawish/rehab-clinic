@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -41,6 +42,7 @@ import { AvailabilityService } from './availability/availability.service.js';
 import {
   AppointmentResponseDto,
   CancelAppointmentDto,
+  ChangeAppointmentTypeDto,
   CreateAppointmentDto,
   DayListEntryDto,
   DayListQueryDto,
@@ -109,11 +111,15 @@ export class AppointmentsController {
   @Get('day')
   @Auth(...STAFF)
   @ApiOperation({
-    summary: 'Day list for a clinic local date',
+    summary: 'Day list for a clinic local date (or up to a week with `to`)',
     description:
-      "Every appointment of the day (with its visit if attended) plus the day's walk-ins (isWalkIn), ordered by time, each with allowedActions. A DOCTOR gets only their own rows, without billing fields.",
+      "Every appointment of the day (with its visit if attended) plus the day's walk-ins (isWalkIn), ordered by time, each with allowedActions. With `to`, the same for every day from `date` to `to` (inclusive, at most 7 days; else 422 DATE_OUT_OF_RANGE). A DOCTOR gets only their own rows, without billing fields.",
   })
   @ApiOkResponse({ type: [DayListEntryDto] })
+  @ApiUnprocessableEntityResponse({
+    type: ErrorResponseDto,
+    description: 'DATE_OUT_OF_RANGE',
+  })
   day(
     @Query() query: DayListQueryDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -277,6 +283,23 @@ export class AppointmentsController {
     @CurrentActor() actor: Actor,
   ): Promise<AppointmentResponseDto> {
     return this.appointments.reschedule(id, dto, actor);
+  }
+
+  @Patch(':id/type')
+  @Auth(UserRole.RECEPTIONIST)
+  @ApiOperation({
+    summary: 'Set or change the appointment type (any status)',
+    description:
+      "RECEPTIONIST only. Also after attending, and for CANCELLED, NO_SHOW and RESCHEDULED appointments. Audited (APPOINTMENT_TYPE_CHANGED); not a status change. The visit's clinical note then shows the new type's fields; values of the other fields are kept, read-only.",
+  })
+  @ApiOkResponse({ type: AppointmentResponseDto })
+  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  changeType(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ChangeAppointmentTypeDto,
+    @CurrentActor() actor: Actor,
+  ): Promise<AppointmentResponseDto> {
+    return this.appointments.changeType(id, dto.type, actor);
   }
 }
 

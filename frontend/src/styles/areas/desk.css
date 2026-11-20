@@ -48,6 +48,14 @@
 .note-card--draft { border-style: dashed; border-color: var(--color-warning-border); background: var(--color-surface-accent); }
 .note-card__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .note-card__when { font-weight: var(--font-weight-bold); }
+.note-card__badges { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+/* A part of a note: the visit's attachments, or the values kept from another appointment type (read-only). */
+.note-card__part { display: grid; gap: var(--space-2); }
+.note-card__part--other {
+  padding: var(--space-3) var(--space-4); border: var(--border-width) dashed var(--color-border);
+  border-radius: var(--radius-md); background: var(--color-bg-subtle);
+}
+.note-card__subtitle { margin: 0; font-size: var(--text-caption); font-weight: var(--font-weight-semibold); color: var(--color-text-muted); }
 .note-list { display: grid; gap: var(--space-4); }
 .addendum {
   margin: 0; padding: var(--space-3) var(--space-4); border-inline-start: 4px solid var(--color-accent);

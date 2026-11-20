@@ -21,6 +21,7 @@ import {
   PaymentStatus,
   PaymentType,
 } from '../billing.enums.js';
+import { OutstandingFlowDto } from '../../outstanding/dto/outstanding.dto.js';
 import { InvoicePatientDto, InvoiceSummaryDto } from './invoice.dto.js';
 
 const MONEY = (example: string, description?: string) => ({
@@ -376,7 +377,7 @@ export class DailySummaryDto {
   @ApiProperty({
     type: MoneyTotalsDto,
     description:
-      'Valid expenses dated that day, referral commission payouts included',
+      'Valid expenses dated that day, referral commission payouts and doctor salary payments included',
   })
   expenses: MoneyTotalsDto;
 
@@ -387,13 +388,27 @@ export class DailySummaryDto {
   })
   commissionPayouts: MoneyTotalsDto;
 
+  @ApiProperty({
+    type: MoneyTotalsDto,
+    description:
+      'Of `expenses`: salary payments to the clinic’s doctors (already in expenses, never added again)',
+  })
+  salaryPayments: MoneyTotalsDto;
+
   @ApiProperty(
     MONEY(
       '420.00',
-      'cash payments - cash refunds - cash expenses (cash commission payouts included)',
+      'cash payments - cash refunds - cash expenses (cash commission payouts and salary payments included)',
     ),
   )
   expectedCash: string;
+
+  @ApiProperty({
+    type: OutstandingFlowDto,
+    description:
+      'Owed at the start and at the end of the day (unpaid then, even if paid later), and what moved it: patients’ invoice balances, and what the clinic owes its doctors (OWNER only)',
+  })
+  outstanding: OutstandingFlowDto;
 }
 
 // The overdue invoices, one page (`page`, `limit`); next to them the

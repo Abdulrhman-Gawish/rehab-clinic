@@ -4,8 +4,12 @@
 // doctor page.
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { get, getSession, openFile, qs, type Role } from '../api';
-import { usePaged } from '../components';
+import { act, get, getSession, openFile, patch, qs, type Role } from '../api';
+import { CheckInDetailsFields, PatientCode, useCheckInDetails } from '../checkInDetails';
+import { ageOn } from '../patientIdentity';
+import { todayCairo } from '../time';
+import { TypeBadge, usePaged } from '../components';
+import { noteFieldsFor, otherFilledFields, showsAttachments, type NoteField } from '../noteFields';
 import { fmtDate, fmtDateTime, fmtMoney, fmtNumber, fmtPercent } from '../format';
 import { label, useI18n } from '../i18n';
 import {
@@ -15,7 +19,6 @@ import {
 import { Ltr, useLoad, Values } from '../util';
 import '../styles/areas/desk.css';
 
-const NOTE_FIELDS = ['chiefComplaint', 'assessment', 'treatmentDone', 'progress', 'plan'] as const;
 export const MED_FIELDS = ['allergies', 'chronicConditions', 'pastSurgeries', 'currentMedications', 'notes'] as const;
 
 export type Tab =
@@ -75,17 +78,33 @@ const None = () => {
 
 export function PersonalInfo({ patientId }: { patientId: string }) {
   const { t } = useI18n();
-  const [p] = useLoad(() => get(`/patients/${patientId}`), [patientId]);
+  const [p, reload] = useLoad(() => get(`/patients/${patientId}`), [patientId]);
+  const [editing, setEditing] = useState(false);
   if (!p) return <Loading />;
   const tp = t.records.personal;
+  const tc = t.checkIn;
+  const age = ageOn(p.dateOfBirth, todayCairo());
+  // The identity document is for the desk (a doctor gets null from the API).
+  const role = getSession()?.user.role;
+  const desk = role === 'OWNER' || role === 'RECEPTIONIST';
   return (
-    <Card title={t.patients.tabs.personal} icon="user">
+    <Card
+      title={t.patients.tabs.personal} icon="user"
+      actions={desk && <Button size="sm" icon="pencil" onClick={() => setEditing(true)}>{tc.edit}</Button>}
+    >
       <DescriptionList
         columns={2}
         items={[
           [t.fields.name, p.name],
           [t.fields.phone, <Ltr>{p.phone}</Ltr>],
+          [tc.code, <PatientCode code={p.patientCode} />],
+          desk && [
+            p.passportNumber ? tc.passport : tc.nationalId,
+            p.passportNumber || p.nationalId ? <Ltr>{p.passportNumber ?? p.nationalId}</Ltr> : <None />,
+          ],
           [tp.dob, p.dateOfBirth ? fmtDate(p.dateOfBirth) : <None />],
+          // From the date of birth (itself from the National ID), as of today.
+          [tc.age, age ? tc.ageText(age.years, age.months) : <None />],
           [tp.gender, p.gender ? label(t.enums.Gender, p.gender) : <None />],
           [tp.source, (
             <span className="cluster">
@@ -96,7 +115,29 @@ export function PersonalInfo({ patientId }: { patientId: string }) {
           [tp.notes, p.notes ?? <None />],
         ]}
       />
+      {editing && <EditDetails patientId={patientId} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); reload(); }} />}
     </Card>
+  );
+}
+
+/** Identity document, gender, date of birth and notes (PATCH /patients/:id); the referral source has its own card. */
+function EditDetails({ patientId, onClose, onSaved }: { patientId: string; onClose: () => void; onSaved: () => void }) {
+  const { t } = useI18n();
+  const details = useCheckInDetails(patientId, 'edit');
+  const save = async () => {
+    if (!details.validate()) return;
+    if (await act(() => patch(`/patients/${patientId}`, details.payload() ?? {}), t.checkIn.saved)) onSaved();
+  };
+  return (
+    <Dialog
+      open onClose={onClose} title={t.checkIn.title} size="lg"
+      footer={<>
+        <Button variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+        <Button variant="primary" icon="check" disabled={details.loading} onClick={save}>{t.common.save}</Button>
+      </>}
+    >
+      {details.loading ? <Loading /> : <CheckInDetailsFields state={details} />}
+    </Dialog>
   );
 }
 
@@ -249,12 +290,21 @@ export function AttachmentList({ attachments }: { attachments: any[] }) {
   );
 }
 
-/** A note as read-only text (signed, or a draft shown to the OWNER). */
+/**
+ * A note as read-only text (signed, or a draft shown to the OWNER). The visit's appointment type decides the fields
+ * shown; values written under another type (before reception changed it) follow, apart, so nothing is hidden. An
+ * examination note (or one whose type is not set) also lists the visit's attachments.
+ */
 export function NoteView({ note }: { note: any }) {
   const { t } = useI18n();
   const tr = t.records;
   const draft = note.status === 'DRAFT';
-  const fields = NOTE_FIELDS.filter((f) => note[f]);
+  const filled = (f: NoteField) => note[f] !== null && note[f] !== undefined && note[f] !== '';
+  const item = (f: NoteField): [ReactNode, ReactNode] =>
+    [label(t.fields, f), f === 'painScore' ? tr.pain(fmtNumber(note.painScore)) : note[f]];
+  const own = noteFieldsFor(note.type).filter(filled);
+  const other = otherFilledFields(note.type, note);
+  const files: any[] = showsAttachments(note.type) ? note.attachments ?? [] : [];
   return (
     <article className={cx('note-card', draft && 'note-card--draft')}>
       <header className="note-card__head">
@@ -262,15 +312,23 @@ export function NoteView({ note }: { note: any }) {
           <span className="note-card__when tabular">{fmtDateTime(note.visit.date)}</span>
           <span className="text-muted text-body-sm"> · {note.visit.service.name} · {note.doctor.name}</span>
         </div>
-        {draft ? <Badge tone="warning" dot>{tr.draft}</Badge> : <Badge tone="success" icon="check">{tr.signedAt(fmtDateTime(note.signedAt))}</Badge>}
+        <span className="note-card__badges">
+          <TypeBadge type={note.type} />
+          {draft ? <Badge tone="warning" dot>{tr.draft}</Badge> : <Badge tone="success" icon="check">{tr.signedAt(fmtDateTime(note.signedAt))}</Badge>}
+        </span>
       </header>
-      {(fields.length > 0 || note.painScore != null) && (
-        <DescriptionList
-          items={[
-            ...fields.map((f) => [label(t.fields, f), note[f]] as [ReactNode, ReactNode]),
-            note.painScore != null && [t.fields.painScore, tr.pain(fmtNumber(note.painScore))],
-          ]}
-        />
+      {own.length > 0 && <DescriptionList items={own.map(item)} />}
+      {other.length > 0 && (
+        <section className="note-card__part note-card__part--other">
+          <h4 className="note-card__subtitle">{tr.otherFields}</h4>
+          <DescriptionList items={other.map(item)} />
+        </section>
+      )}
+      {files.length > 0 && (
+        <section className="note-card__part">
+          <h4 className="note-card__subtitle">{tr.noteAttachments}</h4>
+          <AttachmentList attachments={files} />
+        </section>
       )}
       {note.addenda.map((a: any) => (
         <blockquote key={a.id} className="addendum">

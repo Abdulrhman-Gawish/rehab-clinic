@@ -128,6 +128,9 @@ export function Expenses() {
               {items.map((x) => {
                 const voided = x.status === 'VOIDED';
                 const payout = x.referralPayout;
+                // A doctor's salary payment: changed only through the payment (Owner -> Salaries).
+                const salary = x.category.systemKey === 'DOCTOR_SALARY';
+                const system = !!payout || salary;
                 const doctor = payout && (isOwner
                   ? <Link to={`/owner/referring-doctors/${payout.referringDoctor.id}`}>{payout.referringDoctor.name}</Link>
                   : payout.referringDoctor.name);
@@ -136,12 +139,14 @@ export function Expenses() {
                     <td><Ltr>{x.expenseNumber}</Ltr></td>
                     <td className="nowrap">{fmtDate(x.expenseDate)}</td>
                     <td>
-                      <CellText sub={payout && <Badge tone="info" icon="users">{te.commissionBadge}</Badge>}>{x.category.name}</CellText>
+                      <CellText sub={payout ? <Badge tone="info" icon="users">{te.commissionBadge}</Badge> : salary && <Badge tone="info" icon="stethoscope">{te.salaryBadge}</Badge>}>{x.category.name}</CellText>
                     </td>
                     <td>
                       {/* A payout's expense: labelled in the UI language, with the doctor it was paid to. */}
-                      <CellText sub={payout ? payout.notes : x.vendorName && `${c.vendor}: ${x.vendorName}`}>
-                        <span className="is-voidable">{payout ? <>{te.commissionFor} <bdi>{doctor}</bdi></> : x.description}</span>
+                      <CellText sub={payout ? payout.notes : !salary && x.vendorName && `${c.vendor}: ${x.vendorName}`}>
+                        <span className="is-voidable">
+                          {payout ? <>{te.commissionFor} <bdi>{doctor}</bdi></> : salary ? <>{te.salaryFor} <bdi>{x.vendorName}</bdi></> : x.description}
+                        </span>
                       </CellText>
                     </td>
                     <td className="num"><span className="is-voidable">{fmtMoney(x.amount)}</span></td>
@@ -155,8 +160,8 @@ export function Expenses() {
                     <td className="actions">
                       <div className="row-actions">
                         {x.hasReceipt && <IconButton icon="paperclip" label={te.openReceipt} onClick={() => openFile(`/expenses/${x.id}/receipt`)} />}
-                        {x.status === 'VALID' && !payout && <Button size="sm" variant="danger-outline" icon="ban" onClick={() => voidExpense(x)}>{te.void}</Button>}
-                        {x.status === 'VALID' && payout && <Badge tone="neutral" icon="lock" title={te.fromPayoutHint}>{te.viaPayout}</Badge>}
+                        {x.status === 'VALID' && !system && <Button size="sm" variant="danger-outline" icon="ban" onClick={() => voidExpense(x)}>{te.void}</Button>}
+                        {x.status === 'VALID' && system && <Badge tone="neutral" icon="lock" title={salary ? te.fromSalaryHint : te.fromPayoutHint}>{te.viaPayout}</Badge>}
                       </div>
                     </td>
                   </tr>

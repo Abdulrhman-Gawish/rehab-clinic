@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState, type ChangeEvent, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { get, getSession, PAYMENT_METHODS, qs } from '../api';
 import { usePaged, type Page } from '../components';
 import { fmtDate, fmtDateTime, fmtMoney, fmtMonth, fmtNumber, fmtPercent } from '../format';
@@ -7,8 +7,8 @@ import { label, useI18n } from '../i18n';
 import { addDays, firstOfLastMonth, firstOfMonth, todayCairo } from '../time';
 import { Ltr, useLoad, Values } from '../util';
 import {
-  Badge, Button, Card, EmptyState, Field, IconButton, Input, Loading, PageHeader, Person, Segmented,
-  Select, Stat, Stats, StatusBadge, Table, type IconName,
+  Badge, Button, ButtonLink, Card, CellText, EmptyState, Field, Icon, IconButton, Input, Loading, PageHeader, Person,
+  SectionTitle, Segmented, Select, Stat, Stats, StatusBadge, Table, Totals, TotalsRow, type IconName, type Tone,
 } from '../ui';
 import '../styles/areas/owner.css';
 
@@ -22,6 +22,109 @@ function DayPicker({ date, onChange }: { date: string; onChange: (date: string) 
       <IconButton icon="chevron-right" label={t.ui.nextDay} variant="outline" size="md" onClick={() => onChange(addDays(date, 1))} />
       <Button onClick={() => onChange(todayCairo())}>{t.ui.today}</Button>
     </div>
+  );
+}
+
+// ---------- Outstanding (daily summary and reports) ----------
+
+type ClinicOwesTotals = { owed: string; doctorSalaries: string; referralCommissions: string; advances: string; pendingCommissions: string };
+/** GET /billing/daily-summary `outstanding`, GET /reports/money-flow: owed at the start, what moved it, owed at the end. */
+interface OutstandingFlow {
+  patientsOwe: { opening: string; invoiced: string; adjustments: string; cancelled: string; payments: string; refunds: string; closing: string; unpaidInvoices: number };
+  clinicOwes: {
+    opening: ClinicOwesTotals; salariesEarned: string; salaryAdjustments: string; commissionsEarned: string; salaryPayments: string; commissionPayouts: string;
+    advancesChange: string; closing: ClinicOwesTotals;
+  } | null;
+}
+
+const isZero = (amount: string) => Number(amount) === 0;
+
+/**
+ * The two balances side by side, as a ledger: owed at the start of `from`, each movement (amounts that lower the
+ * balance are shown negative), owed at the end of `to`. What the clinic owes is null for a receptionist.
+ */
+function FlowCards({ flow, from, to }: { flow: OutstandingFlow; from: string; to: string }) {
+  const { t } = useI18n();
+  const ts = t.summary;
+  const f = ts.flow;
+  const p = flow.patientsOwe;
+  const c = flow.clinicOwes;
+  // `always`: shown even at 0.00 (the main movements); the rare ones only when they happened.
+  const move = (name: string, amount: string, minus = false, always = false) =>
+    always || !isZero(amount) ? <TotalsRow label={name} value={fmtMoney(amount, minus)} /> : null;
+  return (
+    <div className={c ? 'split split--even' : 'stack'}>
+      <Card className="owner-flow" title={ts.patientsOwe} icon="receipt" description={f.patientsHint}>
+        <Totals>
+          <TotalsRow label={f.start(fmtDate(from))} value={fmtMoney(p.opening)} />
+          {move(f.invoiced, p.invoiced, false, true)}
+          {move(f.adjustments, p.adjustments)}
+          {move(f.cancelled, p.cancelled, true)}
+          {move(f.payments, p.payments, true, true)}
+          {move(f.refunds, p.refunds)}
+          <div className="totals__divider" />
+          <TotalsRow label={f.end(fmtDate(to))} value={fmtMoney(p.closing)} strong />
+          <TotalsRow label={ts.patientsOweHint(fmtNumber(p.unpaidInvoices))} value="" muted />
+        </Totals>
+      </Card>
+      {c && (
+        <Card className="owner-flow" title={ts.clinicOwes} icon="stethoscope" description={f.clinicHint}>
+          <Totals>
+            <TotalsRow label={f.start(fmtDate(from))} value={fmtMoney(c.opening.owed)} />
+            {move(f.salariesEarned, c.salariesEarned, false, true)}
+            {move(f.salaryAdjustments, c.salaryAdjustments)}
+            {move(f.commissionsEarned, c.commissionsEarned, false, true)}
+            {move(f.salaryPayments, c.salaryPayments, true, true)}
+            {move(f.commissionPayouts, c.commissionPayouts, true, true)}
+            {move(f.advancesChange, c.advancesChange)}
+            <div className="totals__divider" />
+            <TotalsRow label={f.end(fmtDate(to))} value={fmtMoney(c.closing.owed)} strong />
+            <TotalsRow label={ts.clinicOwesHint(fmtMoney(c.closing.doctorSalaries), fmtMoney(c.closing.referralCommissions))} value="" muted />
+            {!isZero(c.closing.advances) && <TotalsRow label={ts.advances} value={fmtMoney(c.closing.advances)} muted />}
+          </Totals>
+          {!isZero(c.advancesChange) && <p className="owner-note"><Icon name="info" />{f.advancesChangeHint}</p>}
+          {!isZero(c.closing.pendingCommissions) && (
+            <p className="owner-note"><Icon name="clock" />{ts.pending(fmtMoney(c.closing.pendingCommissions))}</p>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/** Daily summary: what was still owed when the day ended (headline figures), then how it moved during the day. */
+function DayOutstanding({ o, date, showDetails }: { o: OutstandingFlow; date: string; showDetails: boolean }) {
+  const { t } = useI18n();
+  const ts = t.summary;
+  const c = o.clinicOwes;
+  return (
+    <section className="stack" aria-label={ts.outstandingTitle(fmtDate(date))}>
+      <SectionTitle
+        actions={showDetails && (
+          <ButtonLink to={`/owner/reports${qs({ from: date, to: date })}`} size="sm" icon="chart">{ts.details}</ButtonLink>
+        )}
+      >
+        {ts.outstandingTitle(fmtDate(date))}
+      </SectionTitle>
+      <p className="text-muted owner-lead">{ts.outstandingHint}</p>
+      <Stats>
+        <Stat
+          icon="receipt" tone="warning" label={ts.patientsOwe} value={fmtMoney(o.patientsOwe.closing)}
+          hint={ts.patientsOweHint(fmtNumber(o.patientsOwe.unpaidInvoices))}
+        />
+        {c && (
+          <Stat
+            icon="stethoscope" tone="warning" label={ts.clinicOwes} value={fmtMoney(c.closing.owed)}
+            hint={ts.clinicOwesHint(fmtMoney(c.closing.doctorSalaries), fmtMoney(c.closing.referralCommissions))}
+          />
+        )}
+        {c && !isZero(c.closing.advances) && (
+          <Stat icon="clock" tone="info" label={ts.advances} value={fmtMoney(c.closing.advances)} hint={ts.advancesHint} />
+        )}
+      </Stats>
+      <h3 className="owner-subhead">{ts.flow.title}</h3>
+      <FlowCards flow={o} from={date} to={date} />
+    </section>
   );
 }
 
@@ -59,6 +162,8 @@ export function Summary() {
             <Stat icon="check-circle" tone="highlight" label={ts.expectedCashLabel} value={fmtMoney(s.expectedCash)} hint={ts.expectedCashHint} />
           </Stats>
 
+          <DayOutstanding o={s.outstanding} date={s.date} showDetails={!isReceptionist} />
+
           <Card flush title={ts.byMethod} icon="credit-card" description={ts.period(t.common.range(fmtDateTime(s.from), fmtDateTime(s.to)))}>
             <Table
               head={<>
@@ -69,6 +174,7 @@ export function Summary() {
               <MoneyRow name={ts.payments} m={s.payments} />
               <MoneyRow name={ts.refunds} m={s.refunds} />
               <MoneyRow name={ts.expenses} m={s.expenses} />
+              {s.salaryPayments.count > 0 && <MoneyRow name={ts.salaryPayments} m={s.salaryPayments} part />}
               {s.commissionPayouts.count > 0 && <MoneyRow name={ts.commissionPayouts} m={s.commissionPayouts} part />}
             </Table>
             <div className="cluster owner-card-foot">
@@ -158,11 +264,22 @@ function presetRange(name: (typeof PRESETS)[number]): Range {
   return { from: `${today.slice(0, 4)}-01-01`, to: today };
 }
 
+const isDate = (v: string | null): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
+
 export function OwnerReports() {
   const { t } = useI18n();
   const tr = t.reports;
-  const [from, setFrom] = useState(firstOfLastMonth());
-  const [to, setTo] = useState(todayCairo());
+  // ?from=&to= (e.g. from the daily summary's "Full details"); otherwise last month to today.
+  const [params] = useSearchParams();
+  const [from, setFrom] = useState(() => {
+    const f = params.get('from');
+    const to = params.get('to');
+    return isDate(f) && (!isDate(to) || f <= to) ? f : firstOfLastMonth();
+  });
+  const [to, setTo] = useState(() => {
+    const v = params.get('to');
+    return isDate(v) && v >= from ? v : todayCairo();
+  });
   const range = { from, to };
   const pick = (r: Range) => { setFrom(r.from); setTo(r.to); };
   return (
@@ -183,13 +300,13 @@ export function OwnerReports() {
           </div>
         </Card>
         <SummaryReport range={range} />
+        <FinanceReport range={range} />
         <RevenueReport range={range} />
         <AttendanceReport range={range} />
         <div className="split split--even">
           <DiscountsReport range={range} />
           <ExpensesReport range={range} />
         </div>
-        <OutstandingReport range={range} />
       </div>
     </>
   );
@@ -200,17 +317,18 @@ const useReport = (path: string, range: Range, extra: Record<string, string | nu
 
 // Summary fields that are EGP amounts (the others are counts).
 const MONEY_FIELDS = new Set([
-  'collected', 'refunded', 'netCollected', 'expenses', 'commissionPayouts', 'netAfterExpenses', 'invoiced', 'outstanding',
-  'discountsGiven',
+  'collected', 'refunded', 'netCollected', 'expenses', 'commissionPayouts', 'salaryPayments', 'netAfterExpenses', 'invoiced',
+  'patientsOwe', 'clinicOwes', 'discountsGiven',
 ]);
 const FIELD_ICON: Record<string, IconName> = {
-  collected: 'banknote', refunded: 'undo', netCollected: 'trending-up', expenses: 'wallet', commissionPayouts: 'users', netAfterExpenses: 'chart',
-  invoiced: 'receipt', outstanding: 'alert-circle', discountsGiven: 'percent', attendedVisits: 'user-check', noShows: 'user-x',
-  cancellations: 'ban', newPatients: 'user-plus', unsignedNotes: 'note-pen',
+  collected: 'banknote', refunded: 'undo', netCollected: 'trending-up', expenses: 'wallet', commissionPayouts: 'users',
+  salaryPayments: 'stethoscope', netAfterExpenses: 'chart', invoiced: 'receipt', patientsOwe: 'alert-circle', clinicOwes: 'clock',
+  discountsGiven: 'percent', attendedVisits: 'user-check', noShows: 'user-x', cancellations: 'ban', newPatients: 'user-plus',
+  unsignedNotes: 'note-pen',
 };
 const FIELD_TONE: Record<string, 'warning' | 'error' | 'info' | 'neutral' | 'highlight'> = {
-  netAfterExpenses: 'highlight', refunded: 'neutral', expenses: 'neutral', commissionPayouts: 'neutral', outstanding: 'warning',
-  discountsGiven: 'info',
+  netAfterExpenses: 'highlight', refunded: 'neutral', expenses: 'neutral', commissionPayouts: 'neutral', salaryPayments: 'neutral',
+  patientsOwe: 'warning', clinicOwes: 'warning', discountsGiven: 'info',
   noShows: 'error', cancellations: 'neutral', unsignedNotes: 'warning', newPatients: 'info',
 };
 
@@ -397,6 +515,7 @@ function ExpensesReport({ range }: { range: Range }) {
     <Card
       title={tr.expenses} icon="wallet"
       description={e && tr.expensesLine(fmtNumber(e.count), fmtMoney(e.total))
+        + (Number(e.salaryPayments) > 0 ? ` · ${tr.salaryPart(fmtMoney(e.salaryPayments))}` : '')
         + (Number(e.commissionPayouts) > 0 ? ` · ${tr.commissionPart(fmtMoney(e.commissionPayouts))}` : '')}
     >
       {!e ? <Loading /> : e.count === 0 ? <EmptyState compact icon="wallet" title={tr.noData} /> : (
@@ -417,26 +536,234 @@ function ExpensesReport({ range }: { range: Range }) {
   );
 }
 
-function OutstandingReport({ range }: { range: Range }) {
+/**
+ * Money flow and what is owed over the range: the two balances at the start and end (same numbers as the daily
+ * summary for a one-day range), every transaction, and who is owed what at the end of `to`.
+ */
+function FinanceReport({ range }: { range: Range }) {
   const { t } = useI18n();
   const tr = t.reports;
-  // Another range is another list: the hook goes back to page 1.
-  const { res: o, pager } = usePaged(`/reports/outstanding${qs({ ...range })}`, 10);
-  const c = tr.ocol;
+  const flow = useReport('money-flow', range) as OutstandingFlow | null;
   return (
-    <Card flush title={tr.outstanding} icon="alert-circle" description={tr.outstandingHint}>
+    <section className="stack-lg" aria-label={tr.finance}>
+      <div>
+        <h2 className="section-title">{tr.finance}</h2>
+        <p className="text-muted owner-lead">{tr.financeHint(fmtDate(range.from), fmtDate(range.to))}</p>
+      </div>
+      {!flow ? <Card><Loading /></Card> : <FlowCards flow={flow} from={range.from} to={range.to} />}
+      <TransactionsReport range={range} />
+      <ClinicOwesReport asOf={range.to} />
+      <PatientsOweReport asOf={range.to} />
+    </section>
+  );
+}
+
+interface CountTotal { count: number; total: string }
+interface TransactionRow {
+  kind: 'PAYMENT' | 'REFUND' | 'EXPENSE'; id: string; number: string; date: string; recordedAt: string; method: string;
+  amount: string; patient: { id: string; name: string } | null; invoice: { id: string; invoiceNumber: string } | null;
+  expenseOrigin: string | null; category: { id: string; name: string } | null; description: string | null;
+  payee: string | null; reason: string | null; recordedBy: { id: string; name: string };
+}
+type TransactionPage = Page<TransactionRow> & {
+  totals: { payments: CountTotal; refunds: CountTotal; expenses: CountTotal; salaryPayments: CountTotal; commissionPayouts: CountTotal; net: string };
+};
+
+const TX_KINDS = ['', 'PAYMENT', 'REFUND', 'EXPENSE'];
+const TX_TONE: Record<string, Tone> = { PAYMENT: 'success', REFUND: 'warning', EXPENSE: 'neutral' };
+
+function TransactionsReport({ range }: { range: Range }) {
+  const { t } = useI18n();
+  const tr = t.reports;
+  const c = tr.tcol;
+  const [kind, setKind] = useState('');
+  // Another range or kind is another list: the hook goes back to page 1.
+  const { res, pager } = usePaged<TransactionPage>(`/reports/transactions${qs({ ...range, kind })}`, 20);
+  const totals = res?.totals;
+  const none = <span className="text-muted">{t.common.none}</span>;
+  return (
+    <Card
+      flush title={tr.transactions} icon="list" description={tr.transactionsHint}
+      actions={<Segmented label={tr.transactions} value={kind} onChange={setKind} options={TX_KINDS.map((k) => ({ value: k, label: label(tr.kinds, k) }))} />}
+    >
+      {!res || !totals ? <Loading /> : (
+        <>
+          <dl className="owner-methods owner-card-head" aria-label={tr.total}>
+            <div><dt>{`${tr.kinds.PAYMENT} (${fmtNumber(totals.payments.count)})`}</dt><dd>{fmtMoney(totals.payments.total)}</dd></div>
+            <div><dt>{`${tr.kinds.REFUND} (${fmtNumber(totals.refunds.count)})`}</dt><dd>{fmtMoney(totals.refunds.total, true)}</dd></div>
+            <div>
+              <dt>{`${tr.kinds.EXPENSE} (${fmtNumber(totals.expenses.count)})`}</dt><dd>{fmtMoney(totals.expenses.total, true)}</dd>
+              {totals.salaryPayments.count > 0 && <dd className="owner-part">{tr.ofSalaries} {fmtMoney(totals.salaryPayments.total)}</dd>}
+              {totals.commissionPayouts.count > 0 && <dd className="owner-part">{tr.ofCommissions} {fmtMoney(totals.commissionPayouts.total)}</dd>}
+            </div>
+            <div><dt>{tr.net}</dt><dd>{fmtMoney(totals.net)}</dd></div>
+          </dl>
+          <Table
+            head={<>
+              <th>{c.date}</th><th>{c.number}</th><th>{c.kind}</th><th>{c.party}</th><th>{c.details}</th><th>{c.method}</th>
+              <th className="num">{c.amount}</th><th>{c.by}</th>
+            </>}
+            isEmpty={res.items.length === 0} empty={<EmptyState compact icon="list" title={tr.noTransactions} />}
+          >
+            {res.items.map((x) => (
+              <tr key={`${x.kind}-${x.id}`}>
+                <td className="nowrap">{x.kind === 'EXPENSE' ? fmtDate(x.date) : fmtDateTime(x.recordedAt)}</td>
+                <td className="nowrap"><Ltr>{x.number}</Ltr></td>
+                <td><Badge tone={TX_TONE[x.kind]}>{x.kind === 'EXPENSE' ? label(tr.origin, x.expenseOrigin) : label(tr.kind, x.kind)}</Badge></td>
+                <td>{x.patient ? <Link to={`/patients/${x.patient.id}`}>{x.patient.name}</Link> : x.payee ?? none}</td>
+                <td>
+                  {x.invoice
+                    ? <CellText sub={x.reason}><Link to={`/reception/invoices/${x.invoice.id}`}><Ltr>{x.invoice.invoiceNumber}</Ltr></Link></CellText>
+                    : <CellText sub={x.description}>{x.category?.name ?? none}</CellText>}
+                </td>
+                <td>{label(t.enums.PaymentMethod, x.method)}</td>
+                {/* Money out (refunds, expenses) is shown negative. */}
+                <td className="num"><strong>{fmtMoney(x.amount, x.kind !== 'PAYMENT')}</strong></td>
+                <td>{x.recordedBy.name}</td>
+              </tr>
+            ))}
+          </Table>
+          {pager}
+        </>
+      )}
+    </Card>
+  );
+}
+
+interface SalaryRow {
+  doctor: { id: string; name: string }; month: string; fixedSalary: string; fixedDue: boolean; sessionCount: number;
+  commissions: string; earned: string; paid: string; balance: string;
+}
+interface ReferralRow { referringDoctor: { id: string; name: string }; earned: string; paid: string; balance: string; pending: string }
+interface ClinicOwesReport {
+  asOf: string; owed: string; advances: string;
+  doctorSalaries: { owed: string; advances: string; rows: SalaryRow[] };
+  referralCommissions: { owed: string; advances: string; pending: string; rows: ReferralRow[] };
+}
+
+/** Who the clinic owes at the end of `asOf`: each doctor-month of salary, each referring doctor. */
+function ClinicOwesReport({ asOf }: { asOf: string }) {
+  const { t } = useI18n();
+  const tr = t.reports;
+  const s = tr.scol;
+  const r = tr.rcol;
+  const [o] = useLoad(() => get<ClinicOwesReport>(`/reports/clinic-owes${qs({ asOf })}`), [asOf]);
+  // A negative balance was paid ahead (an advance): shown as a positive amount with a badge.
+  const balance = (b: string) => Number(b) < 0
+    ? <span className="owner-advance"><Badge tone="info">{tr.advanceBadge}</Badge> {fmtMoney(b, true)}</span>
+    : <strong>{fmtMoney(b)}</strong>;
+  return (
+    <Card title={tr.clinicOwes} icon="stethoscope" description={tr.clinicOwesHint(fmtDate(asOf))}>
+      {!o ? <Loading /> : (
+        <div className="stack">
+          <dl className="owner-methods">
+            <div><dt>{tr.owedTotal}</dt><dd>{fmtMoney(o.owed)}</dd></div>
+            <div><dt>{tr.salaries}</dt><dd>{fmtMoney(o.doctorSalaries.owed)}</dd></div>
+            <div><dt>{tr.referralCommissions}</dt><dd>{fmtMoney(o.referralCommissions.owed)}</dd></div>
+            {!isZero(o.advances) && <div><dt>{tr.advances}</dt><dd>{fmtMoney(o.advances)}</dd></div>}
+            {!isZero(o.referralCommissions.pending) && <div><dt>{tr.pendingTotal}</dt><dd>{fmtMoney(o.referralCommissions.pending)}</dd></div>}
+          </dl>
+          {o.doctorSalaries.rows.length === 0 && o.referralCommissions.rows.length === 0 && (
+            <EmptyState compact icon="check-circle" title={tr.noClinicOwes} />
+          )}
+          {o.doctorSalaries.rows.length > 0 && (
+            <div>
+              <h3 className="owner-subhead">{tr.salaries}</h3>
+              <div className="table-card">
+                <Table
+                  dense caption={tr.salaries}
+                  head={<>
+                    <th>{s.doctor}</th><th>{s.month}</th><th className="num">{s.fixed}</th><th className="num">{s.sessions}</th>
+                    <th className="num">{s.commissions}</th><th className="num">{s.earned}</th><th className="num">{s.paid}</th>
+                    <th className="num">{s.balance}</th>
+                  </>}
+                >
+                  {o.doctorSalaries.rows.map((row) => (
+                    <tr key={`${row.doctor.id}-${row.month}`}>
+                      <td><Link to={`/owner/salaries${qs({ month: row.month, doctor: row.doctor.id })}`}>{row.doctor.name}</Link></td>
+                      <td className="nowrap">{fmtMonth(row.month)}</td>
+                      <td className="num">{row.fixedDue ? fmtMoney(row.fixedSalary) : <span className="text-muted">{tr.dueAtMonthEnd}</span>}</td>
+                      <td className="num">{fmtNumber(row.sessionCount)}</td>
+                      <td className="num">{fmtMoney(row.commissions)}</td>
+                      <td className="num">{fmtMoney(row.earned)}</td>
+                      <td className="num">{fmtMoney(row.paid)}</td>
+                      <td className="num">{balance(row.balance)}</td>
+                    </tr>
+                  ))}
+                </Table>
+              </div>
+            </div>
+          )}
+          {o.referralCommissions.rows.length > 0 && (
+            <div>
+              <h3 className="owner-subhead">{tr.referralCommissions}</h3>
+              <div className="table-card">
+                <Table
+                  dense caption={tr.referralCommissions}
+                  head={<>
+                    <th>{r.doctor}</th><th className="num">{r.earned}</th><th className="num">{r.paid}</th>
+                    <th className="num">{r.pending}</th><th className="num">{r.balance}</th>
+                  </>}
+                >
+                  {o.referralCommissions.rows.map((row) => (
+                    <tr key={row.referringDoctor.id}>
+                      <td><Link to={`/owner/referring-doctors/${row.referringDoctor.id}`}>{row.referringDoctor.name}</Link></td>
+                      <td className="num">{fmtMoney(row.earned)}</td>
+                      <td className="num">{fmtMoney(row.paid)}</td>
+                      <td className="num">{fmtMoney(row.pending)}</td>
+                      <td className="num">{balance(row.balance)}</td>
+                    </tr>
+                  ))}
+                </Table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+interface UnpaidInvoice { id: string; invoiceNumber: string; issuedAt: string; total: string; paid: string; balance: string }
+type PatientsOwePage = Page<{
+  patient: { id: string; name: string; phone: string }; balance: string; oldestUnpaidInvoiceDate: string; invoices: UnpaidInvoice[];
+}> & { asOf: string; totalBalance: string; unpaidInvoices: number };
+
+/** Patients with a balance at the end of `asOf`, largest first, each with the invoices it comes from. */
+function PatientsOweReport({ asOf }: { asOf: string }) {
+  const { t } = useI18n();
+  const tr = t.reports;
+  const c = tr.ocol;
+  // Another day is another list: the hook goes back to page 1.
+  const { res: o, pager } = usePaged<PatientsOwePage>(`/reports/patients-owe${qs({ asOf })}`, 10);
+  return (
+    <Card
+      flush title={tr.patientsOwe} icon="receipt"
+      description={o ? tr.patientsOweHint(fmtDate(asOf), fmtNumber(o.unpaidInvoices), fmtMoney(o.totalBalance)) : undefined}
+    >
       {!o ? <Loading /> : (
         <>
           <Table
-            head={<><th>{c.patient}</th><th>{c.phone}</th><th className="num">{c.balance}</th><th>{c.oldest}</th></>}
-            isEmpty={o.items.length === 0} empty={<EmptyState compact icon="check-circle" title={tr.noOutstanding} />}
+            head={<><th>{c.patient}</th><th>{c.phone}</th><th>{c.invoices}</th><th>{c.oldest}</th><th className="num">{c.balance}</th></>}
+            isEmpty={o.items.length === 0} empty={<EmptyState compact icon="check-circle" title={tr.noPatientsOwe} />}
           >
-            {o.items.map((r: any) => (
+            {o.items.map((r) => (
               <tr key={r.patient.id}>
                 <td><Person name={r.patient.name} to={`/patients/${r.patient.id}`} size={32} /></td>
                 <td><Ltr>{r.patient.phone}</Ltr></td>
-                <td className="num"><strong>{fmtMoney(r.balance)}</strong></td>
+                <td>
+                  <ul className="owner-invoices">
+                    {r.invoices.map((i) => (
+                      <li key={i.id}>
+                        <Link to={`/reception/invoices/${i.id}`}><Ltr>{i.invoiceNumber}</Ltr></Link>
+                        <span className="text-muted">{tr.invoiceLine(fmtMoney(i.total), fmtMoney(i.paid))}</span>
+                        <strong className="tabular">{fmtMoney(i.balance)}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                </td>
                 <td className="nowrap">{fmtDate(r.oldestUnpaidInvoiceDate)}</td>
+                <td className="num"><strong>{fmtMoney(r.balance)}</strong></td>
               </tr>
             ))}
           </Table>

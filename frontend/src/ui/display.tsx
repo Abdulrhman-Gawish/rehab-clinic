@@ -79,7 +79,7 @@ export function Badge({ tone = 'neutral', dot, icon, title, children }: { tone?:
 type EnumName = keyof Messages['enums'];
 
 // Status colour by enum value. Status never relies on colour alone: the badge always has its text label.
-const TONES: Partial<Record<EnumName, Record<string, Tone>>> = {
+export const STATUS_TONES: Partial<Record<EnumName, Record<string, Tone>>> = {
   AppointmentStatus: { PENDING: 'warning', CONFIRMED: 'info', ATTENDED: 'success', NO_SHOW: 'error', CANCELLED: 'neutral', RESCHEDULED: 'neutral' },
   VisitStatus: { ACTIVE: 'success', VOIDED: 'error' },
   NoteStatus: { DRAFT: 'warning', SIGNED: 'success' },
@@ -94,6 +94,7 @@ const TONES: Partial<Record<EnumName, Record<string, Tone>>> = {
   PatientReferralStatus: { ACTIVE: 'success', ENDED: 'neutral' },
   UserRole: { OWNER: 'brand', DOCTOR: 'info', RECEPTIONIST: 'neutral' },
   AppointmentSource: { ONLINE: 'info', RECEPTION: 'neutral' },
+  AppointmentType: { EXAMINATION: 'accent', FOLLOW_UP: 'info', SESSION: 'brand' },
   PatientSource: { ONLINE: 'info', RECEPTION: 'neutral' },
 };
 
@@ -102,7 +103,7 @@ export function StatusBadge({ kind, value, dot = true }: { kind: EnumName; value
   const { t } = useI18n();
   if (!value) return <span className="text-muted">{t.common.none}</span>;
   const map = t.enums[kind] as Record<string, string>;
-  return <Badge tone={TONES[kind]?.[value] ?? 'neutral'} dot={dot}>{enumLabel(map, value)}</Badge>;
+  return <Badge tone={STATUS_TONES[kind]?.[value] ?? 'neutral'} dot={dot}>{enumLabel(map, value)}</Badge>;
 }
 
 /** Active / inactive (or hidden) flag. */

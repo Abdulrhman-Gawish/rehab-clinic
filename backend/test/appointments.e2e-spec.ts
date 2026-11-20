@@ -47,6 +47,7 @@ const PUBLIC_RESPONSE_KEYS = [
   'serviceName',
   'startAt',
   'status',
+  'type',
 ];
 
 describe('Appointments (e2e)', () => {
@@ -101,6 +102,7 @@ describe('Appointments (e2e)', () => {
         phone: '01012345678',
         doctorId: doctorA.doctorId,
         serviceId,
+        type: 'EXAMINATION',
         startAt: at('10:00'),
         ...overrides,
       });
@@ -117,6 +119,7 @@ describe('Appointments (e2e)', () => {
         phone: '01112345678',
         doctorId: doctorA.doctorId,
         serviceId,
+        type: 'SESSION',
         startAt: at('11:00'),
         ...overrides,
       });
@@ -351,6 +354,7 @@ describe('Appointments (e2e)', () => {
           patientId: res.body.patient.id,
           doctorId: doctorBId,
           serviceId,
+          type: 'FOLLOW_UP',
           startAt: at('15:00'),
           notes: 'Prefers the ground floor room',
         })
@@ -365,7 +369,12 @@ describe('Appointments (e2e)', () => {
       await request(server)
         .post('/api/v1/appointments')
         .set('Authorization', bearer(receptionist))
-        .send({ doctorId: doctorA.doctorId, serviceId, startAt: at('11:00') })
+        .send({
+          doctorId: doctorA.doctorId,
+          serviceId,
+          type: 'SESSION',
+          startAt: at('11:00'),
+        })
         .expect(400);
       await staffBook({ phone: undefined }).expect(400);
     });
@@ -746,6 +755,40 @@ describe('Appointments (e2e)', () => {
   });
 
   describe('reading', () => {
+    it('day list over a range with `to` (at most 7 days, inclusive)', async () => {
+      const tue = await staffBook({ startAt: at('11:00') }).expect(201);
+      const wed = await staffBook({
+        name: 'Wednesday Patient',
+        phone: '01512345678',
+        startAt: at('11:00', '2026-11-04'),
+      }).expect(201);
+      const ids = (body: { id: string }[]) => body.map((r) => r.id);
+
+      const week = await request(server)
+        .get(`/api/v1/appointments/day?date=${TUESDAY}&to=2026-11-09`)
+        .set('Authorization', bearer(receptionist))
+        .expect(200);
+      expect(ids(week.body)).toEqual([tue.body.id, wed.body.id]);
+      expect(week.body[1].allowedActions).toEqual(
+        expect.arrayContaining(['cancel', 'reschedule']),
+      );
+
+      // Without `to`: the one day, as before.
+      const day = await request(server)
+        .get(`/api/v1/appointments/day?date=${TUESDAY}`)
+        .set('Authorization', bearer(receptionist))
+        .expect(200);
+      expect(ids(day.body)).toEqual([tue.body.id]);
+
+      for (const to of ['2026-11-10', '2026-11-02']) {
+        const res = await request(server)
+          .get(`/api/v1/appointments/day?date=${TUESDAY}&to=${to}`)
+          .set('Authorization', bearer(receptionist))
+          .expect(422);
+        expect(res.body.code).toBe('DATE_OUT_OF_RANGE');
+      }
+    });
+
     it('lists with filters, finds by id and by reference code, and per patient', async () => {
       const a = await staffBook({ startAt: at('11:00') }).expect(201);
       await staffBook({ startAt: at('15:00'), doctorId: doctorBId }).expect(

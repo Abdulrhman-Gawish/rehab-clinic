@@ -18,8 +18,10 @@ export const CLINICAL_NOTE_VISIT_UNIQUE = 'uq_clinical_notes_visit';
 
 /**
  * What the doctor recorded for one visit (at most one note per visit). Only
- * the visit's doctor writes it. A SIGNED note never changes again: later
- * additions are ClinicalNoteAddendum rows.
+ * the visit's doctor writes it, any time, also after signing (every change
+ * is audited). Which fields it has follows the visit's appointment type
+ * (note-fields.ts); values of other types' fields are kept, read-only.
+ * Addenda (ClinicalNoteAddendum) are added to signed notes.
  */
 @Entity('clinical_notes')
 @Unique(CLINICAL_NOTE_VISIT_UNIQUE, ['visitId'])
@@ -62,12 +64,16 @@ export class ClinicalNote extends BaseEntity {
   assessment: string | null;
 
   @Column({ type: 'text', nullable: true })
+  diagnosis: string | null;
+
+  // "Treatment provided".
+  @Column({ type: 'text', nullable: true })
   treatmentDone: string | null;
 
   @Column({ type: 'text', nullable: true })
   progress: string | null;
 
-  // Next steps and home exercises.
+  // "Treatment plan": next steps and home exercises.
   @Column({ type: 'text', nullable: true })
   plan: string | null;
 

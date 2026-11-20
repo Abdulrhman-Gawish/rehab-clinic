@@ -224,6 +224,94 @@ describe('Doctor schedules & time off (e2e)', () => {
     });
   });
 
+  describe('working hours (all doctors at once)', () => {
+    it('returns active ranges and overlapping time off; a doctor sees only their own', async () => {
+      await addRange({
+        dayOfWeek: 2,
+        startTime: '09:00',
+        endTime: '13:00',
+      }).expect(201);
+      const paused = await addRange({
+        dayOfWeek: 3,
+        startTime: '09:00',
+        endTime: '13:00',
+      }).expect(201);
+      await request(server)
+        .patch(
+          `/api/v1/doctors/${doctorId}/schedules/${paused.body.id}/deactivate`,
+        )
+        .set('Authorization', bearer(receptionist))
+        .expect(200);
+      const other = await insertDoctor(ctx.dataSource);
+      await addRange(
+        { dayOfWeek: 2, startTime: '16:00', endTime: '20:00' },
+        other.id,
+      ).expect(201);
+      const off = await request(server)
+        .post(`/api/v1/doctors/${doctorId}/time-off`)
+        .set('Authorization', bearer(receptionist))
+        .send({
+          startAt: '2026-11-10T07:00:00Z',
+          endAt: '2026-11-10T15:00:00Z',
+        })
+        .expect(201);
+      await request(server)
+        .post(`/api/v1/doctors/${doctorId}/time-off`)
+        .set('Authorization', bearer(receptionist))
+        .send({
+          startAt: '2026-12-10T07:00:00Z',
+          endAt: '2026-12-10T15:00:00Z',
+        })
+        .expect(201);
+
+      const all = await request(server)
+        .get('/api/v1/working-hours?from=2026-11-07&to=2026-11-13')
+        .set('Authorization', bearer(receptionist))
+        .expect(200);
+      expect(
+        all.body.schedules
+          .map((s: { doctorId: string; startTime: string }) => [
+            s.doctorId,
+            s.startTime,
+          ])
+          .sort(),
+      ).toEqual(
+        [
+          [doctorId, '09:00'],
+          [other.id, '16:00'],
+        ].sort(),
+      );
+      expect(all.body.timeOff.map((o: { id: string }) => o.id)).toEqual([
+        off.body.timeOff.id,
+      ]);
+
+      const own = await request(server)
+        .get('/api/v1/working-hours?from=2026-11-07&to=2026-11-13')
+        .set('Authorization', bearer(doctorUser))
+        .expect(200);
+      expect(
+        own.body.schedules.every(
+          (s: { doctorId: string }) => s.doctorId === doctorId,
+        ),
+      ).toBe(true);
+      expect(own.body.schedules).toHaveLength(1);
+    });
+
+    it('rejects a range over 31 days or backwards', async () => {
+      for (const to of ['2026-12-08', '2026-11-06']) {
+        const res = await request(server)
+          .get(`/api/v1/working-hours?from=2026-11-07&to=${to}`)
+          .set('Authorization', bearer(receptionist))
+          .expect(422);
+        expect(res.body.code).toBe('DATE_OUT_OF_RANGE');
+      }
+      await request(server)
+        .get('/api/v1/working-hours?from=2026-11-07')
+        .set('Authorization', bearer(receptionist))
+        .expect(400);
+    });
+  });
+
   describe('time off', () => {
     const addTimeOff = (body: Record<string, unknown>) =>
       request(server)

@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -35,7 +36,9 @@ import type {
   Actor,
   AuthenticatedUser,
 } from '../../common/interfaces/authenticated-request.interface.js';
+import { ChangeAppointmentTypeDto } from '../appointments/dto/appointment.dto.js';
 import {
+  AttendDto,
   AttendResponseDto,
   ListVisitsQueryDto,
   QueueEntryDto,
@@ -45,7 +48,6 @@ import {
   VisitResponseDto,
   WalkInDto,
 } from './dto/visit.dto.js';
-import { PackageChoiceDto } from '../packages/dto/package.dto.js';
 import { VisitsService } from './visits.service.js';
 
 const STAFF = [UserRole.OWNER, UserRole.RECEPTIONIST, UserRole.DOCTOR];
@@ -150,6 +152,23 @@ export class VisitsController {
   ): Promise<VisitResponseDto> {
     return this.visits.undoVisit(id, dto.reason, actor);
   }
+
+  @Patch(':id/type')
+  @Auth(UserRole.RECEPTIONIST)
+  @ApiOperation({
+    summary: "Set or change a walk-in's type (any status)",
+    description:
+      "RECEPTIONIST only. Audited (VISIT_TYPE_CHANGED). For a visit of an appointment it changes the appointment's type, exactly like PATCH /appointments/:id/type.",
+  })
+  @ApiOkResponse({ type: VisitResponseDto })
+  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  changeType(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ChangeAppointmentTypeDto,
+    @CurrentActor() actor: Actor,
+  ): Promise<VisitResponseDto> {
+    return this.visits.changeType(id, dto.type, actor);
+  }
 }
 
 @ApiTags('Visits')
@@ -173,11 +192,12 @@ export class AttendController {
   })
   @ApiUnprocessableEntityResponse({
     type: ErrorResponseDto,
-    description: 'ATTEND_WRONG_DAY or INVALID_STATUS_TRANSITION',
+    description:
+      'ATTEND_WRONG_DAY, INVALID_STATUS_TRANSITION, PATIENT_DETAILS_REQUIRED (details.missing), NATIONAL_ID_INVALID, NATIONAL_ID_MISMATCH',
   })
   attend(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: PackageChoiceDto,
+    @Body() dto: AttendDto,
     @CurrentActor() actor: Actor,
   ): Promise<AttendResponseDto> {
     return this.visits.attend(id, dto, actor);

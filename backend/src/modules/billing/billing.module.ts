@@ -8,6 +8,7 @@ import { Expense } from '../expenses/entities/expense.entity.js';
 import { DocumentCounter } from './entities/document-counter.entity.js';
 import { InvoiceDiscount } from './entities/invoice-discount.entity.js';
 import { InvoiceItem } from './entities/invoice-item.entity.js';
+import { InvoiceTotalChange } from './entities/invoice-total-change.entity.js';
 import { Payment } from './entities/payment.entity.js';
 import { Invoice } from './entities/invoice.entity.js';
 import { InvoiceReplacementsService } from './invoice-replacements.service.js';
@@ -18,6 +19,7 @@ import {
 import { InvoicesService } from './invoices.service.js';
 import { PaymentsController } from './payments.controller.js';
 import { PaymentsService } from './payments.service.js';
+import { OutstandingModule } from '../outstanding/outstanding.module.js';
 import { PackageVisitBillingPolicy } from '../packages/package-billing-policy.js';
 import { ReferralsModule } from '../referrals/referrals.module.js';
 import { VISIT_BILLING_POLICY } from './visit-billing-policy.js';
@@ -31,6 +33,7 @@ import { VISIT_BILLING_POLICY } from './visit-billing-policy.js';
     TypeOrmModule.forFeature([
       Invoice,
       InvoiceItem,
+      InvoiceTotalChange,
       InvoiceDiscount,
       Payment,
       DocumentCounter,
@@ -38,6 +41,8 @@ import { VISIT_BILLING_POLICY } from './visit-billing-policy.js';
     ]),
     ReferralsModule,
     DocumentCounterModule,
+    // The daily summary's outstanding balances.
+    OutstandingModule,
   ],
   controllers: [
     InvoicesController,

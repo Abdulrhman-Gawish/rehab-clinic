@@ -2,6 +2,7 @@
 // sections, and `npm run i18n:check` compares the open maps (codes, fields, …) too.
 import { deskAr } from './areas/desk.ar';
 import { billingAr } from './areas/billing.ar';
+import { checkinAr } from './areas/checkin.ar';
 import { ownerAr } from './areas/owner.ar';
 import { referralAr } from './areas/referral.ar';
 import { siteAr } from './areas/site.ar';
@@ -64,6 +65,7 @@ export const ar: Messages = {
     attention: 'تحتاج متابعة',
     audit: 'سجل التدقيق',
     referringDoctors: 'الأطباء المُحيلون',
+    salaries: 'الرواتب',
     marketing: 'التسويق والإحالات',
     blog: 'المدونة',
     publicBlog: 'مدوناتنا',
@@ -111,6 +113,16 @@ export const ar: Messages = {
     staffLogin: 'دخول فريق العمل',
     dashboard: 'لوحة التحكم',
     account: 'الحساب',
+  },
+
+  apptType: {
+    label: 'نوع الموعد',
+    notSet: 'النوع غير محدد',
+    pickHint: 'مطلوب. يحدد الحقول التي يملؤها الطبيب، ولا يغيّر السعر أو المدة.',
+    change: 'تغيير النوع',
+    changeTitle: 'تغيير نوع الموعد',
+    changeHint: 'ستعرض ملاحظة الطبيب حقول النوع الجديد، ويُحفظ كل ما كُتب من قبل.',
+    changed: 'تم تغيير نوع الموعد.',
   },
 
   errors: {
@@ -169,8 +181,8 @@ export const ar: Messages = {
       CATEGORY_RESERVED: 'هذا التصنيف يسجّل فيه النظام فقط (دفعات عمولات الأطباء).',
       UNSUPPORTED_FILE_TYPE: 'يُقبل فقط ملفات JPG أو PNG أو WEBP أو PDF.',
       NOTE_NOT_ALLOWED: 'لا يمكن كتابة ملاحظة إلا لزيارة فعّالة.',
-      NOTE_SIGNED: 'لا يمكن تعديل ملاحظة موقّعة؛ أضف ملحقًا.',
-      NOTE_INCOMPLETE: 'اكتب التقييم أو العلاج المُقدَّم قبل التوقيع.',
+      NOTE_SIGNED: 'هذه الملاحظة موقّعة بالفعل؛ احفظ التعديلات بدلًا من ذلك.',
+      NOTE_FIELDS_NOT_IN_TYPE: 'تغيّر نوع الموعد، فأصبحت الملاحظة تعرض حقولًا أخرى. راجعها ثم احفظ مرة أخرى.',
       NOTE_NOT_SIGNED: 'لا يمكن إضافة ملحق إلا لملاحظة موقّعة.',
       NOTE_NOT_VISIBLE: 'هذه الملاحظة مسودة لطبيب آخر.',
       ATTACHMENT_VISIT_MISMATCH: 'هذه الزيارة لا تخص هذا المريض.',
@@ -195,6 +207,14 @@ export const ar: Messages = {
       NOTHING_TO_PAY: 'لا يوجد مبلغ مستحق لهذا الطبيب.',
       PAYOUT_EXCEEDS_OUTSTANDING: 'المبلغ أكبر من المستحق لهذا الطبيب.',
       PAYOUT_VOIDED: 'هذه الدفعة للطبيب مُبطلة بالفعل.',
+      SALARY_TERMS_INVALID: 'شروط الراتب غير صحيحة. راجع نسب أو مبالغ العمولة.',
+      SALARY_MONTH_PAID: 'هذا الشهر (أو شهر بعده) له دفعة راتب بالفعل. الشروط الجديدة تبدأ بعد آخر شهر مدفوع.',
+      PATIENT_DETAILS_REQUIRED: 'أكمل بيانات المريض (وثيقة الهوية، النوع، تاريخ الميلاد، مصدر الإحالة) قبل دخوله إلى الطبيب.',
+      NATIONAL_ID_INVALID: 'رقم قومي مصري غير صحيح (راجع القرن وتاريخ الميلاد).',
+      NATIONAL_ID_MISMATCH: 'تاريخ الميلاد أو النوع لا يطابق الرقم القومي.',
+      ID_DOCUMENT_TAKEN: 'هذا الرقم القومي أو رقم الجواز مسجّل لمريض آخر.',
+      PATIENT_IDENTITY_LOCKED: 'لهذا المريض كود بالفعل: المالك فقط يمكنه تغيير وثيقة الهوية.',
+      PATIENT_CODE_EXHAUSTED: 'لم يتبقَّ كود مريض لهذه الأرقام من الرقم القومي. تواصل مع المالك.',
     },
   },
 
@@ -237,8 +257,8 @@ export const ar: Messages = {
     startAt: 'البداية', endAt: 'النهاية', notes: 'ملاحظات', reason: 'السبب', amount: 'المبلغ', method: 'طريقة الدفع',
     reference: 'المرجع', type: 'النوع', value: 'القيمة', categoryId: 'التصنيف', description: 'الوصف',
     expenseDate: 'تاريخ المصروف', paymentMethod: 'طريقة الدفع', vendorName: 'المورّد', title: 'العنوان', file: 'الملف',
-    visitId: 'الزيارة', content: 'النص', chiefComplaint: 'الشكوى الرئيسية', assessment: 'التقييم',
-    treatmentDone: 'العلاج المُقدَّم', progress: 'التقدّم', plan: 'الخطة', painScore: 'درجة الألم',
+    visitId: 'الزيارة', content: 'النص', chiefComplaint: 'الشكوى الرئيسية', assessment: 'التقييم', diagnosis: 'التشخيص',
+    treatmentDone: 'العلاج المُقدَّم', progress: 'التقدّم', plan: 'خطة العلاج', painScore: 'مستوى الألم',
     allergies: 'الحساسية', chronicConditions: 'الأمراض المزمنة', pastSurgeries: 'العمليات السابقة',
     currentMedications: 'الأدوية الحالية', durationMinutes: 'المدة', basePrice: 'السعر الأساسي',
     priceOverride: 'سعر خاص', dayOfWeek: 'اليوم', startTime: 'وقت البداية', endTime: 'وقت النهاية',
@@ -277,6 +297,7 @@ export const ar: Messages = {
   // Page text, one file per area (src/i18n/areas).
   ...deskAr,
   ...billingAr,
+  ...checkinAr,
   ...ownerAr,
   ...referralAr,
   ...siteAr,
@@ -295,6 +316,7 @@ export const ar: Messages = {
     },
     AppointmentStatus: { PENDING: 'قيد الانتظار', CONFIRMED: 'مؤكد', ATTENDED: 'حضر', NO_SHOW: 'لم يحضر', CANCELLED: 'ملغى', RESCHEDULED: 'أُعيدت جدولته' },
     AppointmentSource: { ONLINE: 'عبر الإنترنت', RECEPTION: 'الاستقبال' },
+    AppointmentType: { EXAMINATION: 'كشف', FOLLOW_UP: 'متابعة', SESSION: 'جلسة' },
     VisitStatus: { ACTIVE: 'فعّالة', VOIDED: 'ملغاة' },
     NoteStatus: { DRAFT: 'مسودة', SIGNED: 'موقّعة' },
     InvoiceStatus: { ISSUED: 'صادرة', PARTIALLY_PAID: 'مدفوعة جزئيًا', PAID: 'مدفوعة', CANCELLED: 'ملغاة' },
@@ -319,6 +341,8 @@ export const ar: Messages = {
       WEBSITE: 'الموقع', REFERRAL: 'الإحالة', OTHER: 'أخرى',
     },
     ReferralRateType: { NONE: 'بدون', PERCENT: 'نسبة مئوية', FIXED: 'مبلغ ثابت' },
+    SalaryCommissionMode: { NONE: 'بدون عمولة', PER_SESSION: 'لكل جلسة', PER_SERVICE: 'لكل خدمة' },
+    SessionValueSource: { INVOICE: 'فاتورة', PACKAGE: 'جلسة باقة', NONE: 'بدون فاتورة' },
     ReferralApplicability: {
       FIRST_SESSION: 'أول جلسة فقط', ALL_SESSIONS: 'كل الجلسات', SESSION_COUNT: 'عدد محدد من الجلسات',
       DATE_RANGE: 'فترة زمنية',
@@ -340,6 +364,7 @@ export const ar: Messages = {
       PATIENT_ATTACHMENT: 'مرفق مريض', PACKAGE: 'باقة', PATIENT_PACKAGE: 'باقة مريض',
       ACQUISITION_SOURCE: 'مصدر المريض', REFERRING_DOCTOR: 'طبيب مُحيل', PATIENT_REFERRAL: 'إحالة مريض',
       REFERRAL_COMMISSION: 'عمولة إحالة', REFERRAL_PAYOUT: 'دفعة عمولة لطبيب', BLOG_POST: 'مدونة',
+      DOCTOR_SALARY_TERMS: 'شروط راتب طبيب', DOCTOR_SALARY_PAYMENT: 'دفعة راتب طبيب',
     },
     AuditAction: {
       LOGIN: 'تسجيل دخول', LOGIN_FAILED: 'فشل تسجيل الدخول', LOGOUT: 'تسجيل خروج',
@@ -361,8 +386,8 @@ export const ar: Messages = {
       APPOINTMENT_CONFIRMED: 'تأكيد موعد', APPOINTMENT_CANCELLED: 'إلغاء موعد',
       APPOINTMENT_NO_SHOW: 'تسجيل عدم حضور', APPOINTMENT_RESCHEDULED: 'تغيير موعد',
       APPOINTMENT_ATTENDED: 'حضور موعد', APPOINTMENT_ATTEND_UNDONE: 'التراجع عن الحضور',
-      APPOINTMENT_NO_SHOW_UNDONE: 'التراجع عن عدم الحضور',
-      VISIT_ATTENDED: 'بدء زيارة', VISIT_VOIDED: 'إلغاء زيارة',
+      APPOINTMENT_NO_SHOW_UNDONE: 'التراجع عن عدم الحضور', APPOINTMENT_TYPE_CHANGED: 'تغيير نوع الموعد',
+      VISIT_ATTENDED: 'بدء زيارة', VISIT_VOIDED: 'إلغاء زيارة', VISIT_TYPE_CHANGED: 'تغيير نوع زيارة بدون موعد',
       INVOICE_CREATED: 'إنشاء فاتورة', INVOICE_ITEM_ADDED: 'إضافة بند للفاتورة', INVOICE_ITEM_UPDATED: 'تعديل بند في الفاتورة',
       INVOICE_ITEM_REMOVED: 'حذف بند من الفاتورة', INVOICE_CANCELLED: 'إلغاء فاتورة',
       INVOICE_CORRECTED: 'تصحيح فاتورة', INVOICE_REISSUED: 'إصدار فاتورة بديلة',
@@ -387,6 +412,7 @@ export const ar: Messages = {
       PATIENT_REFERRAL_ENDED: 'إنهاء الإحالة', REFERRAL_APPLIED: 'تغطية فاتورة بالإحالة',
       REFERRAL_COMMISSION_RECORDED: 'تسجيل عمولة', REFERRAL_COMMISSION_ADJUSTED: 'تسوية عمولة',
       REFERRAL_PAYOUT_RECORDED: 'دفع عمولة للطبيب', REFERRAL_PAYOUT_VOIDED: 'إبطال دفعة عمولة',
+      DOCTOR_SALARY_TERMS_SET: 'تحديد شروط الراتب', DOCTOR_SALARY_PAID: 'دفع راتب', DOCTOR_SALARY_PAYMENT_VOIDED: 'إبطال دفعة راتب',
       BLOG_POST_CREATED: 'نشر مدونة', BLOG_POST_UPDATED: 'تعديل مدونة', BLOG_POST_DELETED: 'حذف مدونة',
     },
     TimelineEventType: {

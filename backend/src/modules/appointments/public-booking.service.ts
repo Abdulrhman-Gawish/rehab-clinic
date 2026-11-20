@@ -111,6 +111,7 @@ export class PublicBookingService {
             durationMinutes: context.service.durationMinutes,
             status: AppointmentStatus.PENDING,
             source: AppointmentSource.ONLINE,
+            type: dto.type,
             // Kept as typed so reception can review a name mismatch.
             bookedName: normalizePersonName(dto.name),
             bookedById: null,
@@ -127,6 +128,7 @@ export class PublicBookingService {
           startAt: this.time.toIso(appointment.startAt),
           endAt: this.time.toIso(appointment.endAt),
           status: appointment.status,
+          type: dto.type,
           packageName: requested?.name ?? null,
         };
       }),

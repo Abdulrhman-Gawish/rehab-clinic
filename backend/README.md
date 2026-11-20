@@ -156,8 +156,10 @@ cookie set by `POST /auth/login` (browsers, together with the `X-Requested-With`
 | `/clinic-services` | RW | R | R | – |
 | `/public/doctors`, `/public/services` | – | – | – | R |
 | `/doctors/:id/schedules`, `/doctors/:id/time-off` | RW | RW | R (own) | – |
+| `/working-hours` (every doctor's schedule + time off) | R | R | R (own) | – |
 | `/appointments/availability`, `/public/doctors/:id/slots` | R | R | R (own) | R |
 | `/appointments` create / confirm / cancel / no-show / undo no-show / reschedule | W | W | – | create only (`POST /public/appointments`, PENDING) |
+| change the appointment type: `PATCH /appointments/:id/type`, `PATCH /visits/:id/type` (any status) | – | W | – | – |
 | `/appointments` list / view / history, `/patients/:id/appointments` | R | R | R (own only) | – |
 | `/appointments/day` | R | R | R (own, no billing) | – |
 | attend, undo attend, walk-in | W | W | – | – |
@@ -170,7 +172,7 @@ cookie set by `POST /auth/login` (browsers, together with the `X-Requested-With`
 | payments: void | W | W (own, same day) | – | – |
 | refunds | W | – | – | – |
 | `/billing/attention` | R | R | – | – |
-| `/billing/daily-summary` | R | R (today only) | – | – |
+| `/billing/daily-summary` | R | R (today only; no `clinicOwes`) | – | – |
 | expenses: create / edit / void / receipt upload | W | W (own, same day) | – | – |
 | expenses: view, receipt file | R | R | – | – |
 | `/expense-categories` | RW | R | – | – |
@@ -188,6 +190,7 @@ cookie set by `POST /auth/login` (browsers, together with the `X-Requested-With`
 | `/patients/:id/acquisition`, acquisition sources (add, edit, remove) | RW | RW | – | – |
 | `/referring-doctors` list / view (with the current default agreement) | R | R | – | – |
 | `/referring-doctors` create / edit / (de)activate, agreements, patients, commissions, adjustments, payouts; `/referral-payouts/:id/void` | RW | – | – | – |
+| `/doctor-salaries`, `/doctors/:id/salary/*` (terms, statement, payments), `/doctor-salaries/payments/:id/void` | RW | – | – | – |
 | `/patients/:id/referrals` (assign, change terms, end: `/patient-referrals/:id/…`), `POST /invoices/:id/referral` | RW | RW | – | – |
 | `/patients/:id/referral-statement` | R | – | – | – |
 | `/reports/acquisition`, `/reports/campaigns`, `/reports/referrals` | R | – | – | – |
@@ -221,6 +224,12 @@ Business errors also carry a stable machine-readable `code`:
 | `REFRESH_RACE` | 401 | `POST /auth/refresh` with a token rotated less than 30 s ago: another tab refreshed, retry with the newest cookie (the session is kept) |
 | `SLOT_UNAVAILABLE` | 409 | The doctor already has an active appointment overlapping that time |
 | `PATIENT_OVERLAP` | 409 | The patient already has an active appointment overlapping that time |
+| `PATIENT_DETAILS_REQUIRED` | 422 | Attend / walk-in of a patient without identity document, gender, date of birth or referral source (`details.missing`, `details.patientId`) |
+| `NATIONAL_ID_INVALID` | 422 | A 14-digit National ID with an impossible century or birth date |
+| `NATIONAL_ID_MISMATCH` | 422 | The date of birth or gender contradicts the National ID (`details.field`, `details.expected`) |
+| `ID_DOCUMENT_TAKEN` | 409 | Another patient has this National ID or passport number (`details.patientId`, `details.field`) |
+| `PATIENT_IDENTITY_LOCKED` | 403 | A receptionist changing the identity document of a patient who has a code (OWNER only) |
+| `PATIENT_CODE_EXHAUSTED` | 422 | The 9999 codes of these 4 digits are all used (`details.digits`) |
 | `BOOKING_LIMIT_REACHED` | 409 | The phone already holds `BOOKING_MAX_ACTIVE_PER_PHONE` upcoming appointments (public booking) |
 | `REFERENCE_NOT_FOUND` | 404 | No appointment with this reference code (or another doctor's) |
 | `SCHEDULE_OVERLAP` | 409 | A schedule range overlaps another active range of the same doctor and day |
@@ -253,8 +262,8 @@ Business errors also carry a stable machine-readable `code`:
 | `CATEGORY_INACTIVE` / `CATEGORY_NAME_TAKEN` | 422 / 409 | Expense category inactive / name already used |
 | `CATEGORY_RESERVED` | 422 | A typed expense in (or moved to) a system category (referral commissions), or deactivating it |
 | `NOTE_NOT_ALLOWED` | 422 | A note on a VOIDED visit |
-| `NOTE_SIGNED` | 422 | Editing or re-signing a signed note (add an addendum instead) |
-| `NOTE_INCOMPLETE` | 422 | Signing without an assessment or the treatment done |
+| `NOTE_SIGNED` | 422 | Signing a note that is already signed (edit it with `PUT /visits/:id/note`) |
+| `NOTE_FIELDS_NOT_IN_TYPE` | 422 | Saving a note field that the visit's appointment type doesn't have (`details: { type, fields }`); those fields are read-only |
 | `NOTE_NOT_SIGNED` | 422 | An addendum on a draft |
 | `NOTE_NOT_VISIBLE` | 404 | The visit's note is another doctor's draft |
 | `ATTACHMENT_VISIT_MISMATCH` | 422 | The attachment's `visitId` belongs to another patient |
@@ -358,6 +367,12 @@ The backend is language-neutral: it never translates. Every UI text, status labe
   - Race-safe: `INSERT … ON CONFLICT (phone) DO NOTHING`, then `SELECT`.
   - Never renames an existing patient. It returns `nameMismatch: true` instead.
 - There is **no public patient endpoint**. `notes` is for administrative notes only, never medical information.
+- **Identity document and patient code.** A patient has at most one identity document: an Egyptian **National ID** (`nationalId`, 14 digits; Arabic digits, spaces and dashes accepted) or, for a non-Egyptian, a **passport number** (`passportNumber`, 5-20 letters and digits, stored upper case). Each is unique (`uq_patients_national_id`, `uq_patients_passport_number`; 409 `ID_DOCUMENT_TAKEN`). A National ID must be a real one (century 2/3, valid birth date not in the future: 422 `NATIONAL_ID_INVALID`), and it states the birth date (YYMMDD) and gender (13th digit odd = male): with a National ID, `dateOfBirth` and `gender` always follow it (an empty value, or one typed wrong before the ID was recorded, is replaced); a different value sent in the same request is 422 `NATIONAL_ID_MISMATCH`.
+  - The **patient code** `patientCode` is `RH` + the National ID's first 4 digits (`0000` for a passport) + a 4-digit sequence counted **per those 4 digits** (`RH29000001`, `RH29000002`, `RH30510001`, `RH00000001`...). It is assigned in the same transaction as the first identity document (create, PATCH or check-in) and **never changes**, even if the document is corrected later.
+  - The sequence comes from `patient_code_counters` (`INSERT … ON CONFLICT DO UPDATE … RETURNING`): the counter row stays locked until the transaction ends, so concurrent registrations get consecutive numbers, and a rolled-back registration gives its number back (no gap). `uq_patients_patient_code` is the last guard. After 9999 codes for the same 4 digits: 422 `PATIENT_CODE_EXHAUSTED`.
+  - Once the patient has a code, only the **OWNER** can change the identity document (a receptionist gets 403 `PATIENT_IDENTITY_LOCKED`; sending the same value is not a change).
+  - A **DOCTOR** reading patients gets `nationalId` / `passportNumber` as `null` (the code stays visible) and can't search by them. `GET /patients?search=` also matches an exact patient code (any case) and, for the desk, an exact National ID or passport number.
+- **Before the patient enters the doctor** (`POST /appointments/:id/attend`, `POST /visits/walk-in`), the patient must have an identity document, a gender, a date of birth and a current referral source (`patient_acquisition_sources`, see `acquisition`); administrative notes are optional. Otherwise 422 `PATIENT_DETAILS_REQUIRED` with `details.missing` (`identityDocument`, `gender`, `dateOfBirth`, `referralSource`) and `details.patientId` (null when the walk-in would have created the patient). Both requests accept `patientDetails { nationalId | passportNumber, gender, dateOfBirth, notes, referralSource: { channel, details } }`, saved in the visit's transaction with the PATCH rules: a refused check-in saves nothing. The referral source is added to the patient's sources (primary when it is the first; it never replaces one); `DOCTOR_REFERRAL` is refused there (400). A doctor referral goes in `patientDetails.referral` instead: the body of `POST /patients/:id/referrals` (referring doctor, terms, applicability, override reason; same rules and errors, 409 `REFERRAL_ALREADY_ACTIVE`), recorded in the check-in transaction **before** the visit's invoice, so this first session is already covered (discount, commission); it adds the `DOCTOR_REFERRAL` source. Existing patients get their code when their identity document is first recorded.
 
 ### `doctors`
 - `POST /doctors` (OWNER) creates the DOCTOR user and the doctor profile in **one transaction**.
@@ -411,7 +426,7 @@ The backend is language-neutral: it never translates. Every UI text, status labe
 4. Lock the patient row and enforce `BOOKING_MAX_ACTIVE_PER_PHONE` (409 `BOOKING_LIMIT_REACHED`). A new phone simply has 0, so the response never reveals whether the phone existed.
 5. Insert a **PENDING / ONLINE** appointment with `booked_name` = the submitted name and `booked_by` = NULL. A status-history row and an audit entry are written in the same transaction.
 
-The response is exactly `{ referenceCode, doctorName, serviceName, startAt, endAt, status }`: no patient id or patient data.
+The response is exactly `{ referenceCode, doctorName, serviceName, startAt, endAt, status, type, packageName }`: no patient id or patient data.
 
 The optional `utm: { source, medium, campaign, content, term }` (the `utm_*` of the link the patient came from, at most 100 characters each, blank = absent) is stored on the appointment (`appointments.utm_*`) for the campaign report, and a reschedule copies it. Nothing else about the visitor is stored. It never creates or changes the acquisition sources reception records (see `acquisition`).
 
@@ -427,6 +442,14 @@ There is no public cancel or lookup endpoint: reception handles changes by phone
 - `allowOutsideSchedule` skips the schedule, time-off and lead-time checks and writes an extra `APPOINTMENT_SCHEDULE_OVERRIDE` audit entry. It **never** skips the overlap constraints.
 - It also allows recording past appointments. A RECEPTIONIST may go back at most `BACKDATE_MAX_DAYS` local days; anything older needs the OWNER (422 `BACKDATE_LIMIT_EXCEEDED`). The same rule applies to reschedule.
 - It **never** lifts the upper limit: a start after today + `BOOKING_MAX_DAYS_AHEAD` is 422 `DATE_OUT_OF_RANGE` (`details.to` = the last bookable date) for every role, on create and on reschedule.
+
+**Appointment type** (`appointments.type`: `EXAMINATION`, `FOLLOW_UP` or `SESSION`):
+- **Required, with no default**, on every booking: reception (`POST /appointments`), online (`POST /public/appointments`, where the patient picks it) and walk-ins (`POST /visits/walk-in`, chosen at check-in). A missing or unknown value is 400.
+- It is only a classification. It never changes the price, duration, slots, packages or invoices. It decides which fields the visit's clinical note has (see `clinical`).
+- **Reception changes it later, in any status** (also ATTENDED, CANCELLED, NO_SHOW and RESCHEDULED): `PATCH /appointments/:id/type { type }`, RECEPTIONIST only. The OWNER and doctors set it only when they book (OWNER), and get 403 here. It is not a status change: there is no status history row and no timeline event. It is audited as `APPOINTMENT_TYPE_CHANGED` (old and new type). Setting the same type again changes nothing.
+- A reschedule copies the type to the new appointment.
+- Appointments booked before types existed have `type: null` ("not set") until reception sets it; their notes keep every field.
+- **One source of truth.** A visit of an appointment takes the appointment's type: `visits.type` stays NULL there (CHECK `chk_visits_type_walk_in`). Only a walk-in has its own `visits.type`, which `PATCH /visits/:id/type` changes (`VISIT_TYPE_CHANGED`; for an appointment's visit that route changes the appointment, exactly like the route above). Responses give the effective `type` on appointments, visits, day-list rows and notes.
 
 **How the desk works.** Online bookings start PENDING. Reception *may* call the patient and confirm, but it is optional: PENDING bookings show up everywhere CONFIRMED ones do and can be rescheduled, attended or marked no-show directly. Reception does everything about attendance; doctors never start or complete anything, they only write and sign the visit's note.
 
@@ -468,12 +491,13 @@ The time and undo rules on top of the transitions live in `appointment-actions.t
 
 **Reading:**
 - `GET /appointments` filters by local date range (`from`/`to`), doctor, patient, status and source; it is paginated and sorted by start time.
-- `GET /appointments/day?date=&status=&doctorId=` is the day list: every appointment of the local day with its visit (if attended) plus the day's walk-ins (`isWalkIn: true`, appointment fields null), ordered by start time (attended time for walk-ins). Each row has patient name + phone, doctor, service, status, `bookedName`, a computed `nameMismatch`, `visitId`, `visitStatus`, `attendedAt`, `noteStatus` and **`allowedActions`**.
+- `GET /appointments/day?date=&to=&status=&doctorId=` is the day list (with `to`: every day from `date` to `to`, inclusive, at most 7 days, else 422 `DATE_OUT_OF_RANGE`; the desk calendar's week view): every appointment of the local day with its visit (if attended) plus the day's walk-ins (`isWalkIn: true`, appointment fields null), ordered by start time (attended time for walk-ins). Each row has patient name + phone, doctor, service, status, `bookedName`, a computed `nameMismatch`, `visitId`, `visitStatus`, `attendedAt`, `noteStatus` and **`allowedActions`**.
+- `GET /working-hours?from=&to=` (both required, at most 31 days, else 422 `DATE_OUT_OF_RANGE`) returns `{ schedules, timeOff }`: every doctor's active weekly ranges and the time off overlapping the range (a DOCTOR gets only their own). The desk calendar shades working hours with it in one request instead of two per doctor.
   - `status` takes several values (`?status=PENDING&status=CONFIRMED` or `?status=PENDING,CONFIRMED`); walk-ins count as ATTENDED.
   - OWNER / RECEPTIONIST rows also carry the billing columns (see Cashier views). A walk-in row's only action is `undoAttend`, done with `POST /visits/:visitId/undo-attend`.
   - Every row has `package: { usageId, patientPackageId, name, used, total }` when its visit (or, for a NO_SHOW row, its no-show) used a package session, else `null`. A NO_SHOW row with a session also gets `restoreSession` in `allowedActions` (`POST /package-usages/:usageId/restore`; no time limit, not a status change).
   - Billing columns also carry `invoiceStatus` (the live invoice's status) and `cancelledInvoiceId`. When an attended visit's invoice was cancelled and nothing replaced it, the row (appointment or walk-in) has `invoiceStatus: CANCELLED`, that invoice's id and `createInvoice` in `allowedActions`: `POST /invoices/:cancelledInvoiceId/reissue` (see "Replacement invoices"; no time limit, not a status change). After an undone attend there is no visit to bill, so neither appears.
-  - A DOCTOR gets only their own rows (PENDING included; `doctorId` is ignored), **without** billing fields, and `allowedActions` is `writeNote` (ACTIVE visit whose note isn't signed) or `viewNote` (signed note).
+  - A DOCTOR gets only their own rows (PENDING included; `doctorId` is ignored), **without** billing fields, and `allowedActions` is `writeNote` (ACTIVE visit whose note isn't signed) or `viewNote` (signed note; the visit page still lets its doctor edit it).
 - `GET /appointments/:id`, `GET /appointments/by-reference/:code` (case-insensitive, e.g. `APT-7K3Q9X`; 404 `REFERENCE_NOT_FOUND`) and `GET /appointments/:id/history`.
 - `GET /patients/:id/appointments` lists a patient's appointments across all doctors.
 
@@ -495,6 +519,7 @@ stateDiagram-v2
 
 **Walk-ins** (`POST /visits/walk-in`):
 - A visit with `appointment_id = NULL`, attended now, with its invoice in the same transaction (`invoiceId` in the response). The patient is identified by `patientId` or `name` + `phone` (find-or-create, source RECEPTION) and never renamed.
+- `type` (the appointment type) is required: reception chooses it at check-in. It is stored on the visit, and `PATCH /visits/:id/type` changes it later (RECEPTIONIST, any status).
 - The doctor must be active and offer the (active) service.
 - Walk-ins **do not block booking slots**.
 
@@ -504,7 +529,7 @@ stateDiagram-v2
 - Refused while the doctor has a note for the visit (422 `VISIT_HAS_NOTE`) or the invoice holds money (422 `INVOICE_HAS_PAYMENTS`: void the payments first).
 - Otherwise, in one transaction: the visit becomes VOIDED (`voided_at`, `voided_by`, `void_reason`; CHECK `chk_visits_voided`), its invoice is CANCELLED with the same reason, its package session (if any) is restored, and the appointment returns to CONFIRMED.
 
-**Notes** are written by the visit's doctor on ACTIVE visits only, any day after the visit (see `clinical`).
+**Notes** are written by the visit's doctor on ACTIVE visits only, any day after the visit, and stay editable after signing. Their fields follow the visit's appointment type (see `clinical`).
 
 **Reading:**
 - `GET /visits/queue?date=&doctorId=`: the day's ACTIVE visits in the order they attended, with patient, service, booked start time (null for walk-ins), `attendedAt`, `hasNote` and `noteStatus` (`DRAFT` / `SIGNED` / null). Doctors always get their own queue.
@@ -590,13 +615,15 @@ A session's invoice can be replaced by a **new invoice of the same visit**: same
 #### Cashier views
 - `GET /appointments/day` rows (OWNER / RECEPTIONIST) include `invoiceId`, `invoiceTotal`, `amountPaid`, `balance` and `paymentStatus` (`NOT_INVOICED | UNPAID | PARTIAL | PAID`).
 - `GET /billing/attention?page=&limit=` lists invoices of voided visits that still hold money (`voidedVisitsWithPayments`, all of them; only data from before undo attend required an unpaid invoice), and invoices with a balance issued before the local day `BILLING_OVERDUE_DAYS` ago. The overdue invoices are paginated, oldest first, as `{ items, meta }` next to `overdueDays` and `voidedVisitsWithPayments` (the same shape as `GET /expenses` with its `totalAmount`).
-- `GET /billing/daily-summary?date=` covers one clinic local day (23, 24 or 25 hours with DST): valid payments and refunds by method, voids made that day, active discounts applied that day (by user), and valid expenses dated that day by method. The OWNER can query any date; a RECEPTIONIST today only.
+- `GET /billing/daily-summary?date=` covers one clinic local day (23, 24 or 25 hours with DST): valid payments and refunds by method, voids made that day, discounts applied that day and still in effect at its end on invoices not cancelled by then (by user; a later removal or cancellation never changes a past day), and valid expenses dated that day by method. The OWNER can query any date; a RECEPTIONIST today only.
 
   ```
   expectedCash = cash payments − cash refunds − cash expenses
   ```
 
-  A payout to a referring doctor **is an expense** (see `referrals`), so a cash payout is in `expenses.byMethod.CASH` and in `expectedCash`; other methods never touch the drawer. `commissionPayouts` (same shape) shows the part of `expenses` that are payouts: it is never subtracted again.
+  A payout to a referring doctor and a doctor's salary payment **are expenses** (see `referrals`, `salaries`), so one paid in cash is in `expenses.byMethod.CASH` and in `expectedCash`; other methods never touch the drawer. `commissionPayouts` and `salaryPayments` (same shape) show those parts of `expenses`: they are never subtracted again.
+
+  `outstanding` is what was **still owed at the start and at the end of that day**, and what moved it (see `outstanding` below): `patientsOwe` (unpaid invoice balances) for everyone, `clinicOwes` (unpaid salaries and referral commissions) for the OWNER only (`null` for a receptionist). A past day keeps showing what was unpaid then, even if it was paid later. Its `payments`, `refunds`, `salaryPayments` and `commissionPayouts` are the same money as the day's totals above.
 
 ### `expenses`
 - Clinic purchases (tea, supplies, maintenance) are **expenses, not patient invoices**. Six default categories are seeded by the migration.
@@ -634,11 +661,21 @@ A DRAFT note is visible to **its author** and, read-only, to the **OWNER** (revi
 - `GET /patients/:id/medical-info` returns empty fields with `updatedAt: null` before the first save.
 - `PUT /patients/:id/medical-info { allergies, chronicConditions, pastSurgeries, currentMedications, notes }` replaces the record: a field left out (or blank) becomes null. Any doctor with access may update it, and old and new values are audited (`PATIENT_MEDICAL_INFO_UPDATED`).
 
-**Session notes** (`clinical_notes`, at most one per visit, enforced by `uq_clinical_notes_visit`):
-- `PUT /visits/:id/note` saves the DRAFT: created on the first save (on an ACTIVE visit, any day after it; `NOTE_NOT_ALLOWED` on a VOIDED one), replaced after (a field left out or blank becomes null). Only the visit's doctor may do this (others get 404). The visit row lock makes parallel first saves create one note.
-- Fields: `chiefComplaint`, `assessment`, `treatmentDone`, `progress`, `plan` (next steps and home exercises) and `painScore` (0–10, DB CHECK).
-- `POST /visits/:id/note/sign` needs an assessment or the treatment done (`NOTE_INCOMPLETE`). Fields sent with it are saved first (like `PUT`), in the same transaction, so a client can save and sign in one call. A SIGNED note is **locked forever** (`NOTE_SIGNED`); the DB CHECK `chk_clinical_notes_signed` requires `signed_at`.
-- `GET /visits/:id/note` returns the note with its addenda and `status` (`DRAFT` / `SIGNED`), or `200 null` when the visit has none yet. Another doctor's draft is 404 `NOTE_NOT_VISIBLE` (the OWNER reads it).
+**Clinical notes** (`clinical_notes`, at most one per visit, enforced by `uq_clinical_notes_visit`):
+- **Fields by appointment type.** The visit's appointment type (see `appointments`; a walk-in's own type) decides which fields the note has. The single definition is `clinical/note-fields.ts`. Every field is optional, also when signing.
+
+  | Type | Fields |
+  |---|---|
+  | `EXAMINATION` | `chiefComplaint`, `assessment`, `diagnosis`, `plan` (treatment plan), `painScore`, and the visit's attachments |
+  | `SESSION` | `treatmentDone` (treatment provided), `progress`, `painScore` |
+  | `FOLLOW_UP` | `assessment`, `progress`, `plan` (treatment plan), `painScore` |
+  | not set (`null`, from before types) | every field |
+
+  `painScore` is the pain level, 0–10 (DB CHECK). The type is read when the note is saved, so a type changed later by reception changes which fields are **editable**. Values in the other fields are **kept** and returned, so a type change never hides or deletes clinical data. Clients show them read-only, and sending one is 422 `NOTE_FIELDS_NOT_IN_TYPE` (`details: { type, fields }`), with nothing saved.
+- `PUT /visits/:id/note` saves the note. The DRAFT is created on the first save (on an ACTIVE visit, any day after it; `NOTE_NOT_ALLOWED` on a VOIDED one). After that, the fields of the visit's type are replaced (one left out or blank becomes null). Only the visit's doctor may do this (others get 404). The visit row lock makes parallel first saves create one note.
+- **A SIGNED note stays editable** by the visit's doctor, any time, with the same `PUT`. It stays SIGNED and keeps its `signedAt`. Every change is audited (`CLINICAL_NOTE_UPDATED` with the old and new values, the user and the time); the OWNER reads them in the audit log.
+- `POST /visits/:id/note/sign` requires no field. Fields sent with it are saved first (like `PUT`), in the same transaction, so a client can save and sign in one call. Without a note yet, an empty one is created and signed. Signing an already SIGNED note is 422 `NOTE_SIGNED` (edit it with `PUT`). The DB CHECK `chk_clinical_notes_signed` requires `signed_at`.
+- `GET /visits/:id/note` returns the note with `type` (the visit's type now), every field, its addenda, the visit's `attachments` (newest first) and `status` (`DRAFT` / `SIGNED`), or `200 null` when the visit has none yet. Another doctor's draft is 404 `NOTE_NOT_VISIBLE` (the OWNER reads it).
 - `GET /clinical-notes/needs-attention?doctorId=&page=&limit=` lists ACTIVE visits without a SIGNED note (no note yet, or a DRAFT), oldest first, with patient, service, doctor, visit date and `noteStatus` (`DRAFT` or null). A DOCTOR sees only their own; the OWNER sees all, optionally filtered by `doctorId`.
 
 **Addenda** (`clinical_note_addenda`, never edited or deleted):
@@ -646,7 +683,7 @@ A DRAFT note is visible to **its author** and, read-only, to the **OWNER** (revi
 
 **History:**
 - `GET /patients/:id/clinical-history?page=&limit=` returns `{ medicalInfo, notes, attachments }`.
-  - `notes` holds the patient's **SIGNED** notes from every doctor, newest visit first, paginated. Each has the doctor's name, visit date, service, `status` and addenda. For the **OWNER** it also holds the DRAFT notes (read-only).
+  - `notes` holds the patient's **SIGNED** notes from every doctor, newest visit first, paginated. Each has the doctor's name, visit date, service, `type`, every field, `status`, addenda and the visit's attachments. For the **OWNER** it also holds the DRAFT notes (read-only).
   - `attachments` lists all of the patient's attachments, newest first; each has its `visitId`.
 - `GET /patients/:id/clinical-notes?page=&limit=` returns the same `notes` page on its own (`{ items, meta }`), with the
   same visibility rules. The patient page pages through notes and attachments separately with it and the attachments list.
@@ -654,8 +691,7 @@ A DRAFT note is visible to **its author** and, read-only, to the **OWNER** (revi
 **Attachments** (`patient_attachments`):
 - `POST /patients/:id/attachments` (multipart: `file`, `title`, optional `visitId` of one of the patient's visits) is allowed for doctors with access and the OWNER.
 - Files follow the same rules as expense receipts: JPG, PNG, WEBP or PDF, at most 5 MB (413), and the type is checked by magic bytes (`UNSUPPORTED_FILE_TYPE`). They are stored by `FileStorage` and never served publicly. A failed transaction removes the uploaded file (see "File storage and failed transactions" under `expenses`).
-- `GET /patients/:id/attachments?page=&limit=` lists them, newest first, paginated (`{ items, meta }`), and
-  `GET /attachments/:id/file` streams one. Both follow the read rule above.
+- `GET /patients/:id/attachments?page=&limit=&visitId=` lists them, newest first, paginated (`{ items, meta }`); with `visitId`, only those linked to that visit (an examination note's attachments). `GET /attachments/:id/file` streams one. Both follow the read rule above.
 
 Every write is audited in the same transaction (`CLINICAL_NOTE_*`, `PATIENT_MEDICAL_INFO_UPDATED`, `PATIENT_ATTACHMENT_UPLOADED`).
 
@@ -827,6 +863,16 @@ Two separate inputs that never overwrite each other:
 
 Money is EGP like everywhere else (no currency column).
 
+### `salaries` (the clinic's own doctors, OWNER only)
+
+Each doctor is paid a monthly **fixed salary** (0 = commission only) plus a **commission** on every attended session: `NONE`, `PER_SESSION` (one rate, whatever the service) or `PER_SERVICE` (a rate per service; a service without one earns nothing). Each rate is `FIXED` (EGP per session) or `PERCENT` (of the session value, at most 100).
+
+- **Terms are versioned by month**: `PUT /doctors/:id/salary/terms { effectiveMonth: 'YYYY-MM', fixedSalary, commissionMode, sessionRate?, serviceRates? }` applies from that month until the next version (same month = replaced), so past months keep their terms. Refused (422 `SALARY_MONTH_PAID`, `details.paidMonth`) when that month or a later one has a valid payment. Shape errors are 422 `SALARY_TERMS_INVALID`. `GET /doctors/:id/salary/terms` lists every version, newest first.
+- **Statement** (`GET /doctors/:id/salary/statement?month=`): computed live (nothing stored per session) from the month's **ACTIVE** visits (an undone or voided visit drops out). A session's value is its live invoice total after discount, or, for a package session, the package price paid ÷ its sessions (`valueSource` INVOICE / PACKAGE / NONE). Returns the terms in effect, each session with its rate and commission, `fixedSalary + commissionTotal = earned`, the month's payments (voided ones too), `paid` and `remaining` (negative when overpaid).
+- **Overview** (`GET /doctor-salaries?month=`): every doctor (not deleted, or with a payment that month) with the same totals.
+- **Payments** (`POST /doctors/:id/salary/payments { month, amount, paymentDate?, method, reference?, notes? }`): any amount > 0 for a month up to the current one (advances and parts allowed, never capped). Each one is a clinic **expense** in the reserved `DOCTOR_SALARY` category (same amount, method and date; never in the future), so reports and the cash summary count it once. `POST /doctor-salaries/payments/:id/void { reason }` voids it and its expense; the expense itself can't be changed directly (422 `EXPENSE_EDIT_NOT_ALLOWED`).
+- **Audit**: `DOCTOR_SALARY_TERMS_SET` (old and new terms), `DOCTOR_SALARY_PAID`, `DOCTOR_SALARY_PAYMENT_VOIDED`, and `EXPENSE_CREATED` (with `salaryPaymentId`) / `EXPENSE_VOIDED` on the expense.
+
 ### `blog` (public website)
 
 Articles the OWNER writes in the staff UI and the public website shows (`blog_posts`). There are no drafts: a post is **published as soon as it is added**.
@@ -850,6 +896,34 @@ Articles the OWNER writes in the staff UI and the public website shows (`blog_po
 - Times are ISO 8601 in clinic time (`createdAt` = published at).
 - Audit: `BLOG_POST_CREATED` / `_UPDATED` (changed fields, old and new) / `_DELETED`, entity type `BLOG_POST`.
 
+### `outstanding` (what is owed, at the end of any day)
+
+No routes of its own: `OutstandingService` computes balances from the dated rows for the daily summary and the reports, so both always show the same numbers. "At the end of D" means before the start of the next clinic local day. A past day always shows the state in effect then: **a later discount, item edit, removal or cancellation never changes it** (the shared SQL is in `outstanding/as-of.sql.ts`). Two directions, never netted against each other:
+
+**Invoice total history** (`invoice_total_changes`, written by `InvoicesService` only): one row at the issue, then one per instant the total changed (item added, edited or removed; discount applied, replaced or removed); changes at the same instant collapse into one row. The total in effect at an instant is the latest row before it. The migration `InvoiceTotalChanges` backfilled existing invoices from the audit log (`INVOICE_CREATED.total`, the item events' `invoice.total`, the discount events' `invoiceTotal`); an invoice whose audited history did not end at its current total got one row, its current total from its issue (`database/invoice-total-changes-backfill.ts`).
+
+**Patients owe** (money owed to the clinic): every invoice issued by then and not cancelled by then, at its total in effect then, minus the valid payments and refunds received by then. Voided payments never count (as in every report: a void corrects a recording mistake, the money never moved; the day of the void shows it in `voided`). Over a period, each event counts on the instant it happened:
+
+```
+closing = opening + invoiced + adjustments − cancelled − payments + refunds
+```
+
+- `invoiced`: invoices issued in the period at their total when issued (cancelled later or not); `adjustments`: later changes of totals in the period (discounts, item edits; negative when they lowered what is owed); `cancelled`: invoices cancelled in the period at their total then (nothing is paid on a cancelled invoice); `payments` / `refunds`: valid ones received in the period (= `collected` / `refunded`).
+
+**Clinic owes** (money the clinic owes its doctors and has not paid yet):
+
+- **Doctor salaries**, per doctor and month (the salary statement's rules and terms): a month's **fixed salary is owed on the month's last day**; a session's **commission from the day it was attended**, on the session's value as it was then (visit not voided yet, package session not given back yet, else its invoice live then at its total then: once the month is over and nothing changes, it equals the statement); valid salary payments count from their `paymentDate`, for the month they were recorded for. A doctor deleted before a month started earns no fixed salary that month (as in the overview). Terms are versioned by month: a version set later for a month applies to that whole month, as in the statement.
+- **Referral commissions**, per referring doctor: the `commission-balance?asOf=` rule (ledger rows owed, i.e. eligible, by then; valid payouts dated by then). `pending` rows (session not attended yet) are not owed yet and are shown apart (`pendingCommissions`).
+- A **negative** balance (a salary advance for a month not earned yet, a payout above what is owed after a refund) is an **advance**: reported in `advances`, never subtracted from what is owed to anyone else (or for another month). `owed` = sum of the positive balances.
+
+```
+closing.owed = opening.owed + salariesEarned + salaryAdjustments + commissionsEarned − salaryPayments − commissionPayouts + advancesChange
+```
+
+- `salariesEarned`: fixed salaries falling due in the period + commissions of the sessions attended in it; `salaryAdjustments`: commission changes, in the period, of sessions attended before it (e.g. a later discount on their invoice); `commissionsEarned`: referral commissions that became owed in it (net of reversals and adjustments); `salaryPayments` / `commissionPayouts`: valid payments dated in it (the same money as the expenses' `salaryPayments` / `commissionPayouts`); `advancesChange` = `closing.advances − opening.advances` (paying ahead of earnings does not lower what is owed).
+
+Corrections are retroactive, like everywhere else: a voided payment, refund, salary payment or payout never counted, and an undone visit never earned a commission.
+
 ### `reports` (OWNER only)
 
 Read-only aggregate queries; no tables of their own. Every report takes `from=YYYY-MM-DD&to=YYYY-MM-DD` (both **required**, clinic local dates, inclusive, DST-aware; `from` after `to` is 400) and echoes them back. Money is a decimal string.
@@ -861,8 +935,8 @@ Which rows count, everywhere:
 | Thing | Counted when | Excluded |
 |---|---|---|
 | Payment / refund | `received_at` in the range | VOIDED |
-| Invoice | `issued_at` in the range | CANCELLED (also those of undone visits) |
-| Discount | `applied_at` in the range | removed or replaced, or on a cancelled invoice |
+| Invoice | `issued_at` in the range, at its total at the end of the range | CANCELLED by the end of the range (also those of undone visits) |
+| Discount | `applied_at` in the range | removed or replaced by the end of the range, or on an invoice cancelled by then |
 | Visit | `attended_at` in the range | VOIDED (undone) |
 | Appointment | `start_at` in the range | RESCHEDULED (the new appointment counts instead, if it is in the range) |
 | Expense | `expense_date` in the range | VOIDED |
@@ -877,9 +951,11 @@ Which rows count, everywhere:
 | `netCollected` | `collected − refunded` |
 | `expenses` | Sum of valid expenses (referral payouts included: each is an expense) |
 | `commissionPayouts` | The part of `expenses` paid to referring doctors (never subtracted again) |
+| `salaryPayments` | The part of `expenses` paid as salaries to the clinic's doctors (never subtracted again) |
 | `netAfterExpenses` | `netCollected − expenses` |
 | `invoiced` | Sum of `total` (after discounts) of the invoices issued in the range |
-| `outstanding` | Sum of `total − amount_paid` (as of now) of those same invoices |
+| `patientsOwe` | What patients still owed at the **end of `to`**, on every invoice issued by then (see `outstanding`; = the daily summary of `to`) |
+| `clinicOwes` | What the clinic owed its doctors at the **end of `to`** (`owed`, advances apart; = the daily summary of `to`) |
 | `discountsGiven` | Sum of the discount amounts |
 | `attendedVisits` | Visits, walk-ins included |
 | `noShows` / `cancellations` | Appointments now in NO_SHOW / CANCELLED |
@@ -901,11 +977,15 @@ Which rows count, everywhere:
 - `byUser`: `{ user, count, amount }`, largest amount first.
 - `byReason`: the top 10 reasons, `{ reason, count, amount }`, most used first. Case and surrounding spaces are ignored ("Student" = " student ").
 
-**`GET /reports/expenses`** returns `count`, `total`, `commissionPayouts` (the part of `total` paid to referring doctors), `byCategory` (`{ category, count, total }`, largest first; the payouts are the referral-commission category's row) and `byMethod` (all four methods).
+**`GET /reports/expenses`** returns `count`, `total`, `commissionPayouts` (the part of `total` paid to referring doctors), `salaryPayments` (the part paid as doctor salaries), `byCategory` (`{ category, count, total }`, largest first; the payouts are the referral-commission category's row) and `byMethod` (all four methods).
 
-**`GET /reports/outstanding?page=&limit=`** lists patients with an unpaid balance on invoices issued in the range, largest balance first, paginated like other lists.
-- Each row is `{ patient: { id, name, phone }, balance, oldestUnpaidInvoiceDate }` (a clinic local date).
-- The balances add up to the summary's `outstanding` for the same range. For everything owed regardless of date, use a wide range.
+**`GET /reports/money-flow`** returns `{ from, to, patientsOwe, clinicOwes }`: owed at the start of `from`, each movement, owed at the end of `to` (the formulas in `outstanding`). A one-day range is exactly that day's daily summary `outstanding`.
+
+**`GET /reports/transactions?kind=PAYMENT|REFUND|EXPENSE&page=&limit=`** lists every row that counts in the range, newest first (local date, then the time it was recorded): valid payments and refunds by `received_at`, valid expenses by `expense_date`. Each row has `kind`, `number` (receipt or expense number), `date`, `recordedAt`, `method`, `amount` (always positive), the `patient` and `invoice` (payments, refunds; `reason` for a refund) or the `category`, `description`, `payee` and `expenseOrigin` (`MANUAL`, `DOCTOR_SALARY`, `REFERRAL_PAYOUT`) of an expense, and `recordedBy`. `totals` cover the whole range whatever `kind`: `payments`, `refunds`, `expenses`, `salaryPayments`, `commissionPayouts` (`{ count, total }`) and `net` (= the summary's `netAfterExpenses`).
+
+**`GET /reports/patients-owe?asOf=&page=&limit=`** lists patients with a balance at the end of `asOf`, largest first: `{ patient: { id, name, phone }, balance, oldestUnpaidInvoiceDate, invoices }`, each invoice `{ id, invoiceNumber, issuedAt, total, paid, balance }` as of then (paid = valid payments − refunds received by then). Next to `items` and `meta`: `asOf`, `totalBalance` (= the daily summary's `patientsOwe.closing`) and `unpaidInvoices`.
+
+**`GET /reports/clinic-owes?asOf=`** returns what the clinic owed at the end of `asOf`: `owed`, `advances`, `doctorSalaries { owed, advances, rows }` (each doctor-month with a balance: `fixedSalary` and `fixedDue`, `sessionCount`, `commissions`, `earned`, `paid`, `balance`; once the month has ended it equals the salary statement's `remaining`) and `referralCommissions { owed, advances, pending, rows }` (each referring doctor with a balance or pending commission: `earned`, `paid`, `balance`, `pending`).
 
 **`GET /reports/acquisition?from=&to=&channel=`**: patients **created** in the range by their **primary** source (`patients`), every source they named (`mentions`), and of them how many attended a visit and paid (net of refunds), with the money collected from them so far; `newPatients`, `withoutSource`, `categories` and `byMonth` (clinic local month × primary channel, `null` = no source).
 
@@ -923,7 +1003,7 @@ src/
   common/      decorators, guards, filters, pipes, dto, errors, utils (money, phone...), time (clinic time zone), storage, base entity, enums
   config/      env validation (Joi), logger config
   database/    data-source.ts (TypeORM CLI), typeorm.options.ts, migrations/, seeds/, storage-orphans.ts, wait-for-db.ts (Docker start-up)
-  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, visits, billing, expenses, clinical, patient-history, reports, packages, acquisition, referrals, blog, health
+  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, visits, billing, expenses, clinical, patient-history, outstanding, reports, packages, acquisition, referrals, salaries, blog, health
 test/          e2e suites + global setup (test DB reset + migrations) + helpers
 ```
 

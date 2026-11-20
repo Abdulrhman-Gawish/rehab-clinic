@@ -28,6 +28,7 @@ import {
   resetDatabase,
   type TestApp,
 } from './utils/test-app.js';
+import { completeCheckInDetails } from './utils/check-in.js';
 
 // Frozen clock: "today" is Tuesday 2026-11-03 in Cairo (+02:00), 09:00.
 const TODAY = '2026-11-03';
@@ -144,6 +145,7 @@ describe('Billing: replacement invoices (e2e)', () => {
   async function attend(
     appointmentId: string,
   ): Promise<{ visitId: string; invoiceId: string }> {
+    await completeCheckInDetails(ctx.dataSource);
     const res = await as(receptionist)
       .post(`/appointments/${appointmentId}/attend`, {})
       .expect(201);
@@ -151,8 +153,14 @@ describe('Billing: replacement invoices (e2e)', () => {
   }
 
   async function walkIn(): Promise<{ visitId: string; invoiceId: string }> {
+    await completeCheckInDetails(ctx.dataSource);
     const res = await as(receptionist)
-      .post('/visits/walk-in', { patientId: ali.id, doctorId, serviceId })
+      .post('/visits/walk-in', {
+        patientId: ali.id,
+        doctorId,
+        serviceId,
+        type: 'SESSION',
+      })
       .expect(201);
     return { visitId: res.body.id, invoiceId: res.body.invoiceId };
   }

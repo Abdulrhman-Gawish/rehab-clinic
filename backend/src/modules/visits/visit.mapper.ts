@@ -7,6 +7,7 @@ import type { VisitStatusHistory } from './entities/visit-status-history.entity.
 import type { Visit } from './entities/visit.entity.js';
 import { UserRefDto } from '../../common/dto/user-ref.dto.js';
 import type { NoteStatus } from '../clinical/clinical.enums.js';
+import { visitType } from './visit-type.js';
 
 type ToIso = (instant: Date) => string;
 
@@ -36,6 +37,7 @@ export function toVisitResponse(visit: Visit, toIso: ToIso): VisitResponseDto {
     id: visit.id,
     status: visit.status,
     isWalkIn: visit.appointmentId === null,
+    type: visitType(visit),
     appointmentId: visit.appointmentId,
     appointmentReferenceCode: visit.appointment?.referenceCode ?? null,
     appointmentStartAt: isoOrNull(visit.appointment?.startAt ?? null, toIso),

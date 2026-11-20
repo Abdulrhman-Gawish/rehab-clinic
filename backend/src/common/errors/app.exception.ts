@@ -41,7 +41,7 @@ export enum ErrorCode {
   UNSUPPORTED_FILE_TYPE = 'UNSUPPORTED_FILE_TYPE',
   NOTE_NOT_ALLOWED = 'NOTE_NOT_ALLOWED',
   NOTE_SIGNED = 'NOTE_SIGNED',
-  NOTE_INCOMPLETE = 'NOTE_INCOMPLETE',
+  NOTE_FIELDS_NOT_IN_TYPE = 'NOTE_FIELDS_NOT_IN_TYPE',
   NOTE_NOT_SIGNED = 'NOTE_NOT_SIGNED',
   NOTE_NOT_VISIBLE = 'NOTE_NOT_VISIBLE',
   ATTACHMENT_VISIT_MISMATCH = 'ATTACHMENT_VISIT_MISMATCH',
@@ -66,6 +66,14 @@ export enum ErrorCode {
   NOTHING_TO_PAY = 'NOTHING_TO_PAY',
   PAYOUT_EXCEEDS_OUTSTANDING = 'PAYOUT_EXCEEDS_OUTSTANDING',
   PAYOUT_VOIDED = 'PAYOUT_VOIDED',
+  SALARY_TERMS_INVALID = 'SALARY_TERMS_INVALID',
+  SALARY_MONTH_PAID = 'SALARY_MONTH_PAID',
+  PATIENT_DETAILS_REQUIRED = 'PATIENT_DETAILS_REQUIRED',
+  NATIONAL_ID_INVALID = 'NATIONAL_ID_INVALID',
+  NATIONAL_ID_MISMATCH = 'NATIONAL_ID_MISMATCH',
+  ID_DOCUMENT_TAKEN = 'ID_DOCUMENT_TAKEN',
+  PATIENT_IDENTITY_LOCKED = 'PATIENT_IDENTITY_LOCKED',
+  PATIENT_CODE_EXHAUSTED = 'PATIENT_CODE_EXHAUSTED',
 }
 
 // HttpException carrying a stable `code` (and optional details) that the
@@ -89,6 +97,12 @@ export const unprocessable = (
   message: string,
   details?: unknown,
 ) => new AppException(HttpStatus.UNPROCESSABLE_ENTITY, code, message, details);
+
+export const forbidden = (
+  code: ErrorCode,
+  message: string,
+  details?: unknown,
+) => new AppException(HttpStatus.FORBIDDEN, code, message, details);
 
 export const notFound = (code: ErrorCode, message: string, details?: unknown) =>
   new AppException(HttpStatus.NOT_FOUND, code, message, details);

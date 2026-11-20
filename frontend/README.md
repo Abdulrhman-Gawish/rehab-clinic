@@ -5,7 +5,7 @@ The clinic's web UI: React 19 + TypeScript + Vite, Arabic first (RTL) with Engli
 
 - **Public website** (no login): home (`/`), online booking (`/book`), blog (`/blog`, `/blog/:id`).
 - **Staff app** (`/login`, then by role): reception desk (day list, booking and walk-ins, patients, invoices, expenses,
-  daily summary), doctors (my day, notes), and the owner (staff, doctors, services and packages, referring doctors,
+  daily summary), doctors (my day, notes), and the owner (staff, doctors, services and packages, salaries, referring doctors,
   reports, marketing, audit log, blog).
 
 API problems found while building the first version are in [FINDINGS.md](FINDINGS.md).
@@ -25,6 +25,7 @@ src/
   styles/                 tokens.css, base.css, components.css, layout.css, areas/<area>.css
 public/                   favicon, manifest, brand assets (public/assets/…, see "Brand assets")
 scripts/                  check-i18n.ts (ar/en catalogs match; part of npm run build)
+src/*.test.ts             unit tests of pure modules (npm test: node:test through tsx, no extra dependency)
 nginx/                    default.conf.template: the Docker image's nginx (SPA fallback, /api proxy, caching)
 ```
 
@@ -165,11 +166,31 @@ npm run start:dev
      paid online.
    - A doctor shows no slots until they have a weekly schedule for that day (Owner → Doctors → doctor →
      Weekly schedule).
-2. **Receptionist**, Day list (`/reception`): the toolbar has previous / next day, a date, **Today**, a doctor filter and
-   the status chips (none selected = every status). Four counts sit above the table: on the list, attended, waiting,
-   no-show. The buttons on each row come from the API's `allowedActions`.
+2. **Receptionist / owner**, Day list (`/reception`, `pages/Schedule.tsx`): a calendar. **Day** view (default) has one
+   column per active doctor on a shared time axis (hatched = outside the doctor's weekly schedule, striped = time off,
+   red line = now) and a separate **Walk-ins** column (listed by arrival, not placed on the time axis). **Week** view
+   (Saturday to Friday) has one column per day, with a walk-ins row under the day headers; a day's header opens it in
+   Day view. Each view is two requests: `GET /appointments/day` (with `to` for the week) and `GET /working-hours`. The toolbar has the view switch,
+   previous / next, a date, **Today**, a chip per doctor (hide / show a column) and the status chips (none selected =
+   every status); everything is kept in the address. Overlapping appointments sit side by side; cancelled and moved
+   ones are dashed. On wide screens the page makes room for the side panel. Four counts sit above the calendar: on the list, attended, waiting, no-show. Clicking a card opens
+   the **side panel** (patient, appointment, visit and billing, and the buttons from the API's `allowedActions`); the
+   calendar stays as it was behind it, and an action reloads the data without moving it. Doctors keep the table
+   (`/doctor`, `pages/DayList.tsx`), which shares the same action handlers (`useRowActions`).
+   - **Appointment type** (Examination / Follow-up / Session): a badge on the cards, the side panel and the doctors'
+     table. A receptionist changes it in the side panel (**Change type**, any status, walk-ins too); the owner and the
+     doctors only see it. The owner's side panel also shows the visit's clinical note (read-only); reception never
+     sees clinical text.
    - Confirming is optional: a PENDING row can go straight to **Attend** ("entered the doctor"). It opens a dialog
      (package choice as cards when the patient has one) and creates the visit and its invoice.
+   - **Patient details before the doctor** (`checkInDetails.tsx`, rules in `patientIdentity.ts`): when the patient
+     lacks an identity document (National ID, or a passport for a non-Egyptian), gender, date of birth or a referral
+     source, the Attend dialog (and the **Walk-in** form, step 4) asks for them and sends them with the check-in.
+     **Doctor referral** as the source asks for the referring doctor and shows its terms (the patient page's
+     `TermsFields`): the referral is recorded with the check-in, so this session's invoice is already covered.
+     A valid National ID sets the date of birth and gender (shown read-only, "from the National ID"); with a
+     passport they are typed. The age is shown under the date of birth. A malformed ID or a missing field is
+     flagged before sending. A complete patient shows "details complete" with the patient code (RH…).
    - **Cancel**, **No-show** and the undo actions ask for a reason in a dialog (at least 3 characters). Closing the
      dialog sends nothing. **Reschedule** opens a dialog with the slot picker.
    - **Undo attend** (same day) is offered only while the doctor has no note and nothing is paid; void the payment
@@ -179,7 +200,8 @@ npm run start:dev
      current referral and discount) to confirm, issues the new invoice and refreshes the list.
    - Every action confirms with a green toast.
 3. **Booking at the desk** (`/reception/book`): switch between **Appointment** and **Walk-in** (each form keeps what
-   was typed). Type the phone and press **Search**: a known patient shows as a card, an unknown number asks for a
+   was typed). Both ask for the **appointment type** (required, nothing preselected; the public booking asks the
+   patient too). Type the phone and press **Search**: a known patient shows as a card, an unknown number asks for a
    name. `/reception/book?phone=01…` fills and looks up the number (the patient page's **Book appointment** uses it).
 4. **Invoice** (open it from the day list): items and totals on one side, **Discount** and **Payment** cards on the
    other. Apply a discount, record a partial payment, then **Fill balance** and pay the rest. **Print** a payment's
@@ -188,15 +210,27 @@ npm run start:dev
      the invoice and opens its replacement. A cancelled session invoice offers **Create invoice** instead. Both show
      the API's preview first; the buttons appear only when the API allows them (`canCorrect` / `canReissue`). The two
      invoices link to each other ("Replaced by …" / "Replaces …").
-5. **Doctor**, My day / Needs a note → visit: write the note (**Save draft**), then **Sign** (it asks to confirm,
-   because a signed note only takes addenda).
-   - Signing is refused (`NOTE_INCOMPLETE`) without an assessment or the treatment done.
+5. **Doctor**, My day / Needs a note → visit: write the note (**Save draft**), then **Sign** (it asks to confirm).
+   - The visit's **appointment type** (badge in the header) decides the note's fields (`noteFields.ts`, mirroring the
+     API): **Examination**: chief complaint, assessment, diagnosis, treatment plan, pain level and the visit's
+     attachments (with an upload); **Session**: treatment provided, progress, pain level; **Follow-up**: assessment,
+     progress, treatment plan, pain level. An appointment from before types ("Type not set") shows every field.
+   - Every field is optional, also for signing. A signed note stays editable (**Save changes**); every change is in
+     the owner's audit log. Addenda are still added under a signed note.
+   - When reception changes the type later, values written under the old type stay visible, read-only, under
+     "Recorded under another appointment type" (also in the patient's clinical tab).
    - Notes can be written any day after the visit; "Needs a note" lists every visit still without a signed note.
 6. **Expenses**: **Add expense** opens a dialog; the period filter and the total of valid expenses are at the top.
 7. **Daily summary** (reception: today only; owner: any day, with previous / next day): totals by payment method and
-   the expected cash in the drawer.
+   the expected cash in the drawer, then **Outstanding at the end of the day**: what patients still owed and (owner
+   only) what the clinic owed its doctors (salaries, referral commissions), with how each moved during the day. A past
+   day keeps showing what was unpaid then, even if it was paid later. **Full details** opens the reports on that day.
 8. **Patient page** (Patients → search, or any patient from today's list): the header (phone, source, registration date,
    **Book appointment**) and the tabs. The open tab is kept in the address (`?tab=`), so a reload stays on it.
+   - **Personal** shows the patient code, the date of birth with the **age** (computed as of today) and (owner,
+     reception) the identity document; **Edit details** changes the
+     identity document, gender, date of birth and notes. Once there is a code, a receptionist sees the document as
+     read-only (only the owner can correct it). The patients search also finds a code, National ID or passport number.
    - **Overview**: counts, balance, next appointment, last visit, doctors seen, notes still to write.
    - **Medical & clinical** (owner, doctors): medical info, then the notes and the attachments, each with its own
      pages (10 per page). The owner has no **Appointments** tab (reception and doctors do).
@@ -217,6 +251,10 @@ npm run start:dev
     the 1st of last month). Money and activity figures come first. Revenue is drawn as a chart (days and months
     always run left to right, even in Arabic) with the same numbers in a table, grouped by day, month, doctor, service
     or method.
+    - **Money flow and what is owed**: the two balances at the start and end of the range and what moved them (for a
+      single day, the daily summary's numbers), every transaction (payments, refunds, expenses, with what each expense
+      pays for), what the clinic owes at the end of the range (per doctor and month, per referring doctor; advances
+      apart) and what patients owe (per patient, with the unpaid invoices).
 11. **Owner → Doctors** → a doctor: three cards. **Services** (a special price per service), **Weekly schedule**
     (time ranges per weekday, each one can be paused) and **Time off** (it warns about appointments that overlap).
     - On the doctors list, **deactivate** hides a doctor for a while (no login, no booking, not on the website) and
@@ -224,9 +262,18 @@ npm run start:dev
     - **Delete** (red confirm dialog) removes the doctor for good: the login stops, and they leave every list,
       service and package. Past visits and invoices keep the name. It is refused (`DOCTOR_HAS_APPOINTMENTS`) while
       they have pending or confirmed appointments from today on; cancel or move those first.
-12. **Owner → Referring doctors** and **Marketing**: referring doctors with their agreements, ledger and payouts; new
+12. **Owner → Salaries** (`/owner/salaries`): a month picker and a doctor dropdown. Without a doctor: every doctor's
+    pay type, sessions, commission, earned, paid and remaining, with totals. Pick a doctor (dropdown or **Open**):
+    - **Salary terms** → **Set terms**: applies from a month, fixed monthly salary (0 = commission only), commission
+      none / per session (one rate) / per service (a rate per service, "None" = no commission), each a fixed amount or a
+      percentage. Earlier versions are listed; a month that has a payment can't get new terms.
+    - **Statement**: fixed + commission = earned, paid, remaining (or overpaid), and every attended session with its
+      value (invoice or package session), rate and commission. Undo a visit and it drops out.
+    - **Record payment** (advances and parts allowed) and **Void**; each payment is also an expense (Expenses shows it
+      locked as "Doctor salary").
+13. **Owner → Referring doctors** and **Marketing**: referring doctors with their agreements, ledger and payouts; new
     patients by source, online campaigns (utm) and referrals over a date range, with CSV export.
-13. **Blog**:
+14. **Blog**:
     - Owner → **Blog** (`/owner/blog`): two cards. The editor (Quill: heading, bold, italic, underline, lists, align,
       link, clear formatting; it loads only on this page) and the details: title, description, keywords (type one and
       press Enter; at least 5, a repeated one is ignored, × removes it), the category, and the cover (drop a picture

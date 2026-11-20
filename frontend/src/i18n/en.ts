@@ -2,6 +2,7 @@
 // API values (enum values, codes, ISO times, decimal strings) are never translated, only their labels here.
 import { deskEn } from './areas/desk.en';
 import { billingEn } from './areas/billing.en';
+import { checkinEn } from './areas/checkin.en';
 import { ownerEn } from './areas/owner.en';
 import { referralEn } from './areas/referral.en';
 import { siteEn } from './areas/site.en';
@@ -63,6 +64,7 @@ export const en = {
     attention: 'Attention',
     audit: 'Audit log',
     referringDoctors: 'Referring doctors',
+    salaries: 'Salaries',
     marketing: 'Marketing & referrals',
     blog: 'Blog',
     publicBlog: 'Our blogs',
@@ -112,6 +114,17 @@ export const en = {
     staffLogin: 'Staff login',
     dashboard: 'Dashboard',
     account: 'Account',
+  },
+
+  // Appointment type (examination / follow-up / session), used by the booking forms, the desk and the visit page.
+  apptType: {
+    label: 'Appointment type',
+    notSet: 'Type not set',
+    pickHint: 'Required. It decides which fields the doctor fills in; it never changes the price or the duration.',
+    change: 'Change type',
+    changeTitle: 'Change the appointment type',
+    changeHint: "The doctor's note then shows the new type's fields. Anything already written is kept.",
+    changed: 'Appointment type changed.',
   },
 
   errors: {
@@ -170,8 +183,8 @@ export const en = {
       CATEGORY_RESERVED: 'Only the system records expenses in this category (doctor commission payouts).',
       UNSUPPORTED_FILE_TYPE: 'Only JPG, PNG, WEBP or PDF files are accepted.',
       NOTE_NOT_ALLOWED: 'A note can only be written for an active visit.',
-      NOTE_SIGNED: 'A signed note cannot be changed; add an addendum.',
-      NOTE_INCOMPLETE: 'Write an assessment or the treatment done before signing.',
+      NOTE_SIGNED: 'This note is already signed; save your changes instead.',
+      NOTE_FIELDS_NOT_IN_TYPE: 'The appointment type has changed, so the note now shows other fields. Check them and save again.',
       NOTE_NOT_SIGNED: 'Addenda can only be added to signed notes.',
       NOTE_NOT_VISIBLE: "This note is another doctor's draft.",
       ATTACHMENT_VISIT_MISMATCH: 'The visit does not belong to this patient.',
@@ -196,6 +209,14 @@ export const en = {
       NOTHING_TO_PAY: 'Nothing is owed to this doctor.',
       PAYOUT_EXCEEDS_OUTSTANDING: 'The amount is more than what is owed to this doctor.',
       PAYOUT_VOIDED: 'This payout is already voided.',
+      SALARY_TERMS_INVALID: 'These salary terms are not valid. Check the commission rates.',
+      SALARY_MONTH_PAID: 'That month (or a later one) already has a salary payment. New terms can only start after the last paid month.',
+      PATIENT_DETAILS_REQUIRED: "Complete the patient's details (identity document, gender, date of birth, referral source) before they enter the doctor.",
+      NATIONAL_ID_INVALID: 'This is not a valid Egyptian National ID (check the century and the birth date).',
+      NATIONAL_ID_MISMATCH: 'The date of birth or gender does not match the National ID.',
+      ID_DOCUMENT_TAKEN: 'Another patient already has this National ID or passport number.',
+      PATIENT_IDENTITY_LOCKED: 'This patient already has a code: only the owner can change the identity document.',
+      PATIENT_CODE_EXHAUSTED: 'No patient code is left for these National ID digits. Contact the owner.',
     } as Record<string, string>,
   },
 
@@ -239,8 +260,8 @@ export const en = {
     startAt: 'Start', endAt: 'End', notes: 'Notes', reason: 'Reason', amount: 'Amount', method: 'Method',
     reference: 'Reference', type: 'Type', value: 'Value', categoryId: 'Category', description: 'Description',
     expenseDate: 'Expense date', paymentMethod: 'Method', vendorName: 'Vendor', title: 'Title', file: 'File',
-    visitId: 'Visit', content: 'Text', chiefComplaint: 'Chief complaint', assessment: 'Assessment',
-    treatmentDone: 'Treatment done', progress: 'Progress', plan: 'Plan', painScore: 'Pain score',
+    visitId: 'Visit', content: 'Text', chiefComplaint: 'Chief complaint', assessment: 'Assessment', diagnosis: 'Diagnosis',
+    treatmentDone: 'Treatment provided', progress: 'Progress', plan: 'Treatment plan', painScore: 'Pain level',
     allergies: 'Allergies', chronicConditions: 'Chronic conditions', pastSurgeries: 'Past surgeries',
     currentMedications: 'Current medications', durationMinutes: 'Duration', basePrice: 'Base price',
     priceOverride: 'Price override', dayOfWeek: 'Day', startTime: 'Start time', endTime: 'End time',
@@ -279,6 +300,7 @@ export const en = {
   // Page text, one file per area (src/i18n/areas).
   ...deskEn,
   ...billingEn,
+  ...checkinEn,
   ...ownerEn,
   ...referralEn,
   ...siteEn,
@@ -297,6 +319,7 @@ export const en = {
     },
     AppointmentStatus: { PENDING: 'Pending', CONFIRMED: 'Confirmed', ATTENDED: 'Attended', NO_SHOW: 'No-show', CANCELLED: 'Cancelled', RESCHEDULED: 'Rescheduled' },
     AppointmentSource: { ONLINE: 'Online', RECEPTION: 'Reception' },
+    AppointmentType: { EXAMINATION: 'Examination', FOLLOW_UP: 'Follow-up', SESSION: 'Session' },
     VisitStatus: { ACTIVE: 'Active', VOIDED: 'Voided' },
     NoteStatus: { DRAFT: 'Draft', SIGNED: 'Signed' },
     InvoiceStatus: { ISSUED: 'Issued', PARTIALLY_PAID: 'Partially paid', PAID: 'Paid', CANCELLED: 'Cancelled' },
@@ -321,6 +344,8 @@ export const en = {
       WEBSITE: 'Website', REFERRAL: 'Referral', OTHER: 'Other',
     },
     ReferralRateType: { NONE: 'None', PERCENT: 'Percentage', FIXED: 'Fixed amount' },
+    SalaryCommissionMode: { NONE: 'No commission', PER_SESSION: 'Per session', PER_SERVICE: 'Per service' },
+    SessionValueSource: { INVOICE: 'Invoice', PACKAGE: 'Package session', NONE: 'No invoice' },
     ReferralApplicability: {
       FIRST_SESSION: 'First session only', ALL_SESSIONS: 'All sessions', SESSION_COUNT: 'A number of sessions',
       DATE_RANGE: 'A date range',
@@ -343,6 +368,7 @@ export const en = {
       PATIENT_ATTACHMENT: 'Patient attachment', PACKAGE: 'Package', PATIENT_PACKAGE: 'Patient package',
       ACQUISITION_SOURCE: 'Acquisition source', REFERRING_DOCTOR: 'Referring doctor', PATIENT_REFERRAL: 'Patient referral',
       REFERRAL_COMMISSION: 'Referral commission', REFERRAL_PAYOUT: 'Commission payout', BLOG_POST: 'Blog post',
+      DOCTOR_SALARY_TERMS: 'Doctor salary terms', DOCTOR_SALARY_PAYMENT: 'Doctor salary payment',
     },
     AuditAction: {
       LOGIN: 'Logged in', LOGIN_FAILED: 'Login failed', LOGOUT: 'Logged out',
@@ -364,8 +390,8 @@ export const en = {
       APPOINTMENT_CONFIRMED: 'Appointment confirmed', APPOINTMENT_CANCELLED: 'Appointment cancelled',
       APPOINTMENT_NO_SHOW: 'Marked as no-show', APPOINTMENT_RESCHEDULED: 'Appointment rescheduled',
       APPOINTMENT_ATTENDED: 'Appointment attended', APPOINTMENT_ATTEND_UNDONE: 'Attendance undone',
-      APPOINTMENT_NO_SHOW_UNDONE: 'No-show undone',
-      VISIT_ATTENDED: 'Visit started', VISIT_VOIDED: 'Visit voided',
+      APPOINTMENT_NO_SHOW_UNDONE: 'No-show undone', APPOINTMENT_TYPE_CHANGED: 'Appointment type changed',
+      VISIT_ATTENDED: 'Visit started', VISIT_VOIDED: 'Visit voided', VISIT_TYPE_CHANGED: 'Walk-in type changed',
       INVOICE_CREATED: 'Invoice created', INVOICE_ITEM_ADDED: 'Invoice item added', INVOICE_ITEM_UPDATED: 'Invoice item updated',
       INVOICE_ITEM_REMOVED: 'Invoice item removed', INVOICE_CANCELLED: 'Invoice cancelled',
       INVOICE_CORRECTED: 'Invoice corrected', INVOICE_REISSUED: 'Invoice reissued',
@@ -390,6 +416,7 @@ export const en = {
       PATIENT_REFERRAL_ENDED: 'Referral ended', REFERRAL_APPLIED: 'Invoice covered by referral',
       REFERRAL_COMMISSION_RECORDED: 'Commission recorded', REFERRAL_COMMISSION_ADJUSTED: 'Commission adjusted',
       REFERRAL_PAYOUT_RECORDED: 'Commission paid to doctor', REFERRAL_PAYOUT_VOIDED: 'Commission payout voided',
+      DOCTOR_SALARY_TERMS_SET: 'Salary terms set', DOCTOR_SALARY_PAID: 'Salary paid', DOCTOR_SALARY_PAYMENT_VOIDED: 'Salary payment voided',
       BLOG_POST_CREATED: 'Blog post published', BLOG_POST_UPDATED: 'Blog post edited', BLOG_POST_DELETED: 'Blog post deleted',
     },
     TimelineEventType: {
