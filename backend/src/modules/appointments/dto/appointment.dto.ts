@@ -30,7 +30,14 @@ import { NoteStatus } from '../../clinical/clinical.enums.js';
 import { PackageSessionDto } from '../../packages/dto/package.dto.js';
 import { PersonNameField } from '../../users/dto/user.dto.js';
 import { VisitStatus } from '../../visits/visit.enums.js';
-import { AppointmentSource, AppointmentStatus } from '../appointment.enums.js';
+import {
+  AppointmentSource,
+  AppointmentStatus,
+  AppointmentType,
+} from '../appointment.enums.js';
+
+/** GET /appointments/day with `to`: the longest range, in days (a week). */
+export const DAY_LIST_MAX_DAYS = 7;
 
 const START_DOC = {
   example: '2026-11-05T17:00:00+02:00',
@@ -41,6 +48,25 @@ const PHONE_DOC = {
   example: '01012345678',
   description: 'Egyptian mobile, any common format',
 };
+
+// Required wherever a booking (or a walk-in) is made; there is no default.
+export const AppointmentTypeField = () => (target: object, key: string) => {
+  ApiProperty({
+    enum: AppointmentType,
+    enumName: 'AppointmentType',
+    description:
+      "What the visit is for. Only a classification (never changes the price, duration, slots, packages or invoices); it decides which fields the visit's clinical note has.",
+  })(target, key);
+  IsEnum(AppointmentType)(target, key);
+};
+
+// The type as returned: null = not set (booked before types existed).
+const TYPE_OUT = {
+  enum: AppointmentType,
+  enumName: 'AppointmentType',
+  nullable: true,
+  description: 'null = not set (booked before appointment types existed)',
+} as const;
 
 // ---------- Inputs ----------
 
@@ -75,6 +101,9 @@ export class CreateAppointmentDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
   serviceId: string;
+
+  @AppointmentTypeField()
+  type: AppointmentType;
 
   @ApiProperty(START_DOC)
   @IsIsoWithOffset()
@@ -152,6 +181,9 @@ export class PublicBookingDto {
   @IsUUID()
   serviceId: string;
 
+  @AppointmentTypeField()
+  type: AppointmentType;
+
   @ApiProperty(START_DOC)
   @IsIsoWithOffset()
   startAt: string;
@@ -182,6 +214,12 @@ export class PublicBookingDto {
   @IsOptional()
   @IsEmpty({ message: 'Invalid request' })
   website?: string;
+}
+
+// PATCH /appointments/:id/type and PATCH /visits/:id/type (RECEPTIONIST).
+export class ChangeAppointmentTypeDto {
+  @AppointmentTypeField()
+  type: AppointmentType;
 }
 
 export class CancelAppointmentDto {
@@ -247,9 +285,20 @@ export class ListAppointmentsQueryDto extends PaginationQueryDto {
 }
 
 export class DayListQueryDto {
-  @ApiProperty({ example: '2026-11-05', description: 'Clinic local date' })
+  @ApiProperty({
+    example: '2026-11-05',
+    description: 'Clinic local date (the first day when `to` is given)',
+  })
   @IsLocalDate()
   date: string;
+
+  @ApiPropertyOptional({
+    example: '2026-11-11',
+    description: `Last clinic local date, inclusive (a week view in one request). At most ${DAY_LIST_MAX_DAYS} days from \`date\`; else DATE_OUT_OF_RANGE.`,
+  })
+  @IsOptional()
+  @IsLocalDate()
+  to?: string;
 
   @ApiPropertyOptional({
     enum: AppointmentStatus,
@@ -323,6 +372,9 @@ export class AppointmentResponseDto {
 
   @ApiProperty({ enum: AppointmentSource })
   source: AppointmentSource;
+
+  @ApiProperty(TYPE_OUT)
+  type: AppointmentType | null;
 
   @ApiProperty({ example: '2026-11-05T17:00:00+02:00' })
   startAt: string;
@@ -431,6 +483,13 @@ export class DayListEntryDto {
 
   @ApiProperty({ enum: AppointmentSource, nullable: true })
   source: AppointmentSource | null;
+
+  @ApiProperty({
+    ...TYPE_OUT,
+    description:
+      "The appointment's type, or the walk-in's own. null = not set (from before appointment types existed)",
+  })
+  type: AppointmentType | null;
 
   @ApiProperty({
     nullable: true,
@@ -580,6 +639,9 @@ export class PublicBookingResponseDto {
 
   @ApiProperty({ enum: [AppointmentStatus.PENDING] })
   status: AppointmentStatus;
+
+  @ApiProperty({ enum: AppointmentType, enumName: 'AppointmentType' })
+  type: AppointmentType;
 
   @ApiProperty({
     nullable: true,

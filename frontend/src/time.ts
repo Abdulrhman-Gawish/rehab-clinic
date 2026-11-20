@@ -51,3 +51,12 @@ export function localInputToIso(value: string): string {
 
 // Display formatting (dates, times, money in the UI language) is in format.ts. The helpers here build
 // machine values for the API and must not follow the UI locale.
+
+/** An instant as clinic wall time: its local date (YYYY-MM-DD) and minutes since that day's midnight. */
+export function cairoWall(iso: string): { date: string; minutes: number } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(iso));
+  const get = (type: string) => parts.find((p) => p.type === type)!.value;
+  return { date: `${get('year')}-${get('month')}-${get('day')}`, minutes: Number(get('hour')) * 60 + Number(get('minute')) };
+}

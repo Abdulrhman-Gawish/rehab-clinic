@@ -1,18 +1,18 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useParams } from 'react-router-dom';
 import { act, get, getSession, post, put } from '../api';
-import { usePaged } from '../components';
+import { TypeBadge, usePaged } from '../components';
 import { fmtDateTime, fmtNumber } from '../format';
 import { label, useI18n } from '../i18n';
+import { NOTE_FIELDS, noteFieldsFor, otherFilledFields, showsAttachments } from '../noteFields';
 import {
-  Alert, Badge, Button, ButtonLink, Card, Checkbox, confirmAction, cx, EmptyState, Field, Icon, Input, Loading, NumberInput,
-  PageHeader, SectionTitle, StatusBadge, Textarea,
+  Alert, Badge, Button, ButtonLink, Card, Checkbox, confirmAction, cx, DescriptionList, EmptyState, Field, Icon, Input, Loading,
+  NumberInput, PageHeader, SectionTitle, StatusBadge, Textarea,
 } from '../ui';
 import { Ltr, useLoad } from '../util';
 import { AttachmentList, MED_FIELDS, MedicalInfoView, NoteView } from './PatientRecords';
 import '../styles/areas/billing.css';
-
-const NOTE_FIELDS = ['chiefComplaint', 'assessment', 'treatmentDone', 'progress', 'plan'] as const;
+import '../styles/areas/desk.css';
 
 export function VisitPage() {
   const { t } = useI18n();
@@ -26,7 +26,7 @@ export function VisitPage() {
       <PageHeader
         back={{ to: `/patients/${visit.patient.id}`, label: tv.patientFile }}
         title={tv.pageTitle(visit.patient.name)}
-        badges={<StatusBadge kind="VisitStatus" value={visit.status} />}
+        badges={<><TypeBadge type={visit.type} /><StatusBadge kind="VisitStatus" value={visit.status} /></>}
         description={
           <div className="visit-meta">
             <span><Icon name="stethoscope" />{tv.withDoctor(visit.service.name, visit.doctor.name)}</span>
@@ -68,7 +68,9 @@ function VisitBody({ visit, visitId, reloadVisit }: { visit: any; visitId: strin
 
       <div className="split split--even">
         <div className="stack-lg">
-          {isDoctor ? <NoteForm visitId={visitId} onChange={reloadAll} /> : <VisitNote visitId={visitId} />}
+          {isDoctor
+            ? <NoteForm visitId={visitId} patientId={pid} type={visit.type} onChange={reloadAll} onFailed={reloadVisit} />
+            : <VisitNote visitId={visitId} />}
           <MedicalInfoForm patientId={pid} current={info} onSaved={reloadInfo} />
           <Upload patientId={pid} visitId={visitId} onDone={files.reload} />
         </div>
@@ -147,53 +149,77 @@ function AddAddendum({ noteId, onDone }: { noteId: string; onDone?: () => void }
   );
 }
 
-function NoteForm({ visitId, onChange }: { visitId: string; onChange: () => void }) {
+/**
+ * The visit's doctor writes the note: only the fields of the visit's appointment type (all of them when the type is
+ * not set), any time, also after signing (every change is audited). Values written under another type stay visible,
+ * read-only. Examination notes also hold the visit's attachments.
+ */
+function NoteForm({ visitId, patientId, type, onChange, onFailed }: {
+  visitId: string; patientId: string; type: string | null; onChange: () => void; onFailed: () => void;
+}) {
   const { t } = useI18n();
   const tv = t.visit;
   // null = no note yet. Another doctor's draft is 404 NOTE_NOT_VISIBLE (shown as an error toast).
   const [note, reload] = useLoad(() => get(`/visits/${visitId}/note`), [visitId]);
-  const empty = { chiefComplaint: '', assessment: '', treatmentDone: '', progress: '', plan: '', painScore: '' };
-  const [v, setV] = useState<Record<string, string>>(empty);
+  const [v, setV] = useState<Record<string, string>>(() => Object.fromEntries(NOTE_FIELDS.map((f) => [f, ''])));
   useEffect(() => {
-    if (note) setV(Object.fromEntries(Object.keys(empty).map((k) => [k, note[k] == null ? '' : String(note[k])])));
-  }, [note]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (note) setV(Object.fromEntries(NOTE_FIELDS.map((f) => [f, note[f] == null ? '' : String(note[f])])));
+  }, [note]);
 
-  // Blank text is sent as is: the API turns it into null.
-  const body = () => ({
-    ...Object.fromEntries(NOTE_FIELDS.map((f) => [f, v[f]])),
-    painScore: v.painScore === '' ? null : Number(v.painScore),
-  });
-  const done = () => { reload(); onChange(); };
-  // PUT creates the draft on the first save and replaces it after.
-  const saveDraft = () => act(() => put(`/visits/${visitId}/note`, body()), tv.draftSaved).then(done);
+  const editable = noteFieldsFor(type);
+  const textFields = editable.filter((f) => f !== 'painScore');
+  const other = note ? otherFilledFields(type, note) : [];
+  // Only the type's fields are sent (the API refuses the others). Blank text is sent as is: the API makes it null.
+  const body = () => Object.fromEntries(editable.map((f) => [f, f === 'painScore' ? (v.painScore === '' ? null : Number(v.painScore)) : v[f]]));
+  // On success everything reloads. On failure the typed text stays; the visit reloads in case reception changed its
+  // type meanwhile (NOTE_FIELDS_NOT_IN_TYPE), so the form shows the new type's fields.
+  const save = async (send: () => Promise<unknown>, success: string) => {
+    if (await act(send, success)) { reload(); onChange(); } else onFailed();
+  };
+  // PUT creates the draft on the first save and replaces the type's fields after (signed notes stay signed).
+  const saveNote = (success: string) => save(() => put(`/visits/${visitId}/note`, body()), success);
   const sign = async () => {
     if (!(await confirmAction({ title: tv.signTitle, message: tv.signMessage, confirmLabel: tv.saveSign, icon: 'check-circle' }))) return;
-    await act(() => post(`/visits/${visitId}/note/sign`, body()), tv.signed).then(done);
+    await save(() => post(`/visits/${visitId}/note/sign`, body()), tv.signed);
   };
   const signed = note?.status === 'SIGNED';
 
   return (
     <Card
       title={tv.sessionNote} icon="note-pen"
-      description={signed ? tv.signedOn(fmtDateTime(note.signedAt)) : tv.draftHint}
-      actions={note ? <StatusBadge kind="NoteStatus" value={note.status} /> : <Badge tone="neutral" dot>{tv.noneYet}</Badge>}
-      footer={!signed && (
+      description={signed ? `${tv.signedOn(fmtDateTime(note.signedAt))}. ${tv.signedEditHint}` : tv.draftHint}
+      actions={<span className="note-card__badges">
+        <TypeBadge type={type} />
+        {note ? <StatusBadge kind="NoteStatus" value={note.status} /> : <Badge tone="neutral" dot>{tv.noneYet}</Badge>}
+      </span>}
+      footer={
         <div className="form-actions form-actions--end">
-          <Button icon="file" onClick={saveDraft}>{tv.saveDraft}</Button>
-          <Button variant="primary" icon="check" onClick={sign}>{tv.saveSign}</Button>
+          {signed ? <Button variant="primary" icon="check" onClick={() => saveNote(tv.changesSaved)}>{tv.saveChanges}</Button> : <>
+            <Button icon="file" onClick={() => saveNote(tv.draftSaved)}>{tv.saveDraft}</Button>
+            <Button variant="primary" icon="check" onClick={sign}>{tv.saveSign}</Button>
+          </>}
         </div>
-      )}
+      }
     >
       <div className="stack">
-        {NOTE_FIELDS.map((f) => (
+        {!type && <Alert tone="info">{tv.typeNotSetHint}</Alert>}
+        {textFields.map((f) => (
           <Field key={f} label={label(t.fields, f)}>
-            <Textarea rows={3} readOnly={signed} value={v[f]} onChange={(e) => setV({ ...v, [f]: e.target.value })} />
+            <Textarea rows={3} value={v[f]} onChange={(e) => setV({ ...v, [f]: e.target.value })} />
           </Field>
         ))}
         <Field label={tv.painScore} hint={tv.painHint}>
-          <NumberInput inputMode="numeric" type="number" min={0} max={10} step={1} readOnly={signed} style={{ maxWidth: 160 }}
+          <NumberInput inputMode="numeric" type="number" min={0} max={10} step={1} style={{ maxWidth: 160 }}
             value={v.painScore} onChange={(e) => setV({ ...v, painScore: e.target.value })} />
         </Field>
+        {other.length > 0 && (
+          <section className="note-card__part note-card__part--other">
+            <h4 className="note-card__subtitle">{t.records.otherFields}</h4>
+            <p className="field__help">{tv.otherFieldsHint}</p>
+            <DescriptionList items={other.map((f) => [label(t.fields, f), f === 'painScore' ? t.records.pain(fmtNumber(note.painScore)) : <span className="pre-line">{note[f]}</span>])} />
+          </section>
+        )}
+        {showsAttachments(type) && <NoteAttachments patientId={patientId} visitId={visitId} onUploaded={onChange} />}
         {signed && (
           <>
             {note.addenda.map((a: any) => (
@@ -203,11 +229,59 @@ function NoteForm({ visitId, onChange }: { visitId: string; onChange: () => void
               </div>
             ))}
             <p className="field__help">{tv.addendumHint}</p>
-            <AddAddendum noteId={note.id} onDone={done} />
+            <AddAddendum noteId={note.id} onDone={() => { reload(); onChange(); }} />
           </>
         )}
       </div>
     </Card>
+  );
+}
+
+/**
+ * An examination note's attachments: the patient attachments linked to this visit, and an upload linked to it (the
+ * same files, rules and endpoint as the attachment card below).
+ */
+function NoteAttachments({ patientId, visitId, onUploaded }: { patientId: string; visitId: string; onUploaded: () => void }) {
+  const { t } = useI18n();
+  const tv = t.visit;
+  const files = usePaged(`/patients/${patientId}/attachments?visitId=${visitId}`, 10);
+  const [file, setFile] = useState<File | null>(null);
+  const [fileKey, setFileKey] = useState(0);
+  const [title, setTitle] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('title', title);
+    fd.append('visitId', visitId);
+    setBusy(true);
+    const ok = await act(() => post(`/patients/${patientId}/attachments`, fd), tv.uploaded);
+    setBusy(false);
+    if (ok) { setTitle(''); setFile(null); setFileKey((k) => k + 1); files.reload(); onUploaded(); }
+  };
+  const items: any[] = files.res?.items ?? [];
+  return (
+    <section className="note-card__part" aria-labelledby={`note-files-${visitId}`}>
+      <h4 id={`note-files-${visitId}`} className="note-card__subtitle">{t.records.noteAttachments}</h4>
+      {!files.res ? <Loading /> : items.length > 0 && (
+        <div className={cx(files.loading && 'is-busy')} aria-busy={files.loading}><AttachmentList attachments={items} /></div>
+      )}
+      {files.pager}
+      <form className="stack-sm" onSubmit={submit}>
+        <Field label={tv.file} hint={tv.noteAttachmentsHint}>
+          <Input key={fileKey} type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+        </Field>
+        <Field label={tv.titlePh}>
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} />
+        </Field>
+        <div className="form-actions">
+          <Button type="submit" size="sm" icon="paperclip" loading={busy} disabled={!file || !title.trim()}>{tv.addAttachment}</Button>
+        </div>
+      </form>
+    </section>
   );
 }
 

@@ -24,6 +24,7 @@ import {
   resetDatabase,
   type TestApp,
 } from './utils/test-app.js';
+import { completeCheckInDetails } from './utils/check-in.js';
 
 // Uploaded files go to a throw-away folder (git-ignored).
 vi.hoisted(() => {
@@ -117,6 +118,9 @@ describe('Patient history (e2e)', () => {
     body: object = {},
   ): Promise<Record<string, any>> {
     tick();
+    if (path.endsWith('/attend') || path === '/visits/walk-in') {
+      await completeCheckInDetails(ctx.dataSource);
+    }
     const res = await request(server).post(api(path)).set(as(by)).send(body);
     if (res.status >= 300) {
       throw new Error(`${path}: ${res.status} ${JSON.stringify(res.body)}`);
@@ -195,6 +199,7 @@ describe('Patient history (e2e)', () => {
         patientId,
         doctorId,
         serviceId,
+        type: 'EXAMINATION',
         startAt,
         allowOutsideSchedule: true,
       });
@@ -222,6 +227,7 @@ describe('Patient history (e2e)', () => {
         phone: '01011111111',
         doctorId: doctorA.doctorId,
         serviceId,
+        type: 'EXAMINATION',
         startAt: iso('10:00', '2026-11-04'),
       })
       .expect(201);
@@ -249,6 +255,7 @@ describe('Patient history (e2e)', () => {
         patientId,
         doctorId: doctorB.doctorId,
         serviceId,
+        type: 'EXAMINATION',
       });
     const undone = await walkIn();
     await post(`/visits/${undone.id}/undo-attend`, receptionist, {
@@ -313,6 +320,7 @@ describe('Patient history (e2e)', () => {
       patientId: other.id,
       doctorId: doctorA.doctorId,
       serviceId,
+      type: 'SESSION',
     });
     await post(`/invoices/${otherVisit.invoiceId}/payments`, receptionist, {
       amount: '300.00',

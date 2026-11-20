@@ -12,7 +12,11 @@ import {
   AppointmentTrigger,
   assertTransition,
 } from './appointment-state-machine.js';
-import { AppointmentSource, AppointmentStatus } from './appointment.enums.js';
+import {
+  AppointmentSource,
+  AppointmentStatus,
+  AppointmentType,
+} from './appointment.enums.js';
 import { AppointmentStatusHistory } from './entities/appointment-status-history.entity.js';
 import {
   Appointment,
@@ -62,6 +66,8 @@ export interface NewAppointment {
   durationMinutes: number;
   status: AppointmentStatus;
   source: AppointmentSource;
+  // Required on new bookings; a reschedule copies the old one's (even null).
+  type: AppointmentType | null;
   bookedName: string;
   bookedById: string | null;
   rescheduledFromId?: string | null;
@@ -119,6 +125,7 @@ export class AppointmentWriter {
         ),
         status: data.status,
         source: data.source,
+        type: data.type,
         bookedName: data.bookedName,
         bookedById: data.bookedById,
         rescheduledFromId: data.rescheduledFromId ?? null,
@@ -156,6 +163,7 @@ export class AppointmentWriter {
           endAt: appointment.endAt.toISOString(),
           status: appointment.status,
           source: appointment.source,
+          type: appointment.type,
           bookedName: appointment.bookedName,
           rescheduledFromId: appointment.rescheduledFromId,
           requestedPackageId: appointment.requestedPackageId,
@@ -209,6 +217,31 @@ export class AppointmentWriter {
       manager,
     );
     return appointment;
+  }
+
+  /**
+   * Sets the appointment type, in any status (no status history: it is not
+   * a status change), audited with the old and new type. The same type is a
+   * no-op. The caller must have locked the row.
+   */
+  async changeType(
+    manager: EntityManager,
+    appointment: Appointment,
+    type: AppointmentType,
+    actor: Actor,
+  ): Promise<void> {
+    const from = appointment.type;
+    if (from === type) return;
+    appointment.type = type;
+    await manager.getRepository(Appointment).update(appointment.id, { type });
+    await this.auditService.logAction(
+      actor,
+      AuditAction.APPOINTMENT_TYPE_CHANGED,
+      AuditEntityType.APPOINTMENT,
+      appointment.id,
+      { oldValues: { type: from }, newValues: { type } },
+      manager,
+    );
   }
 
   /**

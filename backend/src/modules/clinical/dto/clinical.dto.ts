@@ -19,6 +19,7 @@ import {
   PaginationQueryDto,
   type Paginated,
 } from '../../../common/dto/pagination.dto.js';
+import { AppointmentType } from '../../appointments/appointment.enums.js';
 import { NoteStatus } from '../clinical.enums.js';
 
 const MAX_TEXT = 5000;
@@ -54,23 +55,37 @@ export class MedicalInfoDto {
   notes?: string | null;
 }
 
+// Every field is optional, also when signing. Only the fields of the visit's
+// appointment type may be sent (see note-fields.ts); the others are read-only
+// (NOTE_FIELDS_NOT_IN_TYPE). The type's fields are replaced: one left out,
+// null or blank becomes null.
 export class ClinicalNoteInputDto {
-  @ClinicalText()
+  @ClinicalText('Types: EXAMINATION')
   chiefComplaint?: string | null;
 
-  @ClinicalText()
+  @ClinicalText('Types: EXAMINATION, FOLLOW_UP')
   assessment?: string | null;
 
-  @ClinicalText()
+  @ClinicalText('Types: EXAMINATION')
+  diagnosis?: string | null;
+
+  @ClinicalText('Treatment provided. Types: SESSION')
   treatmentDone?: string | null;
 
-  @ClinicalText()
+  @ClinicalText('Types: SESSION, FOLLOW_UP')
   progress?: string | null;
 
-  @ClinicalText('Next steps and home exercises')
+  @ClinicalText(
+    'Treatment plan (next steps and home exercises). Types: EXAMINATION, FOLLOW_UP',
+  )
   plan?: string | null;
 
-  @ApiPropertyOptional({ nullable: true, minimum: 0, maximum: 10 })
+  @ApiPropertyOptional({
+    nullable: true,
+    minimum: 0,
+    maximum: 10,
+    description: 'Pain level. Every type',
+  })
   @IsOptional()
   @IsInt()
   @Min(0)
@@ -100,6 +115,16 @@ export class AttachmentUploadDto {
   @ApiPropertyOptional({
     format: 'uuid',
     description: "One of the patient's visits",
+  })
+  @IsOptional()
+  @IsUUID()
+  visitId?: string;
+}
+
+export class AttachmentListQueryDto extends PaginationQueryDto {
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Only the attachments linked to this visit',
   })
   @IsOptional()
   @IsUUID()
@@ -197,6 +222,15 @@ export class ClinicalNoteResponseDto {
   @ApiProperty({ type: ClinicalDoctorDto, description: 'Author' })
   doctor: ClinicalDoctorDto;
 
+  @ApiProperty({
+    enum: AppointmentType,
+    enumName: 'AppointmentType',
+    nullable: true,
+    description:
+      "The visit's appointment type now (it can change after the note was written): its fields are the note's editable fields. Values in other fields are kept and shown read-only. null = not set (every field)",
+  })
+  type: AppointmentType | null;
+
   @ApiProperty({ nullable: true, type: String })
   chiefComplaint: string | null;
 
@@ -204,15 +238,22 @@ export class ClinicalNoteResponseDto {
   assessment: string | null;
 
   @ApiProperty({ nullable: true, type: String })
+  diagnosis: string | null;
+
+  @ApiProperty({
+    nullable: true,
+    type: String,
+    description: 'Treatment provided',
+  })
   treatmentDone: string | null;
 
   @ApiProperty({ nullable: true, type: String })
   progress: string | null;
 
-  @ApiProperty({ nullable: true, type: String })
+  @ApiProperty({ nullable: true, type: String, description: 'Treatment plan' })
   plan: string | null;
 
-  @ApiProperty({ nullable: true, type: Number })
+  @ApiProperty({ nullable: true, type: Number, description: 'Pain level' })
   painScore: number | null;
 
   @ApiProperty({ enum: NoteStatus })
@@ -229,6 +270,13 @@ export class ClinicalNoteResponseDto {
 
   @ApiProperty({ type: [AddendumResponseDto], description: 'Oldest first' })
   addenda: AddendumResponseDto[];
+
+  @ApiProperty({
+    type: () => [AttachmentResponseDto],
+    description:
+      "The patient attachments linked to this note's visit, newest first (shown in EXAMINATION notes)",
+  })
+  attachments: AttachmentResponseDto[];
 }
 
 export class AttachmentResponseDto {

@@ -29,6 +29,7 @@ import {
   resetDatabase,
   type TestApp,
 } from './utils/test-app.js';
+import { completeCheckInDetails } from './utils/check-in.js';
 
 const TODAY = '2026-11-03';
 const local = (time: string, date = TODAY) =>
@@ -121,6 +122,7 @@ describe('Billing: invoices (e2e)', () => {
       serviceId: service.id,
       startAt: local(time),
     });
+    await completeCheckInDetails(ctx.dataSource);
     const res = await request(server)
       .post(`/api/v1/appointments/${appointment.id}/attend`)
       .set(as(receptionist))
@@ -199,6 +201,7 @@ describe('Billing: invoices (e2e)', () => {
         basePrice: '150.50',
       });
       await assignService(ctx.dataSource, doctor.doctorId, other.id);
+      await completeCheckInDetails(ctx.dataSource);
       const walkIn = await request(server)
         .post('/api/v1/visits/walk-in')
         .set(as(receptionist))
@@ -206,6 +209,7 @@ describe('Billing: invoices (e2e)', () => {
           patientId: patient.id,
           doctorId: doctor.doctorId,
           serviceId: other.id,
+          type: 'SESSION',
         })
         .expect(201);
       expect(

@@ -34,6 +34,7 @@ import {
   resetDatabase,
   type TestApp,
 } from './utils/test-app.js';
+import { afterCheckInSetup, checkInDetailsFor } from './utils/check-in.js';
 
 // Mutable frozen clock. "Today" is Tuesday 2026-11-03 in Cairo (+02:00).
 const TODAY = '2026-11-03';
@@ -55,6 +56,7 @@ const VISIT_KEYS = [
   'patient',
   'service',
   'status',
+  'type',
   'updatedAt',
   'voidReason',
   'voidedAt',
@@ -160,9 +162,12 @@ describe('Desk workflow: attend, walk-in, undo, day list (e2e)', () => {
   }
 
   const attend = (appointmentId: string, as: TestUser = receptionist) =>
-    request(server)
-      .post(`/api/v1/appointments/${appointmentId}/attend`)
-      .set('Authorization', bearer(as));
+    afterCheckInSetup(
+      request(server)
+        .post(`/api/v1/appointments/${appointmentId}/attend`)
+        .set('Authorization', bearer(as)),
+      ctx.dataSource,
+    );
 
   const undoAttend = (
     appointmentId: string,
@@ -179,11 +184,23 @@ describe('Desk workflow: attend, walk-in, undo, day list (e2e)', () => {
       .set('Authorization', bearer(receptionist))
       .send({ reason });
 
+  // A walk-in that creates its patient (phone) brings the check-in details.
   const walkIn = (body: Record<string, unknown>, as: TestUser = receptionist) =>
-    request(server)
-      .post('/api/v1/visits/walk-in')
-      .set('Authorization', bearer(as))
-      .send({ doctorId: doctorA.doctorId, serviceId, ...body });
+    afterCheckInSetup(
+      request(server)
+        .post('/api/v1/visits/walk-in')
+        .set('Authorization', bearer(as))
+        .send({
+          doctorId: doctorA.doctorId,
+          serviceId,
+          type: 'EXAMINATION',
+          ...(typeof body.phone === 'string' && {
+            patientDetails: checkInDetailsFor(body.phone),
+          }),
+          ...body,
+        }),
+      ctx.dataSource,
+    );
 
   const dayList = (as: TestUser = receptionist, query = '') =>
     request(server)
@@ -435,6 +452,7 @@ describe('Desk workflow: attend, walk-in, undo, day list (e2e)', () => {
           patientId: p2.id,
           doctorId: doctorA.doctorId,
           serviceId,
+          type: 'SESSION',
           startAt: iso('09:00'),
           allowOutsideSchedule: true,
         })

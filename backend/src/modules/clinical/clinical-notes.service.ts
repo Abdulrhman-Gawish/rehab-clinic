@@ -20,11 +20,19 @@ import { ClinicTimeService } from '../../common/time/clinic-time.service.js';
 import { diffValues, pickValues } from '../audit/audit-diff.util.js';
 import { AuditAction, AuditEntityType } from '../audit/audit.constants.js';
 import { AuditService } from '../audit/audit.service.js';
+import type { AppointmentType } from '../appointments/appointment.enums.js';
+import { Appointment } from '../appointments/entities/appointment.entity.js';
 import { DoctorAccessService } from '../doctors/doctor-access.service.js';
 import { Visit } from '../visits/entities/visit.entity.js';
 import { VisitStatus } from '../visits/visit.enums.js';
 import { ClinicalAccessService } from './clinical-access.service.js';
 import { NoteStatus } from './clinical.enums.js';
+import {
+  fieldsOutsideType,
+  NOTE_FIELDS,
+  noteFieldsFor,
+  type NoteField,
+} from './note-fields.js';
 import {
   toAttachment,
   toClinicalNote,
@@ -43,15 +51,6 @@ import { ClinicalNote } from './entities/clinical-note.entity.js';
 import { PatientAttachment } from './entities/patient-attachment.entity.js';
 import { MedicalInfoService } from './medical-info.service.js';
 
-const NOTE_FIELDS = [
-  'chiefComplaint',
-  'assessment',
-  'treatmentDone',
-  'progress',
-  'plan',
-  'painScore',
-] as const satisfies readonly (keyof ClinicalNote)[];
-
 @Injectable()
 export class ClinicalNotesService {
   constructor(
@@ -66,25 +65,30 @@ export class ClinicalNotesService {
   // ---------- Notes (only the visit's doctor writes) ----------
 
   /**
-   * Creates the DRAFT or replaces its fields (PUT: a field left out becomes
-   * null). Only the visit's doctor; ACTIVE visits only, any day after.
+   * Creates the note (a DRAFT) on the first save, or replaces the fields of
+   * the visit's appointment type (a field left out becomes null); the other
+   * types' fields are read-only and kept. A SIGNED note stays SIGNED and can
+   * still be edited: every change is audited (old and new values). Only the
+   * visit's doctor; a new note only on an ACTIVE visit, any day after.
    */
-  async saveDraft(
+  async save(
     visitId: string,
     dto: ClinicalNoteInputDto,
     user: AuthenticatedUser,
     actor: Actor,
   ): Promise<ClinicalNoteResponseDto> {
-    await this.dataSource.transaction((manager) =>
-      this.upsertDraft(manager, visitId, dto, user, actor),
-    );
+    await this.dataSource.transaction(async (manager) => {
+      const { visit, note } = await this.lockOwnNote(visitId, user, manager);
+      await this.saveFields(manager, visit, note, dto, actor);
+    });
     return this.reload(visitId, user);
   }
 
   /**
-   * DRAFT -> SIGNED, locked forever. Needs an assessment or the treatment
-   * done. Fields sent with it are saved first (like PUT), in the same
-   * transaction: save and sign in one call.
+   * DRAFT -> SIGNED. No field is required. Fields sent with it are saved
+   * first (like PUT), in the same transaction: save and sign in one call.
+   * Without a note yet, an empty one is created and signed. Signing twice is
+   * NOTE_SIGNED (a signed note is edited with PUT).
    */
   async sign(
     visitId: string,
@@ -93,16 +97,24 @@ export class ClinicalNotesService {
     actor: Actor,
   ): Promise<ClinicalNoteResponseDto> {
     await this.dataSource.transaction(async (manager) => {
-      const withFields = NOTE_FIELDS.some((field) => dto[field] !== undefined);
-      const note = withFields
-        ? await this.upsertDraft(manager, visitId, dto, user, actor)
-        : await this.lockOwnDraft(visitId, user, manager);
-      if (!note?.assessment && !note?.treatmentDone) {
+      const locked = await this.lockOwnNote(visitId, user, manager);
+      if (locked.note?.status === NoteStatus.SIGNED) {
         throw unprocessable(
-          ErrorCode.NOTE_INCOMPLETE,
-          'Fill in the assessment or the treatment done before signing',
+          ErrorCode.NOTE_SIGNED,
+          'The note is already signed; save changes with PUT',
         );
       }
+      const withFields = NOTE_FIELDS.some((field) => dto[field] !== undefined);
+      const note =
+        withFields || !locked.note
+          ? await this.saveFields(
+              manager,
+              locked.visit,
+              locked.note,
+              dto,
+              actor,
+            )
+          : locked.note;
       note.status = NoteStatus.SIGNED;
       note.signedAt = this.time.now();
       await manager.getRepository(ClinicalNote).save(note);
@@ -144,7 +156,7 @@ export class ClinicalNotesService {
         "This visit's note is another doctor's draft",
       );
     }
-    return (await this.withAddenda([note]))[0];
+    return (await this.withDetails([note]))[0];
   }
 
   // ---------- Addenda (any doctor with access, once SIGNED) ----------
@@ -254,7 +266,7 @@ export class ClinicalNotesService {
       .skip(query.skip)
       .take(query.limit)
       .getManyAndCount();
-    return toPaginated(await this.withAddenda(notes), total, query);
+    return toPaginated(await this.withDetails(notes), total, query);
   }
 
   /**
@@ -326,44 +338,49 @@ export class ClinicalNotesService {
     return visit;
   }
 
-  // The caller's own note for the visit (null if none yet), locked, still a
-  // DRAFT.
-  private async lockOwnDraft(
+  // The caller's own visit and its note (null if none yet), both locked.
+  private async lockOwnNote(
     visitId: string,
     user: AuthenticatedUser,
     manager: EntityManager,
-  ): Promise<ClinicalNote | null> {
-    await this.ownVisit(visitId, user, manager);
+  ): Promise<{ visit: Visit; note: ClinicalNote | null }> {
+    const visit = await this.ownVisit(visitId, user, manager);
     const note = await manager.findOne(ClinicalNote, {
       where: { visitId },
       lock: { mode: 'pessimistic_write' },
     });
-    if (note?.status === NoteStatus.SIGNED) {
-      throw unprocessable(
-        ErrorCode.NOTE_SIGNED,
-        'A signed note cannot change; add an addendum instead',
-      );
-    }
-    return note;
+    return { visit, note };
   }
 
   /**
-   * The draft written by the visit's doctor, created on the first save. The
-   * visit row lock (ownVisit) serializes two first saves of the same note.
+   * Writes the fields of the visit's type (DRAFT or SIGNED), creating the
+   * DRAFT on the first save. Fields of other types are refused
+   * (NOTE_FIELDS_NOT_IN_TYPE): they are read-only and keep their values, so
+   * a type change never loses clinical data. The visit row lock (ownVisit)
+   * serializes two first saves of the same note.
    */
-  private async upsertDraft(
+  private async saveFields(
     manager: EntityManager,
-    visitId: string,
+    visit: Visit,
+    existing: ClinicalNote | null,
     dto: ClinicalNoteInputDto,
-    user: AuthenticatedUser,
     actor: Actor,
   ): Promise<ClinicalNote> {
-    const existing = await this.lockOwnDraft(visitId, user, manager);
+    const type = await this.typeOf(visit, manager);
+    const outside = fieldsOutsideType(type, dto);
+    if (outside.length > 0) {
+      throw unprocessable(
+        ErrorCode.NOTE_FIELDS_NOT_IN_TYPE,
+        `These fields are not part of a ${type} note and are read-only: ${outside.join(', ')}`,
+        { type, fields: outside },
+      );
+    }
+    const editable = noteFieldsFor(type);
     const repository = manager.getRepository(ClinicalNote);
     if (existing) {
       const before = { ...existing };
-      for (const field of NOTE_FIELDS) setField(existing, field, dto[field]);
-      const changes = diffValues(before, existing, NOTE_FIELDS);
+      for (const field of editable) setField(existing, field, dto[field]);
+      const changes = diffValues(before, existing, editable);
       if (!changes) return existing;
       await repository.save(existing);
       await this.audit(
@@ -376,8 +393,6 @@ export class ClinicalNotesService {
       return existing;
     }
 
-    // Locked by lockOwnDraft above.
-    const visit = await manager.findOneByOrFail(Visit, { id: visitId });
     // Any day after the visit, as long as it wasn't voided.
     if (visit.status !== VisitStatus.ACTIVE) {
       throw unprocessable(
@@ -393,12 +408,32 @@ export class ClinicalNotesService {
       status: NoteStatus.DRAFT,
       signedAt: null,
     });
-    for (const field of NOTE_FIELDS) setField(note, field, dto[field]);
+    for (const field of NOTE_FIELDS) {
+      setField(note, field, editable.includes(field) ? dto[field] : null);
+    }
     await repository.save(note);
     await this.audit(manager, actor, AuditAction.CLINICAL_NOTE_CREATED, note, {
-      newValues: { visitId, ...pickValues(note, NOTE_FIELDS) },
+      newValues: { visitId: visit.id, ...pickValues(note, NOTE_FIELDS) },
     });
     return note;
+  }
+
+  /**
+   * The visit's type now: its appointment's, or its own for a walk-in. The
+   * appointment row isn't locked (every appointment write locks the
+   * appointment before the visit, so locking it here could deadlock); a type
+   * changed meanwhile only moves which fields are editable, nothing is lost.
+   */
+  private async typeOf(
+    visit: Visit,
+    manager: EntityManager,
+  ): Promise<AppointmentType | null> {
+    if (visit.appointmentId === null) return visit.type;
+    const appointment = await manager.findOneOrFail(Appointment, {
+      where: { id: visit.appointmentId },
+      select: { id: true, type: true },
+    });
+    return appointment.type;
   }
 
   // After a write by the caller: the note exists and they can see it.
@@ -412,29 +447,44 @@ export class ClinicalNotesService {
   }
 
   private noteQuery() {
-    return this.dataSource
-      .getRepository(ClinicalNote)
-      .createQueryBuilder('note')
-      .innerJoinAndSelect('note.visit', 'visit')
-      .innerJoinAndSelect('visit.service', 'service')
-      .innerJoinAndSelect('note.doctor', 'doctor')
-      .innerJoinAndSelect('doctor.user', 'doctorUser');
+    return (
+      this.dataSource
+        .getRepository(ClinicalNote)
+        .createQueryBuilder('note')
+        .innerJoinAndSelect('note.visit', 'visit')
+        .innerJoinAndSelect('visit.service', 'service')
+        // The type (visitType): the appointment's, or the walk-in's own.
+        .leftJoinAndSelect('visit.appointment', 'appointment')
+        .innerJoinAndSelect('note.doctor', 'doctor')
+        .innerJoinAndSelect('doctor.user', 'doctorUser')
+    );
   }
 
-  private async withAddenda(
+  // Each note with its addenda (oldest first) and its visit's attachments
+  // (newest first, as in the patient's attachment list).
+  private async withDetails(
     notes: ClinicalNote[],
   ): Promise<ClinicalNoteResponseDto[]> {
-    const addenda = notes.length
-      ? await this.dataSource.getRepository(ClinicalNoteAddendum).find({
-          where: { noteId: In(notes.map((n) => n.id)) },
-          relations: { doctor: { user: true } },
-          order: { createdAt: 'ASC', id: 'ASC' },
-        })
-      : [];
+    if (notes.length === 0) return [];
+    const addenda = await this.dataSource
+      .getRepository(ClinicalNoteAddendum)
+      .find({
+        where: { noteId: In(notes.map((n) => n.id)) },
+        relations: { doctor: { user: true } },
+        order: { createdAt: 'ASC', id: 'ASC' },
+      });
+    const attachments = await this.dataSource
+      .getRepository(PatientAttachment)
+      .find({
+        where: { visitId: In(notes.map((n) => n.visitId)) },
+        relations: { uploadedBy: true },
+        order: { createdAt: 'DESC', id: 'DESC' },
+      });
     return notes.map((note) =>
       toClinicalNote(
         note,
         addenda.filter((a) => a.noteId === note.id),
+        attachments.filter((a) => a.visitId === note.visitId),
         (d) => this.time.toIso(d),
       ),
     );
@@ -476,7 +526,7 @@ function isVisibleTo(
   );
 }
 
-function setField<K extends (typeof NOTE_FIELDS)[number]>(
+function setField<K extends NoteField>(
   note: ClinicalNote,
   field: K,
   value: ClinicalNote[K] | undefined,

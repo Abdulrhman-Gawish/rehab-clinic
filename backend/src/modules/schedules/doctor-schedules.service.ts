@@ -62,6 +62,15 @@ export class DoctorSchedulesService {
     return schedules.map(ScheduleResponseDto.fromEntity);
   }
 
+  /** Active weekly ranges of every doctor (or only `doctorId`). */
+  async listActive(doctorId: string | null): Promise<ScheduleResponseDto[]> {
+    const schedules = await this.schedules.find({
+      where: { isActive: true, ...(doctorId ? { doctorId } : {}) },
+      order: { doctorId: 'ASC', dayOfWeek: 'ASC', startTime: 'ASC' },
+    });
+    return schedules.map(ScheduleResponseDto.fromEntity);
+  }
+
   async create(
     doctorId: string,
     dto: CreateScheduleDto,

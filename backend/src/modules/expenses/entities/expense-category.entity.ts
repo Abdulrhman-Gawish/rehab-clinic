@@ -8,11 +8,14 @@ export const EXPENSE_CATEGORY_NAME_UNIQUE = 'uq_expense_categories_name';
 export enum ExpenseCategoryKey {
   // Payouts to referring doctors (one expense per payout).
   REFERRAL_COMMISSION = 'REFERRAL_COMMISSION',
+  // Salary payments to the clinic's doctors (one expense per payment).
+  DOCTOR_SALARY = 'DOCTOR_SALARY',
 }
 
 // Created by the migration (and on demand, for a database emptied by tests).
 export const SYSTEM_CATEGORY_NAMES: Record<ExpenseCategoryKey, string> = {
   [ExpenseCategoryKey.REFERRAL_COMMISSION]: 'عمولات الأطباء المحيلين',
+  [ExpenseCategoryKey.DOCTOR_SALARY]: 'رواتب وعمولات الأطباء',
 };
 
 // What the clinic spends on (hospitality, supplies...). Seeded by migration.

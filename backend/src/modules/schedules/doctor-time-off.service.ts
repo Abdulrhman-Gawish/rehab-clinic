@@ -69,6 +69,21 @@ export class DoctorTimeOffService {
     return (await qb.getMany()).map((row) => this.toDto(row));
   }
 
+  /** Time off of every doctor (or only `doctorId`) overlapping [start, end). */
+  async listOverlapping(
+    doctorId: string | null,
+    start: Date,
+    end: Date,
+  ): Promise<TimeOffResponseDto[]> {
+    const qb = this.timeOff
+      .createQueryBuilder('off')
+      .innerJoinAndSelect('off.createdBy', 'createdBy')
+      .where('off.endAt > :start AND off.startAt < :end', { start, end })
+      .orderBy('off.startAt', 'ASC');
+    if (doctorId) qb.andWhere('off.doctorId = :doctorId', { doctorId });
+    return (await qb.getMany()).map((row) => this.toDto(row));
+  }
+
   /**
    * Time off is always created, even over booked appointments. Those are
    * returned as `conflictingAppointments` and are never cancelled here.

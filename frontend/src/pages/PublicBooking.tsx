@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { act, api, get, notify, qs } from '../api';
 import { fmtDate, fmtDateTime, fmtMoney, fmtNumber, fmtTime, fmtWeekday } from '../format';
 import { label, useI18n } from '../i18n';
+import { AppointmentTypePicker } from '../components';
 import { usePageTitle } from '../layout/PublicLayout';
 import { addDays, dayOfWeek, todayCairo } from '../time';
 import {
@@ -53,6 +54,8 @@ export function PublicBooking() {
   const [startAt, setStartAt] = useState('');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  // Required, no default: the patient chooses it.
+  const [type, setType] = useState('');
   const [done, setDone] = useState<any>(null);
   const [step, setStep] = useState(0);
   // '' = no package (pay per session).
@@ -81,10 +84,10 @@ export function PublicBooking() {
     e.preventDefault();
     if (sending) return;
     setSending(true);
-    await act(async () => setDone(await api('POST', '/public/appointments', { name, phone, doctorId, serviceId, startAt, packageId: packageId || undefined, utm }, { noAuth: true })));
+    await act(async () => setDone(await api('POST', '/public/appointments', { name, phone, doctorId, serviceId, type, startAt, packageId: packageId || undefined, utm }, { noAuth: true })));
     setSending(false);
   };
-  const again = () => { setDone(null); setStartAt(''); setPackageId(''); setStep(serviceId ? 2 : 0); };
+  const again = () => { setDone(null); setStartAt(''); setPackageId(''); setType(''); setStep(serviceId ? 2 : 0); };
   const copy = async () => {
     try { await navigator.clipboard.writeText(done.referenceCode); notify(tb.copied); } catch { /* clipboard blocked: the code stays on screen */ }
   };
@@ -109,6 +112,7 @@ export function PublicBooking() {
               <DescriptionList items={[
                 [tb.summaryDoctor, done.doctorName],
                 [tb.summaryService, done.serviceName],
+                [tb.summaryType, label(t.enums.AppointmentType, done.type)],
                 [tb.summaryTime, <>{fmtDateTime(done.startAt)} – {fmtTime(done.endAt)}</>],
                 [t.fields.status, tb.status(label(t.enums.AppointmentStatus, done.status))],
                 done.packageName && [tb.summaryPackage, done.packageName],
@@ -234,6 +238,7 @@ export function PublicBooking() {
             <Card variant="marketing">
               <h2 className="booking__step-title">{tb.detailsTitle}</h2>
               <form className="stack" onSubmit={book}>
+                <AppointmentTypePicker label={tb.typeLabel} value={type} onChange={setType} />
                 <Field label={tb.name}>
                   <Input autoComplete="name" required value={name} onChange={(e) => setName(e.target.value)} />
                 </Field>
@@ -245,7 +250,7 @@ export function PublicBooking() {
                 </Field>
                 <div className="booking__nav">
                   <Button variant="ghost" icon="arrow-left" onClick={() => setStep(2)}>{tb.back}</Button>
-                  <Button type="submit" variant="primary" size="lg" icon="calendar-check" loading={sending} disabled={!name.trim() || !phone.trim()}>{tb.book}</Button>
+                  <Button type="submit" variant="primary" size="lg" icon="calendar-check" loading={sending} disabled={!type || !name.trim() || !phone.trim()}>{tb.book}</Button>
                 </div>
               </form>
             </Card>
@@ -255,6 +260,7 @@ export function PublicBooking() {
                   <DescriptionList items={[
                     [tb.summaryDoctor, doctor?.name],
                     pkg ? [tb.summaryPackage, pkg.name] : [tb.summaryService, service?.name],
+                    !!type && [tb.summaryType, label(t.enums.AppointmentType, type)],
                     [tb.summaryTime, <>{fmtWeekday(dayOfWeek(date))} {fmtDate(date)} · {fmtTime(startAt)}</>],
                     [tb.summaryPrice, pkg ? fmtMoney(pkg.sellingPrice) : service && fmtMoney(service.price)],
                   ]} />

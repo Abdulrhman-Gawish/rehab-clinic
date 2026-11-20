@@ -22,6 +22,7 @@ import {
   notFound,
   unprocessable,
 } from '../../common/errors/app.exception.js';
+import { DAY_LIST_MAX_DAYS } from './dto/appointment.dto.js';
 import type {
   Actor,
   AuthenticatedUser,
@@ -70,7 +71,11 @@ import {
   toWalkInDayListEntry,
   type DayVisitInfo,
 } from './appointment.mapper.js';
-import { AppointmentSource, AppointmentStatus } from './appointment.enums.js';
+import {
+  AppointmentSource,
+  AppointmentStatus,
+  type AppointmentType,
+} from './appointment.enums.js';
 import { AvailabilityService } from './availability/availability.service.js';
 import type {
   AppointmentResponseDto,
@@ -151,6 +156,7 @@ export class AppointmentsService {
             durationMinutes: context.service.durationMinutes,
             status: AppointmentStatus.CONFIRMED,
             source: AppointmentSource.RECEPTION,
+            type: dto.type,
             bookedName,
             bookedById: actor.userId,
             notes: dto.notes ?? null,
@@ -246,6 +252,8 @@ export class AppointmentsService {
             durationMinutes: context.service.durationMinutes,
             status: AppointmentStatus.CONFIRMED,
             source: AppointmentSource.RECEPTION,
+            // Inherited, also when not set (reception can set it later).
+            type: old.type,
             bookedName: old.bookedName,
             bookedById: actor.userId,
             rescheduledFromId: old.id,
@@ -260,6 +268,24 @@ export class AppointmentsService {
       }),
     );
     return this.load(newId);
+  }
+
+  /**
+   * RECEPTIONIST (by route): sets or changes the type in any status,
+   * including CANCELLED, NO_SHOW and RESCHEDULED. Audited; no status history
+   * and no timeline event. The note of its visit follows the new type (other
+   * types' fields are kept, read-only).
+   */
+  async changeType(
+    id: string,
+    type: AppointmentType,
+    actor: Actor,
+  ): Promise<AppointmentResponseDto> {
+    await this.dataSource.transaction(async (manager) => {
+      const appointment = await this.lockOrFail(id, manager);
+      await this.writer.changeType(manager, appointment, type, actor);
+    });
+    return this.load(id);
   }
 
   // ---------- Queries ----------
@@ -298,7 +324,18 @@ export class AppointmentsService {
     query: DayListQueryDto,
     user: AuthenticatedUser,
   ): Promise<DayListEntryDto[]> {
-    const { start, end } = this.time.dayBounds(query.date);
+    // One day, or `date`..`to` (inclusive, at most a week).
+    const last = query.to ?? query.date;
+    const maxLast = addDays(query.date, DAY_LIST_MAX_DAYS - 1);
+    if (last < query.date || last > maxLast) {
+      throw unprocessable(
+        ErrorCode.DATE_OUT_OF_RANGE,
+        `to must be between ${query.date} and ${maxLast}`,
+        { from: query.date, to: maxLast },
+      );
+    }
+    const { start } = this.time.dayBounds(query.date);
+    const { end } = this.time.dayBounds(last);
     const ownDoctorId = await this.access.scopeFor(user);
     const doctorId = ownDoctorId ?? query.doctorId;
     const statuses = query.status ?? [];

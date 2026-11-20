@@ -23,6 +23,7 @@ import { HealthModule } from './modules/health/health.module.js';
 import { PackagesModule } from './modules/packages/packages.module.js';
 import { AcquisitionModule } from './modules/acquisition/acquisition.module.js';
 import { ReferralsModule } from './modules/referrals/referrals.module.js';
+import { SalariesModule } from './modules/salaries/salaries.module.js';
 import { PatientHistoryModule } from './modules/patient-history/patient-history.module.js';
 import { PatientsModule } from './modules/patients/patients.module.js';
 import { ReportsModule } from './modules/reports/reports.module.js';
@@ -72,6 +73,7 @@ import { VisitsModule } from './modules/visits/visits.module.js';
     PackagesModule,
     AcquisitionModule,
     ReferralsModule,
+    SalariesModule,
     BlogModule,
   ],
 })

@@ -15,6 +15,7 @@ function lazyPage<M>(load: () => Promise<M>, name: keyof M) {
   return lazy(async () => ({ default: (await load())[name] as ComponentType }));
 }
 const DayList = lazyPage(() => import('./pages/DayList'), 'DayList');
+const Schedule = lazyPage(() => import('./pages/Schedule'), 'Schedule');
 const Booking = lazyPage(() => import('./pages/Booking'), 'Booking');
 const Patients = lazyPage(() => import('./pages/Patients'), 'Patients');
 const PatientPage = lazyPage(() => import('./pages/Patients'), 'PatientPage');
@@ -34,6 +35,7 @@ const OwnerReports = lazyPage(() => import('./pages/Reports'), 'OwnerReports');
 const MarketingReports = lazyPage(() => import('./pages/Referrals'), 'MarketingReports');
 const ReferringDoctorPage = lazyPage(() => import('./pages/Referrals'), 'ReferringDoctorPage');
 const ReferringDoctors = lazyPage(() => import('./pages/Referrals'), 'ReferringDoctors');
+const Salaries = lazyPage(() => import('./pages/Salaries'), 'Salaries');
 
 export { homeFor };
 
@@ -76,7 +78,7 @@ export function App() {
 
         {/* Staff app */}
         <Route element={<Staff />}>
-          <Route path="/reception" element={<DayList />} />
+          <Route path="/reception" element={<Schedule />} />
           <Route path="/reception/book" element={<Booking />} />
           <Route path="/reception/patients" element={<Patients />} />
           <Route path="/patients/:id" element={<PatientPage />} />
@@ -98,6 +100,7 @@ export function App() {
           <Route path="/owner/reports" element={<OwnerReports />} />
           <Route path="/owner/referring-doctors" element={<ReferringDoctors />} />
           <Route path="/owner/referring-doctors/:id" element={<ReferringDoctorPage />} />
+          <Route path="/owner/salaries" element={<Salaries />} />
           <Route path="/owner/marketing" element={<MarketingReports />} />
           <Route path="/owner/attention" element={<Attention />} />
           <Route path="/owner/audit" element={<AuditLog />} />

@@ -68,6 +68,18 @@ export interface PayoutExpenseInput {
   reference: string | null;
 }
 
+// The expense of a salary payment to one of the clinic's doctors.
+export interface SalaryExpenseInput {
+  salaryPaymentId: string;
+  doctorName: string;
+  // 'YYYY-MM' the payment is for.
+  month: string;
+  amount: string;
+  date: string;
+  method: PaymentMethod;
+  reference: string | null;
+}
+
 // With the payout it records (list and detail queries).
 type ExpenseRow = Expense & { referralPayout?: ReferralPayout | null };
 
@@ -197,16 +209,68 @@ export class ExpensesService {
    * category, paid to the doctor. The date follows the expense rules
    * (never in the future).
    */
-  async createForPayout(
+  createForPayout(
     manager: EntityManager,
     input: PayoutExpenseInput,
     actor: Actor,
   ): Promise<Expense> {
-    this.assertExpenseDate(input.date, actor);
-    const category = await this.systemCategory(
-      ExpenseCategoryKey.REFERRAL_COMMISSION,
+    return this.createSystemExpense(
       manager,
+      ExpenseCategoryKey.REFERRAL_COMMISSION,
+      {
+        description: `Referral commission: ${input.doctorName}`,
+        payee: input.doctorName,
+        amount: input.amount,
+        date: input.date,
+        method: input.method,
+        reference: input.reference,
+        auditLink: { referralPayoutId: input.payoutId },
+      },
+      actor,
     );
+  }
+
+  /**
+   * The expense of a doctor's salary payment, in the payment's transaction,
+   * in the DOCTOR_SALARY category (same rules as a referral payout's).
+   */
+  createForSalaryPayment(
+    manager: EntityManager,
+    input: SalaryExpenseInput,
+    actor: Actor,
+  ): Promise<Expense> {
+    return this.createSystemExpense(
+      manager,
+      ExpenseCategoryKey.DOCTOR_SALARY,
+      {
+        description: `Salary ${input.month}: ${input.doctorName}`,
+        payee: input.doctorName,
+        amount: input.amount,
+        date: input.date,
+        method: input.method,
+        reference: input.reference,
+        auditLink: { salaryPaymentId: input.salaryPaymentId },
+      },
+      actor,
+    );
+  }
+
+  private async createSystemExpense(
+    manager: EntityManager,
+    key: ExpenseCategoryKey,
+    input: {
+      description: string;
+      payee: string;
+      amount: string;
+      date: string;
+      method: PaymentMethod;
+      reference: string | null;
+      auditLink: Record<string, string>;
+    },
+    actor: Actor,
+  ): Promise<Expense> {
+    this.assertExpenseDate(input.date, actor);
+    const category = await this.systemCategory(key, manager);
     const now = this.time.now();
     const repository = manager.getRepository(Expense);
     const expense = await repository.save(
@@ -217,10 +281,10 @@ export class ExpensesService {
           now,
         ),
         categoryId: category.id,
-        description: `Referral commission: ${input.doctorName}`.slice(0, 255),
+        description: input.description.slice(0, 255),
         amount: toMoney(input.amount),
         expenseDate: input.date,
-        vendorName: input.doctorName.slice(0, 120),
+        vendorName: input.payee.slice(0, 120),
         paymentMethod: input.method,
         reference: input.reference,
         receiptFileKey: null,
@@ -236,13 +300,13 @@ export class ExpensesService {
       newValues: {
         expenseNumber: expense.expenseNumber,
         ...this.values(expense),
-        referralPayoutId: input.payoutId,
+        ...input.auditLink,
       },
     });
     return expense;
   }
 
-  // A voided payout voids its expense, in the payout's transaction.
+  // A voided payout (or salary payment) voids its expense, in its transaction.
   async voidForPayout(
     manager: EntityManager,
     expenseId: string,
@@ -461,7 +525,7 @@ export class ExpensesService {
       });
       if (category.systemKey) {
         throw refuse(
-          'This expense records a referral payout: void the payout instead',
+          'This expense records a payout (referral commission or doctor salary): void the payout instead',
         );
       }
     }

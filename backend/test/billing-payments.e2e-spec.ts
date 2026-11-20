@@ -22,6 +22,7 @@ import {
   resetDatabase,
   type TestApp,
 } from './utils/test-app.js';
+import { completeCheckInDetails } from './utils/check-in.js';
 
 const TODAY = '2026-11-03';
 const local = (time: string, date = TODAY) =>
@@ -558,6 +559,7 @@ describe('Billing: payments (e2e)', () => {
         serviceId: service.id,
         startAt: local('15:00'),
       });
+      await completeCheckInDetails(ctx.dataSource);
       const visit = await request(server)
         .post(`/api/v1/appointments/${attended.id}/attend`)
         .set(as(receptionist))
@@ -590,6 +592,7 @@ describe('Billing: payments (e2e)', () => {
         basePrice: '300.00',
       });
       await assignService(ctx.dataSource, doctor.doctorId, service.id);
+      await completeCheckInDetails(ctx.dataSource);
       const walkIn = await request(server)
         .post('/api/v1/visits/walk-in')
         .set(as(receptionist))
@@ -597,6 +600,7 @@ describe('Billing: payments (e2e)', () => {
           patientId: patient.id,
           doctorId: doctor.doctorId,
           serviceId: service.id,
+          type: 'SESSION',
         })
         .expect(201);
       const visitInvoice = walkIn.body.invoiceId as string;
@@ -762,7 +766,34 @@ describe('Billing: payments (e2e)', () => {
             INSTAPAY: '0.00',
           },
         },
+        salaryPayments: {
+          count: 0,
+          total: '0.00',
+          byMethod: {
+            CASH: '0.00',
+            CARD: '0.00',
+            WALLET: '0.00',
+            INSTAPAY: '0.00',
+          },
+        },
         expectedCash: '320.00',
+        outstanding: {
+          // A 500 + B 360 issued today (B's discount at the same instant
+          // as its issue); 450 paid, 30 refunded (the voided 20 never
+          // counts): 230 + 210 left.
+          patientsOwe: {
+            opening: '0.00',
+            invoiced: '860.00',
+            adjustments: '0.00',
+            cancelled: '0.00',
+            payments: '450.00',
+            refunds: '30.00',
+            closing: '440.00',
+            unpaidInvoices: 2,
+          },
+          // What the clinic owes its doctors: OWNER only.
+          clinicOwes: null,
+        },
       });
 
       await request(server)

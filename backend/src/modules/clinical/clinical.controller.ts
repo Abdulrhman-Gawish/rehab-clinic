@@ -52,6 +52,7 @@ import {
 import { ClinicalNotesService } from './clinical-notes.service.js';
 import {
   AddendumInputDto,
+  AttachmentListQueryDto,
   AttachmentResponseDto,
   AttachmentUploadDto,
   ClinicalHistoryDto,
@@ -187,11 +188,14 @@ export class PatientClinicalController {
 
   @Get('attachments')
   @Auth(...READERS)
-  @ApiOperation({ summary: "The patient's attachments, newest first" })
+  @ApiOperation({
+    summary: "The patient's attachments, newest first",
+    description: 'With visitId: only those linked to that visit.',
+  })
   @ApiOkResponse({ type: PaginatedAttachments })
   listAttachments(
     @Param('id', ParseUUIDPipe) id: string,
-    @Query() query: PaginationQueryDto,
+    @Query() query: AttachmentListQueryDto,
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<Paginated<AttachmentResponseDto>> {
     return this.attachments.list(id, query, user);
@@ -227,14 +231,15 @@ export class VisitNoteController {
   @Put()
   @Auth(UserRole.DOCTOR)
   @ApiOperation({
-    summary: 'Save the DRAFT: created on the first save, replaced after',
+    summary:
+      'Save the note: the DRAFT is created on the first save; a signed note stays signed',
     description:
-      "The visit's doctor; ACTIVE visits, any day after. A field left out (or blank) becomes null.",
+      "The visit's doctor, any time (a new note only on an ACTIVE visit). Only the fields of the visit's appointment type (all of them when it is not set); they are replaced: one left out (or blank) becomes null. Other types' fields are read-only and keep their values (sending one is NOTE_FIELDS_NOT_IN_TYPE). Every change is audited.",
   })
   @ApiOkResponse({ type: ClinicalNoteResponseDto })
   @ApiUnprocessableEntityResponse({
     type: ErrorResponseDto,
-    description: 'NOTE_NOT_ALLOWED or NOTE_SIGNED',
+    description: 'NOTE_NOT_ALLOWED or NOTE_FIELDS_NOT_IN_TYPE',
   })
   save(
     @Param('id', ParseUUIDPipe) id: string,
@@ -242,21 +247,22 @@ export class VisitNoteController {
     @CurrentUser() user: AuthenticatedUser,
     @CurrentActor() actor: Actor,
   ): Promise<ClinicalNoteResponseDto> {
-    return this.notes.saveDraft(id, dto, user, actor);
+    return this.notes.save(id, dto, user, actor);
   }
 
   @Post('sign')
   @Auth(UserRole.DOCTOR)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Sign the note: locked forever (needs assessment or treatment)',
+    summary: 'Sign the note (no field is required)',
     description:
-      'With fields in the body, they are saved first (like PUT) and the note is signed in the same transaction. Without a body, the saved draft is signed.',
+      'With fields in the body, they are saved first (like PUT) and the note is signed in the same transaction. Without a body, the saved draft (or a new empty note) is signed. A signed note can still be edited with PUT.',
   })
   @ApiOkResponse({ type: ClinicalNoteResponseDto })
   @ApiUnprocessableEntityResponse({
     type: ErrorResponseDto,
-    description: 'NOTE_INCOMPLETE, NOTE_SIGNED or NOTE_NOT_ALLOWED',
+    description:
+      'NOTE_SIGNED (already signed), NOTE_NOT_ALLOWED or NOTE_FIELDS_NOT_IN_TYPE',
   })
   sign(
     @Param('id', ParseUUIDPipe) id: string,

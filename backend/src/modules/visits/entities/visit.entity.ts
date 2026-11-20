@@ -8,6 +8,7 @@ import {
   type Relation,
 } from 'typeorm';
 import { BaseEntity } from '../../../common/entities/base.entity.js';
+import { AppointmentType } from '../../appointments/appointment.enums.js';
 import { Appointment } from '../../appointments/entities/appointment.entity.js';
 import { ClinicService } from '../../clinic-services/entities/clinic-service.entity.js';
 import { Doctor } from '../../doctors/entities/doctor.entity.js';
@@ -36,6 +37,9 @@ export const VISIT_APPOINTMENT_UNIQUE = 'uq_visits_appointment_active';
   'chk_visits_voided',
   `"status" <> 'VOIDED' OR ("voided_at" IS NOT NULL AND "void_reason" IS NOT NULL)`,
 )
+// Only a walk-in has its own type: a visit of an appointment always takes
+// the appointment's (one source of truth, see visitType()).
+@Check('chk_visits_type_walk_in', `"appointment_id" IS NULL OR "type" IS NULL`)
 export class Visit extends BaseEntity {
   // NULL = walk-in.
   @Column({ type: 'uuid', nullable: true })
@@ -69,6 +73,17 @@ export class Visit extends BaseEntity {
 
   @Column({ type: 'enum', enum: VisitStatus, enumName: 'visit_status' })
   status: VisitStatus;
+
+  // A walk-in's appointment type, chosen at check-in (NULL = not set: only
+  // walk-ins from before types existed). Always NULL for a visit of an
+  // appointment, which takes the appointment's type.
+  @Column({
+    type: 'enum',
+    enum: AppointmentType,
+    enumName: 'appointment_type',
+    nullable: true,
+  })
+  type: AppointmentType | null;
 
   @Column({ type: 'timestamptz' })
   attendedAt: Date;

@@ -1,6 +1,7 @@
 import { UserRefDto } from '../../common/dto/user-ref.dto.js';
 import type { Doctor } from '../doctors/entities/doctor.entity.js';
 import type { Visit } from '../visits/entities/visit.entity.js';
+import { visitType } from '../visits/visit-type.js';
 import type { NoteStatus } from './clinical.enums.js';
 import type {
   AddendumResponseDto,
@@ -55,10 +56,12 @@ export function toAddendum(
   };
 }
 
-// Requires `visit.service` and `doctor.user` to be loaded.
+// Requires `visit.service`, `visit.appointment` (if any) and `doctor.user`
+// loaded; `attachments` with `uploadedBy`.
 export function toClinicalNote(
   note: ClinicalNote,
   addenda: ClinicalNoteAddendum[],
+  attachments: PatientAttachment[],
   toIso: ToIso,
 ): ClinicalNoteResponseDto {
   const { visit } = note;
@@ -72,8 +75,10 @@ export function toClinicalNote(
       service: { id: visit.service.id, name: visit.service.name },
     },
     doctor: toDoctor(note.doctor),
+    type: visitType(visit),
     chiefComplaint: note.chiefComplaint,
     assessment: note.assessment,
+    diagnosis: note.diagnosis,
     treatmentDone: note.treatmentDone,
     progress: note.progress,
     plan: note.plan,
@@ -83,6 +88,7 @@ export function toClinicalNote(
     createdAt: toIso(note.createdAt),
     updatedAt: toIso(note.updatedAt),
     addenda: addenda.map((addendum) => toAddendum(addendum, toIso)),
+    attachments: attachments.map((a) => toAttachment(a, toIso)),
   };
 }
 

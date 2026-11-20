@@ -54,6 +54,7 @@ import type {
   UpdateInvoiceItemDto,
 } from './dto/invoice.dto.js';
 import { InvoiceItem } from './entities/invoice-item.entity.js';
+import { INVOICE_TOTAL_CHANGE_UNIQUE } from './entities/invoice-total-change.entity.js';
 import { Invoice } from './entities/invoice.entity.js';
 import { InvoiceDiscount } from './entities/invoice-discount.entity.js';
 import { Payment } from './entities/payment.entity.js';
@@ -509,11 +510,39 @@ export class InvoicesService {
       discount.amount = totals.discountTotal;
       await manager.getRepository(InvoiceDiscount).save(discount);
     }
+    const before = toMoney(invoice.total);
     invoice.subtotal = totals.subtotal;
     invoice.discountTotal = totals.discountTotal;
     invoice.total = totals.total;
     invoice.status = deriveInvoiceStatus(invoice.total, invoice.amountPaid);
-    return manager.getRepository(Invoice).save(invoice);
+    const saved = await manager.getRepository(Invoice).save(invoice);
+    if (before !== toMoney(saved.total)) {
+      // Never before the issue (a test clock may go back in time).
+      const now = this.time.now();
+      const at = now < saved.issuedAt ? saved.issuedAt : now;
+      await this.recordTotal(manager, saved.id, at, saved.total);
+    }
+    return saved;
+  }
+
+  /**
+   * invoice_total_changes: from `at` the invoice's total is `total`. A
+   * second change at the same instant replaces the first (the state after
+   * both), so a past day's balances can use the total in effect then.
+   */
+  private async recordTotal(
+    manager: EntityManager,
+    invoiceId: string,
+    at: Date,
+    total: string,
+  ): Promise<void> {
+    await manager.query(
+      `INSERT INTO invoice_total_changes (invoice_id, changed_at, total)
+       VALUES ($1, $2, $3)
+       ON CONFLICT ON CONSTRAINT ${INVOICE_TOTAL_CHANGE_UNIQUE}
+       DO UPDATE SET total = EXCLUDED.total, updated_at = now()`,
+      [invoiceId, at, toMoney(total)],
+    );
   }
 
   // ---------- Internals ----------
@@ -702,6 +731,7 @@ export class InvoicesService {
           this.newItem(invoice.id, line, index + 1),
         ),
       );
+    await this.recordTotal(manager, invoice.id, issuedAt, invoice.total);
 
     await this.auditService.logAction(
       actor,

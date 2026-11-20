@@ -8,6 +8,7 @@ import { DoctorTimeOffService } from './doctor-time-off.service.js';
 import { DoctorSchedule } from './entities/doctor-schedule.entity.js';
 import { DoctorTimeOff } from './entities/doctor-time-off.entity.js';
 import { SchedulesController } from './schedules.controller.js';
+import { WorkingHoursController } from './working-hours.controller.js';
 
 @Module({
   imports: [
@@ -19,7 +20,7 @@ import { SchedulesController } from './schedules.controller.js';
     ]),
     DoctorsModule,
   ],
-  controllers: [SchedulesController],
+  controllers: [SchedulesController, WorkingHoursController],
   providers: [DoctorSchedulesService, DoctorTimeOffService],
   exports: [DoctorSchedulesService, DoctorTimeOffService],
 })

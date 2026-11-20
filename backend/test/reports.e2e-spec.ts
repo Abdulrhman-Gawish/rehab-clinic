@@ -19,6 +19,7 @@ import {
   resetDatabase,
   type TestApp,
 } from './utils/test-app.js';
+import { completeCheckInDetails } from './utils/check-in.js';
 
 /**
  * One dataset around Egypt's fall-back night (Thu 2026-10-29: 24:00 +03:00
@@ -137,7 +138,13 @@ describe('Reports (e2e)', () => {
       serviceId = session.id,
     ) => {
       clock.current = at(when);
-      return post('/visits/walk-in', { patientId, doctorId, serviceId });
+      await completeCheckInDetails(ctx.dataSource);
+      return post('/visits/walk-in', {
+        patientId,
+        doctorId,
+        serviceId,
+        type: 'EXAMINATION',
+      });
     };
     const pay = (invoiceId: string, amount: string, method: string) =>
       post(`/invoices/${invoiceId}/payments`, { amount, method });
@@ -146,6 +153,7 @@ describe('Reports (e2e)', () => {
         patientId,
         doctorId,
         serviceId: session.id,
+        type: 'EXAMINATION',
         startAt,
         allowOutsideSchedule: true,
       });
@@ -196,6 +204,7 @@ describe('Reports (e2e)', () => {
         phone: '01022222222',
         doctorId: doctorA.doctorId,
         serviceId: session.id,
+        type: 'EXAMINATION',
         startAt: '2026-10-31T11:00:00+02:00',
       })
       .expect(201);
@@ -204,6 +213,7 @@ describe('Reports (e2e)', () => {
     });
 
     clock.current = at('2026-10-30T10:05:00+02:00');
+    await completeCheckInDetails(ctx.dataSource);
     const i4 = await post(`/appointments/${attended.id}/attend`);
     await post(`/invoices/${i4.invoiceId}/discount`, {
       type: 'PERCENT',
@@ -291,6 +301,7 @@ describe('Reports (e2e)', () => {
         .set(as(receptionist))
         .expect(200)
     ).body.id;
+    await completeCheckInDetails(ctx.dataSource);
     const i7 = await post(`/appointments/${onlineId}/attend`);
     await post(`/invoices/${i7.invoiceId}/discount`, {
       type: 'FIXED',
@@ -345,9 +356,12 @@ describe('Reports (e2e)', () => {
       netCollected: '1000.00',
       expenses: '280.00', // 80 + 200 (voided 999 and Nov 1 excluded)
       commissionPayouts: '0.00',
+      salaryPayments: '0.00',
       netAfterExpenses: '720.00',
       invoiced: '1740.00', // I2 500 + I3 300 + I4 270 + I6 130 + I7 270 + I8 270
-      outstanding: '740.00', // I3 200 + I4 70 + I6 130 + I7 270 + I8 70
+      // Still owed at the end of Oct 31 (I1 was paid on the 28th):
+      patientsOwe: '740.00', // I3 200 + I4 70 + I6 130 + I7 270 + I8 70
+      clinicOwes: '0.00',
       discountsGiven: '110.00', // 30 + 20 + 30 + 30
       attendedVisits: 5, // I2, I3, I4, I7, I8
       noShows: 1,
@@ -619,6 +633,7 @@ describe('Reports (e2e)', () => {
       count: 2,
       total: '280.00',
       commissionPayouts: '0.00',
+      salaryPayments: '0.00',
       byCategory: [
         {
           category: { id: ids.supplies, name: 'Supplies' },
@@ -640,8 +655,21 @@ describe('Reports (e2e)', () => {
     });
   });
 
-  it('GET /reports/outstanding', async () => {
-    const { body } = await report(`outstanding${RANGE}`).expect(200);
+  it('GET /reports/patients-owe: balances at the end of a day, with their invoices', async () => {
+    const { body } = await report('patients-owe?asOf=2026-10-31').expect(200);
+    const invoice = (
+      issuedAt: string,
+      total: string,
+      paid: string,
+      balance: string,
+    ) => ({
+      id: expect.any(String),
+      invoiceNumber: expect.stringMatching(/^INV-2026-/),
+      issuedAt,
+      total,
+      paid,
+      balance,
+    });
     expect(body).toEqual({
       items: [
         {
@@ -652,24 +680,47 @@ describe('Reports (e2e)', () => {
           },
           balance: '330.00', // I3 200 + I6 130
           oldestUnpaidInvoiceDate: '2026-10-29', // 23:30+02:00, not the 30th
+          invoices: [
+            invoice('2026-10-29T23:30:00+02:00', '300.00', '100.00', '200.00'),
+            invoice('2026-10-30T14:00:00+02:00', '130.00', '0.00', '130.00'),
+          ],
         },
         {
           patient: { id: ids.p2, name: 'Patient Two', phone: '+201022222222' },
           balance: '270.00',
           oldestUnpaidInvoiceDate: '2026-10-31',
+          invoices: [
+            invoice('2026-10-31T11:00:00+02:00', '270.00', '0.00', '270.00'),
+          ],
         },
         {
           patient: { id: ids.p1, name: 'Patient One', phone: '+201011111111' },
           balance: '140.00', // I4 70 + I8 70
           oldestUnpaidInvoiceDate: '2026-10-30',
+          invoices: [
+            // 270 paid, 70 refunded.
+            invoice('2026-10-30T10:05:00+02:00', '270.00', '200.00', '70.00'),
+            invoice('2026-10-31T12:00:00+02:00', '270.00', '200.00', '70.00'),
+          ],
         },
       ],
       meta: { page: 1, limit: 20, total: 3, totalPages: 1 },
+      asOf: '2026-10-31',
+      totalBalance: '740.00', // = summary.patientsOwe for a range ending Oct 31
+      unpaidInvoices: 5,
     });
 
-    const page2 = await report(`outstanding${RANGE}&limit=2&page=2`).expect(
-      200,
-    );
+    // At the end of the 29th only I3 was open (I2 was paid at once).
+    const early = await report('patients-owe?asOf=2026-10-29').expect(200);
+    expect(early.body).toMatchObject({
+      totalBalance: '200.00',
+      unpaidInvoices: 1,
+      items: [{ patient: { id: ids.p3 }, balance: '200.00' }],
+    });
+
+    const page2 = await report(
+      'patients-owe?asOf=2026-10-31&limit=2&page=2',
+    ).expect(200);
     expect(
       page2.body.items.map((r: { patient: { id: string } }) => r.patient.id),
     ).toEqual([ids.p1]);
@@ -679,6 +730,121 @@ describe('Reports (e2e)', () => {
       total: 3,
       totalPages: 2,
     });
+  });
+
+  it('GET /reports/money-flow: what moved the balances, consistent with the other reports', async () => {
+    const { body } = await report(`money-flow${RANGE}`).expect(200);
+    expect(body).toMatchObject({
+      from: '2026-10-29',
+      to: '2026-10-31',
+      patientsOwe: {
+        opening: '0.00', // I1 was paid on the 28th
+        // Every invoice issued in the range at its total then (discounts
+        // given at the moment of issue included): I2 500 + I3 300 + I4 270
+        // + I5 90 + I6 130 + I7 270 + I8 270 + I9 300.
+        invoiced: '2130.00',
+        adjustments: '0.00', // no discount came after an issue
+        // I5 90 and I9 300; invoiced - cancelled = summary.invoiced 1740.
+        cancelled: '390.00',
+        payments: '1070.00', // = summary.collected
+        refunds: '70.00', // = summary.refunded
+        closing: '740.00', // = summary.patientsOwe
+        unpaidInvoices: 5,
+      },
+      clinicOwes: {
+        opening: { owed: '0.00', advances: '0.00' },
+        closing: { owed: '0.00', advances: '0.00' },
+      },
+    });
+
+    // One day: opening (end of the 29th) I3 200; Oct 30 issues I4 270,
+    // I5 90 and I6 130, cancels I5, takes 270 in, gives 70 back.
+    const day = await report('money-flow?from=2026-10-30&to=2026-10-30').expect(
+      200,
+    );
+    expect(day.body.patientsOwe).toEqual({
+      opening: '200.00',
+      invoiced: '490.00',
+      adjustments: '0.00',
+      cancelled: '90.00',
+      payments: '270.00',
+      refunds: '70.00',
+      closing: '400.00',
+      unpaidInvoices: 3,
+    });
+    const summary = await request(server)
+      .get(api('/billing/daily-summary?date=2026-10-30'))
+      .set(as(owner))
+      .expect(200);
+    expect(summary.body.outstanding.patientsOwe).toEqual(day.body.patientsOwe);
+    expect(summary.body.outstanding.clinicOwes).toEqual(day.body.clinicOwes);
+  });
+
+  it('GET /reports/transactions: every payment, refund and expense that counts', async () => {
+    const { body } = await report(`transactions${RANGE}`).expect(200);
+    expect(body.totals).toEqual({
+      payments: { count: 4, total: '1070.00' }, // the voided 50 doesn't count
+      refunds: { count: 1, total: '70.00' },
+      expenses: { count: 2, total: '280.00' }, // nor the voided 999
+      salaryPayments: { count: 0, total: '0.00' },
+      commissionPayouts: { count: 0, total: '0.00' },
+      net: '720.00', // = summary.netAfterExpenses
+    });
+    // Newest first: by date, then the time it was recorded.
+    expect(
+      body.items.map((t: { kind: string; date: string; amount: string }) => [
+        t.kind,
+        t.date,
+        t.amount,
+      ]),
+    ).toEqual([
+      ['PAYMENT', '2026-10-31', '200.00'],
+      ['EXPENSE', '2026-10-30', '200.00'],
+      ['EXPENSE', '2026-10-30', '80.00'],
+      ['REFUND', '2026-10-30', '70.00'],
+      ['PAYMENT', '2026-10-30', '270.00'],
+      ['PAYMENT', '2026-10-29', '100.00'], // 23:30+02:00 (the repeated hour)
+      ['PAYMENT', '2026-10-29', '500.00'], // 00:30+03:00
+    ]);
+    expect(body.items[0]).toEqual({
+      kind: 'PAYMENT',
+      id: expect.any(String),
+      number: expect.any(String),
+      date: '2026-10-31',
+      recordedAt: '2026-10-31T12:00:00+02:00',
+      method: 'INSTAPAY',
+      amount: '200.00',
+      patient: { id: ids.p1, name: 'Patient One' },
+      invoice: { id: expect.any(String), invoiceNumber: expect.any(String) },
+      expenseOrigin: null,
+      category: null,
+      description: null,
+      payee: null,
+      reason: null,
+      recordedBy: { id: receptionist.id, name: expect.any(String) },
+    });
+    expect(body.items[1]).toMatchObject({
+      kind: 'EXPENSE',
+      method: 'CARD',
+      expenseOrigin: 'MANUAL',
+      category: { id: ids.supplies, name: 'Supplies' },
+      patient: null,
+      invoice: null,
+    });
+    expect(body.items[3]).toMatchObject({
+      kind: 'REFUND',
+      reason: 'Partial refund',
+    });
+    expect(body.meta).toEqual({ page: 1, limit: 20, total: 7, totalPages: 1 });
+
+    const refunds = await report(`transactions${RANGE}&kind=REFUND`).expect(
+      200,
+    );
+    expect(refunds.body.items).toHaveLength(1);
+    expect(refunds.body.meta.total).toBe(1);
+    // The totals still cover every kind.
+    expect(refunds.body.totals.payments.total).toBe('1070.00');
+    await report(`transactions${RANGE}&kind=SALARY`).expect(400);
   });
 
   it('requires both dates, with from on or before to', async () => {

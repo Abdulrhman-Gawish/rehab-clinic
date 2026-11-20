@@ -28,6 +28,7 @@ import {
   resetDatabase,
   type TestApp,
 } from './utils/test-app.js';
+import { completeCheckInDetails } from './utils/check-in.js';
 
 // The desk discount cap applies to a receptionist's own discount override.
 // Runs before the app (and its config) is imported.
@@ -140,11 +141,13 @@ describe('Doctor referrals (e2e)', () => {
     });
 
   async function walkIn(body: object = {}, who: Patient = patient) {
+    await completeCheckInDetails(ctx.dataSource);
     const res = await as(receptionist)
       .post('/visits/walk-in', {
         patientId: who.id,
         doctorId,
         serviceId,
+        type: 'SESSION',
         ...body,
       })
       .expect(201);
@@ -717,6 +720,7 @@ describe('Doctor referrals (e2e)', () => {
       ).id;
 
     async function attend(appointmentId: string): Promise<string> {
+      await completeCheckInDetails(ctx.dataSource);
       const res = await as(receptionist)
         .post(`/appointments/${appointmentId}/attend`, {})
         .expect(201);

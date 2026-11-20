@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsEnum,
@@ -6,6 +7,7 @@ import {
   IsString,
   IsUUID,
   Length,
+  ValidateNested,
 } from 'class-validator';
 import { EgyptianMobile } from '../../../common/decorators/egyptian-mobile.decorator.js';
 import {
@@ -20,12 +22,15 @@ import {
 } from '../../../common/decorators/transform.decorators.js';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
 import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
+import { AppointmentType } from '../../appointments/appointment.enums.js';
 import {
   AppointmentDoctorDto,
   AppointmentPatientDto,
   AppointmentServiceDto,
+  AppointmentTypeField,
 } from '../../appointments/dto/appointment.dto.js';
 import { NoteStatus } from '../../clinical/clinical.enums.js';
+import { CheckInDetailsDto } from '../../patients/dto/patient.dto.js';
 import {
   PackageChoiceDto,
   PackageSessionDto,
@@ -39,7 +44,28 @@ const AT = (example: string) => ({
 
 // ---------- Inputs ----------
 
+const PatientDetailsField = () => (target: object, key: string) => {
+  ApiPropertyOptional({
+    type: CheckInDetailsDto,
+    description:
+      'Details collected at check-in, saved on the patient first. The patient must then have an identity document (nationalId or passportNumber), gender, dateOfBirth and a referral source, else 422 PATIENT_DETAILS_REQUIRED (details.missing).',
+  })(target, key);
+  IsOptional()(target, key);
+  ValidateNested()(target, key);
+  Type(() => CheckInDetailsDto)(target, key);
+};
+
+// POST /appointments/:id/attend: the package choice, and the patient's
+// details when they are not complete yet.
+export class AttendDto extends PackageChoiceDto {
+  @PatientDetailsField()
+  patientDetails?: CheckInDetailsDto;
+}
+
 export class WalkInDto extends PackageChoiceDto {
+  @PatientDetailsField()
+  patientDetails?: CheckInDetailsDto;
+
   @ApiPropertyOptional({
     format: 'uuid',
     description: 'Existing patient. Either patientId OR name + phone.',
@@ -67,6 +93,10 @@ export class WalkInDto extends PackageChoiceDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
   serviceId: string;
+
+  // Chosen by reception at check-in (no default).
+  @AppointmentTypeField()
+  type: AppointmentType;
 }
 
 export class VisitReasonDto {
@@ -137,6 +167,15 @@ export class VisitResponseDto {
 
   @ApiProperty()
   isWalkIn: boolean;
+
+  @ApiProperty({
+    enum: AppointmentType,
+    enumName: 'AppointmentType',
+    nullable: true,
+    description:
+      "The appointment's type (the walk-in's own for a walk-in); it decides the note's fields. null = not set (from before appointment types existed)",
+  })
+  type: AppointmentType | null;
 
   @ApiProperty({ format: 'uuid', nullable: true, type: String })
   appointmentId: string | null;

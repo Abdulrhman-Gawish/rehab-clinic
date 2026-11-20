@@ -123,6 +123,7 @@ describe('Patient acquisition (e2e)', () => {
         phone: '01099999999',
         doctorId,
         serviceId,
+        type: 'EXAMINATION',
         startAt: TOMORROW_10,
         ...body,
       });
@@ -384,8 +385,20 @@ describe('Patient acquisition (e2e)', () => {
       await addSource({ channel: 'FACEBOOK' }, old).expect(201);
       // mona: no source.
 
+      // Check-in needs an identity document, gender and birth date (the
+      // patient already has sources; mona keeps none).
       const visit = await as(receptionist)
-        .post('/visits/walk-in', { patientId: patient.id, doctorId, serviceId })
+        .post('/visits/walk-in', {
+          patientId: patient.id,
+          doctorId,
+          serviceId,
+          type: 'SESSION',
+          patientDetails: {
+            passportNumber: 'TESTP0001',
+            gender: 'MALE',
+            dateOfBirth: '1990-01-01',
+          },
+        })
         .expect(201);
       await as(receptionist)
         .post(`/invoices/${visit.body.invoiceId}/payments`, {
@@ -466,8 +479,17 @@ describe('Patient acquisition (e2e)', () => {
       const appointment = await ctx.dataSource
         .getRepository(Appointment)
         .findOneByOrFail({ referenceCode: first.body.referenceCode });
+      // Booked online: the desk collects the details at check-in (a
+      // referral source is not a campaign: the report counts UTM tags).
       const attended = await as(receptionist)
-        .post(`/appointments/${appointment.id}/attend`)
+        .post(`/appointments/${appointment.id}/attend`, {
+          patientDetails: {
+            passportNumber: 'TESTP0002',
+            gender: 'FEMALE',
+            dateOfBirth: '1985-06-01',
+            referralSource: { channel: 'WEBSITE' },
+          },
+        })
         .expect(201);
       await as(receptionist)
         .post(`/invoices/${attended.body.invoiceId}/payments`, {

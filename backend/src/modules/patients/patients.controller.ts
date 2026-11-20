@@ -39,6 +39,17 @@ import { PatientsService } from './patients.service.js';
 const READERS = [UserRole.OWNER, UserRole.RECEPTIONIST, UserRole.DOCTOR];
 const WRITERS = [UserRole.OWNER, UserRole.RECEPTIONIST];
 
+// A doctor reads patients without their identity document (not needed for
+// care); the patient code stays visible to everyone.
+function forReader(
+  patient: PatientResponseDto,
+  actor: Actor,
+): PatientResponseDto {
+  return actor.role === UserRole.DOCTOR
+    ? { ...patient, nationalId: null, passportNumber: null }
+    : patient;
+}
+
 // Staff only. There is deliberately no public patient endpoint.
 @ApiTags('Patients')
 @Controller('patients')
@@ -64,12 +75,20 @@ export class PatientsController {
 
   @Get()
   @Auth(...READERS)
-  @ApiOperation({ summary: 'Search patients by name or phone' })
+  @ApiOperation({
+    summary:
+      'Search patients by name, phone or code (OWNER, RECEPTIONIST: also National ID, passport)',
+  })
   @ApiOkResponse({ type: PaginatedResponse(PatientResponseDto) })
-  findAll(
+  async findAll(
     @Query() query: ListPatientsQueryDto,
+    @CurrentActor() actor: Actor,
   ): Promise<Paginated<PatientResponseDto>> {
-    return this.patientsService.findAll(query);
+    const page = await this.patientsService.findAll(
+      query,
+      actor.role !== UserRole.DOCTOR,
+    );
+    return { ...page, items: page.items.map((p) => forReader(p, actor)) };
   }
 
   @Get('lookup')
@@ -79,16 +98,23 @@ export class PatientsController {
     description: '`{ patient: null }` when the phone is unknown.',
   })
   @ApiOkResponse({ type: PatientLookupDto })
-  lookup(@Query() query: LookupPatientQueryDto): Promise<PatientLookupDto> {
-    return this.patientsService.findByPhone(query.phone);
+  async lookup(
+    @Query() query: LookupPatientQueryDto,
+    @CurrentActor() actor: Actor,
+  ): Promise<PatientLookupDto> {
+    const { patient } = await this.patientsService.findByPhone(query.phone);
+    return { patient: patient && forReader(patient, actor) };
   }
 
   @Get(':id')
   @Auth(...READERS)
   @ApiOkResponse({ type: PatientResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
-  findOne(@Param('id', ParseUUIDPipe) id: string): Promise<PatientResponseDto> {
-    return this.patientsService.findOne(id);
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentActor() actor: Actor,
+  ): Promise<PatientResponseDto> {
+    return forReader(await this.patientsService.findOne(id), actor);
   }
 
   @Patch(':id')
@@ -96,7 +122,7 @@ export class PatientsController {
   @ApiOperation({
     summary: 'Update a patient',
     description:
-      'Changing the phone respects uniqueness (409). Old and new values are audited.',
+      'Changing the phone, National ID or passport respects uniqueness (409). The first identity document gives the patient its code (RH...); once it has one, only the OWNER can change the document (403 PATIENT_IDENTITY_LOCKED). A National ID must be valid (422 NATIONAL_ID_INVALID) and match the birth date and gender (422 NATIONAL_ID_MISMATCH; they are filled from it when empty). Old and new values are audited.',
   })
   @ApiOkResponse({ type: PatientResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })

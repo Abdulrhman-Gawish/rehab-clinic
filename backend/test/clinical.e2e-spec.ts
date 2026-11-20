@@ -1,7 +1,10 @@
 import request from 'supertest';
 import type { App } from 'supertest/types.js';
 import { UserRole } from '../src/common/enums/user-role.enum.js';
-import { AppointmentStatus } from '../src/modules/appointments/appointment.enums.js';
+import {
+  AppointmentStatus,
+  AppointmentType,
+} from '../src/modules/appointments/appointment.enums.js';
 import { AuditLog } from '../src/modules/audit/entities/audit-log.entity.js';
 import { FileStorage } from '../src/common/storage/file-storage.service.js';
 import { findOrphans } from '../src/common/storage/orphan-sweep.js';
@@ -271,9 +274,6 @@ describe('Clinical records (e2e)', () => {
     });
 
     it('sign can save the final fields in the same call', async () => {
-      const noNote = await sign(visit.id, doctorA).expect(422);
-      expect(noNote.body.code).toBe('NOTE_INCOMPLETE');
-
       const signed = await sign(visit.id, doctorA, {
         assessment: 'Final assessment',
         painScore: 3,
@@ -293,36 +293,68 @@ describe('Clinical records (e2e)', () => {
         'CLINICAL_NOTE_CREATED',
         'CLINICAL_NOTE_SIGNED',
       ]);
-      // Nothing is saved when the fields can't be signed.
-      const other = await newVisit(doctorA, VisitStatus.ACTIVE);
-      await sign(other.id, doctorA, { plan: 'Only a plan' }).expect(422);
-      await readNote(other.id, doctorA)
-        .expect(200)
-        .expect(({ body }) => expect(body).toBeNull());
+      // Signing again is refused, and saves nothing it was sent.
+      const again = await sign(visit.id, doctorA, {
+        assessment: 'Changed',
+      }).expect(422);
+      expect(again.body.code).toBe('NOTE_SIGNED');
+      expect((await readNote(visit.id, doctorA)).body.assessment).toBe(
+        'Final assessment',
+      );
     });
 
-    it('signing needs an assessment or the treatment done', async () => {
+    it('no field is required to sign: a note with any fields, or none yet, can be signed', async () => {
       await writeNote(visit.id, doctorA, {
         chiefComplaint: 'Back pain',
       }).expect(200);
-      const res = await sign(visit.id, doctorA).expect(422);
-      expect(res.body.code).toBe('NOTE_INCOMPLETE');
-      await writeNote(visit.id, doctorA, { treatmentDone: 'Massage' }).expect(
-        200,
-      );
       await sign(visit.id, doctorA).expect(200);
+
+      // No note yet: an empty note is created and signed.
+      const other = await newVisit(doctorA, VisitStatus.ACTIVE);
+      const empty = await sign(other.id, doctorA).expect(200);
+      expect(empty.body).toMatchObject({
+        status: 'SIGNED',
+        chiefComplaint: null,
+        assessment: null,
+        treatmentDone: null,
+        painScore: null,
+      });
     });
 
-    it('a signed note is locked; addenda are added by any doctor with access', async () => {
+    it('a signed note stays editable by its doctor (still SIGNED, every change audited); addenda by any doctor with access', async () => {
       const note = await signedNote(visit.id, doctorA, 'Sprain');
+      const signedAt = (await readNote(visit.id, doctorA)).body.signedAt;
 
-      const edit = await writeNote(visit.id, doctorA, { plan: 'Rest' }).expect(
-        422,
-      );
-      expect(edit.body.code).toBe('NOTE_SIGNED');
-      expect((await sign(visit.id, doctorA).expect(422)).body.code).toBe(
-        'NOTE_SIGNED',
-      );
+      const edited = await writeNote(visit.id, doctorA, {
+        assessment: 'Grade 2 sprain',
+        plan: 'Rest',
+      }).expect(200);
+      expect(edited.body).toMatchObject({
+        id: note.id,
+        status: 'SIGNED',
+        signedAt,
+        assessment: 'Grade 2 sprain',
+        plan: 'Rest',
+      });
+      // Only the visit's doctor edits it, signed or not.
+      await writeNote(visit.id, doctorB, { assessment: 'x' }).expect(404);
+      await writeNote(visit.id, owner, { assessment: 'x' }).expect(403);
+
+      const logs = await ctx.dataSource.getRepository(AuditLog).find({
+        where: { entityId: note.id },
+        order: { createdAt: 'ASC' },
+      });
+      expect(logs.map((log) => log.action)).toEqual([
+        'CLINICAL_NOTE_CREATED',
+        'CLINICAL_NOTE_SIGNED',
+        'CLINICAL_NOTE_UPDATED',
+      ]);
+      expect(logs[2]).toMatchObject({
+        userId: doctorA.id,
+        oldValues: { assessment: 'Sprain', plan: null },
+        newValues: { assessment: 'Grade 2 sprain', plan: 'Rest' },
+        createdAt: expect.any(Date),
+      });
 
       await addAddendum(note.id, doctorA, 'Swelling down on day 3').expect(201);
       const res = await addAddendum(
@@ -330,7 +362,7 @@ describe('Clinical records (e2e)', () => {
         doctorB,
         'Seen for follow-up',
       ).expect(201);
-      expect(res.body.assessment).toBe('Sprain');
+      expect(res.body.assessment).toBe('Grade 2 sprain');
       expect(res.body.addenda).toMatchObject([
         { doctor: { id: doctorA.doctorId }, content: 'Swelling down on day 3' },
         { doctor: { id: doctorB.doctorId }, content: 'Seen for follow-up' },
@@ -410,8 +442,9 @@ describe('Clinical records (e2e)', () => {
         .findOneByOrFail({ id: draft.id });
       expect(note).toMatchObject({ status: 'DRAFT', assessment: 'Draft text' });
 
-      // A signed note is still locked for the owner too.
+      // Once signed, the owner still can't edit it or add addenda.
       await sign(visit.id, doctorA).expect(200);
+      await writeNote(visit.id, owner, { assessment: 'Edited' }).expect(403);
       await addAddendum(draft.id, owner, 'Owner remark').expect(403);
     });
 
@@ -454,6 +487,268 @@ describe('Clinical records (e2e)', () => {
             .insert({ ...base, ...bad }),
         ).rejects.toMatchObject({ driverError: { code: '23514' } });
       }
+    });
+  });
+
+  // ---------- notes by appointment type ----------
+
+  describe('notes by appointment type', () => {
+    let receptionist: TestUser;
+    let day = 0;
+
+    beforeEach(async () => {
+      receptionist = await createLoggedInUser(
+        ctx.app,
+        ctx.dataSource,
+        UserRole.RECEPTIONIST,
+      );
+    });
+
+    // An attended appointment of this type and its visit (the visit takes
+    // the appointment's type). Each on its own day, so they never overlap.
+    async function typedVisit(type: AppointmentType | null) {
+      day += 1;
+      const appointment = await insertAppointment(ctx.dataSource, {
+        patientId: patient.id,
+        doctorId: doctorA.doctorId,
+        serviceId,
+        startAt: new Date(Date.UTC(2026, 8, day, 8)),
+        status: AppointmentStatus.ATTENDED,
+        type,
+      });
+      const typed = await insertVisit(ctx.dataSource, {
+        patientId: patient.id,
+        doctorId: doctorA.doctorId,
+        serviceId,
+        attendedById: owner.id,
+        appointmentId: appointment.id,
+      });
+      return { appointment, visit: typed };
+    }
+
+    const changeType = (appointmentId: string, type: AppointmentType) =>
+      request(server)
+        .patch(api(`/appointments/${appointmentId}/type`))
+        .set(as(receptionist))
+        .send({ type })
+        .expect(200);
+
+    it("each type has its own fields; other types' fields are refused (NOTE_FIELDS_NOT_IN_TYPE) and nothing is saved", async () => {
+      const exam = await typedVisit(AppointmentType.EXAMINATION);
+      const saved = await writeNote(exam.visit.id, doctorA, {
+        chiefComplaint: 'Knee pain',
+        assessment: 'Swollen, limited flexion',
+        diagnosis: 'Meniscus tear',
+        plan: 'MRI, then physiotherapy',
+        painScore: 6,
+      }).expect(200);
+      expect(saved.body).toMatchObject({
+        type: 'EXAMINATION',
+        chiefComplaint: 'Knee pain',
+        diagnosis: 'Meniscus tear',
+        plan: 'MRI, then physiotherapy',
+        painScore: 6,
+        treatmentDone: null,
+        progress: null,
+      });
+      const refused = await writeNote(exam.visit.id, doctorA, {
+        diagnosis: 'Changed',
+        treatmentDone: 'Massage',
+      }).expect(422);
+      expect(refused.body).toMatchObject({
+        code: 'NOTE_FIELDS_NOT_IN_TYPE',
+        details: { type: 'EXAMINATION', fields: ['treatmentDone'] },
+      });
+      expect((await readNote(exam.visit.id, doctorA)).body.diagnosis).toBe(
+        'Meniscus tear',
+      );
+
+      const session = await typedVisit(AppointmentType.SESSION);
+      await writeNote(session.visit.id, doctorA, {
+        treatmentDone: 'Manual therapy',
+        progress: 'Walks without a limp',
+        painScore: 3,
+      }).expect(200);
+      const nullToo = await writeNote(session.visit.id, doctorA, {
+        assessment: 'x',
+        diagnosis: null,
+      }).expect(422);
+      expect(nullToo.body.details.fields).toEqual(['assessment', 'diagnosis']);
+
+      const followUp = await typedVisit(AppointmentType.FOLLOW_UP);
+      const fu = await writeNote(followUp.visit.id, doctorA, {
+        assessment: 'Improving',
+        progress: 'Half the pain',
+        plan: 'Continue exercises',
+        painScore: 2,
+      }).expect(200);
+      expect(fu.body.type).toBe('FOLLOW_UP');
+      await writeNote(followUp.visit.id, doctorA, {
+        chiefComplaint: 'x',
+      }).expect(422);
+
+      // Sign refuses them too, before anything is saved.
+      const fresh = await typedVisit(AppointmentType.SESSION);
+      await sign(fresh.visit.id, doctorA, { diagnosis: 'x' }).expect(422);
+      await readNote(fresh.visit.id, doctorA)
+        .expect(200)
+        .expect(({ body }) => expect(body).toBeNull());
+    });
+
+    it('a walk-in uses its own type; a visit whose type is not set has every field', async () => {
+      const walkIn = await insertVisit(ctx.dataSource, {
+        patientId: patient.id,
+        doctorId: doctorA.doctorId,
+        serviceId,
+        attendedById: owner.id,
+        type: AppointmentType.SESSION,
+      });
+      await writeNote(walkIn.id, doctorA, { diagnosis: 'x' }).expect(422);
+      const session = await writeNote(walkIn.id, doctorA, {
+        treatmentDone: 'TENS',
+      }).expect(200);
+      expect(session.body.type).toBe('SESSION');
+
+      // `visit` is a walk-in from before types (not set).
+      const all = await writeNote(visit.id, doctorA, {
+        chiefComplaint: 'a',
+        assessment: 'b',
+        diagnosis: 'c',
+        treatmentDone: 'd',
+        progress: 'e',
+        plan: 'f',
+        painScore: 1,
+      }).expect(200);
+      expect(all.body).toMatchObject({
+        type: null,
+        diagnosis: 'c',
+        treatmentDone: 'd',
+        painScore: 1,
+      });
+      // So is an appointment from before types.
+      const legacy = await typedVisit(null);
+      await writeNote(legacy.visit.id, doctorA, {
+        diagnosis: 'x',
+        treatmentDone: 'y',
+      }).expect(200);
+    });
+
+    it("a type change keeps every value: the new type's fields become editable, the others stay read-only", async () => {
+      const { appointment, visit: typed } = await typedVisit(
+        AppointmentType.EXAMINATION,
+      );
+      await writeNote(typed.id, doctorA, {
+        chiefComplaint: 'Back pain',
+        diagnosis: 'Disc herniation',
+        plan: 'Core exercises',
+        painScore: 7,
+      }).expect(200);
+      await sign(typed.id, doctorA).expect(200);
+
+      await changeType(appointment.id, AppointmentType.SESSION);
+      expect((await readNote(typed.id, doctorA)).body).toMatchObject({
+        type: 'SESSION',
+        status: 'SIGNED',
+        chiefComplaint: 'Back pain',
+        diagnosis: 'Disc herniation',
+        plan: 'Core exercises',
+        painScore: 7,
+      });
+      // Saving the session's fields leaves the examination's as they were.
+      const edited = await writeNote(typed.id, doctorA, {
+        treatmentDone: 'Traction',
+        progress: 'Less pain',
+        painScore: 5,
+      }).expect(200);
+      expect(edited.body).toMatchObject({
+        status: 'SIGNED',
+        treatmentDone: 'Traction',
+        progress: 'Less pain',
+        painScore: 5,
+        chiefComplaint: 'Back pain',
+        diagnosis: 'Disc herniation',
+        plan: 'Core exercises',
+      });
+      await writeNote(typed.id, doctorA, { diagnosis: 'Changed' }).expect(422);
+
+      // Back to an examination: its fields are editable again (replaced as
+      // a whole), the session's are kept.
+      await changeType(appointment.id, AppointmentType.EXAMINATION);
+      const back = await writeNote(typed.id, doctorA, {
+        chiefComplaint: 'Back pain',
+        diagnosis: 'L5 disc herniation',
+        painScore: 5,
+      }).expect(200);
+      expect(back.body).toMatchObject({
+        type: 'EXAMINATION',
+        diagnosis: 'L5 disc herniation',
+        plan: null,
+        treatmentDone: 'Traction',
+        progress: 'Less pain',
+      });
+
+      // The medical history shows the current type with every value.
+      const list = await request(server)
+        .get(api(`/patients/${patient.id}/clinical-notes`))
+        .set(as(doctorB))
+        .expect(200);
+      expect(list.body.items).toMatchObject([
+        { id: back.body.id, type: 'EXAMINATION', treatmentDone: 'Traction' },
+      ]);
+    });
+
+    it("notes carry their visit's attachments; the attachment list filters by visit", async () => {
+      const { visit: exam } = await typedVisit(AppointmentType.EXAMINATION);
+      await writeNote(exam.id, doctorA, { diagnosis: 'Fracture' }).expect(200);
+      const linked = await upload(doctorA, PNG, 'xray.png', {
+        title: 'Wrist X-ray',
+        visitId: exam.id,
+      }).expect(201);
+      await upload(doctorA, PDF, 'lab.pdf', { title: 'Lab report' }).expect(
+        201,
+      );
+
+      const note = (await readNote(exam.id, doctorA).expect(200)).body;
+      expect(note.attachments).toMatchObject([
+        {
+          id: linked.body.id,
+          title: 'Wrist X-ray',
+          visitId: exam.id,
+          mimeType: 'image/png',
+          uploadedBy: { id: doctorA.id },
+        },
+      ]);
+      const ofVisit = await request(server)
+        .get(api(`/patients/${patient.id}/attachments?visitId=${exam.id}`))
+        .set(as(doctorA))
+        .expect(200);
+      expect(ofVisit.body.meta.total).toBe(1);
+      expect(ofVisit.body.items[0].id).toBe(linked.body.id);
+      const all = await request(server)
+        .get(api(`/patients/${patient.id}/attachments`))
+        .set(as(doctorA))
+        .expect(200);
+      expect(all.body.meta.total).toBe(2);
+    });
+
+    it('reception never reads notes, before or after changing the type', async () => {
+      const { appointment, visit: typed } = await typedVisit(
+        AppointmentType.FOLLOW_UP,
+      );
+      await signedNote(typed.id, doctorA, 'Seen'); // an assessment
+      await changeType(appointment.id, AppointmentType.SESSION);
+      await readNote(typed.id, receptionist).expect(403);
+      await request(server)
+        .get(api(`/patients/${patient.id}/clinical-notes`))
+        .set(as(receptionist))
+        .expect(403);
+      // The appointment it reads has no clinical data.
+      const res = await request(server)
+        .get(api(`/appointments/${appointment.id}`))
+        .set(as(receptionist))
+        .expect(200);
+      expect(res.body.type).toBe('SESSION');
+      expect(JSON.stringify(res.body)).not.toContain('Seen');
     });
   });
 

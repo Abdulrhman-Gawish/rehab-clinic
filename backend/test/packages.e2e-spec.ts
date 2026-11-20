@@ -32,6 +32,7 @@ import {
   resetDatabase,
   type TestApp,
 } from './utils/test-app.js';
+import { afterCheckInSetup, completeCheckInDetails } from './utils/check-in.js';
 
 // Frozen clock: "today" is Tuesday 2026-11-03 in Cairo (+02:00), 09:00.
 const TODAY = '2026-11-03';
@@ -180,7 +181,10 @@ describe('Packages (e2e)', () => {
   }
 
   const attend = (appointmentId: string, body: object = {}) =>
-    as(receptionist).post(`/appointments/${appointmentId}/attend`, body);
+    afterCheckInSetup(
+      as(receptionist).post(`/appointments/${appointmentId}/attend`, body),
+      ctx.dataSource,
+    );
 
   const lines = (invoiceId: string) =>
     ctx.dataSource.getRepository(InvoiceItem).findBy({ invoiceId });
@@ -455,6 +459,7 @@ describe('Packages (e2e)', () => {
           phone: '01012345678',
           doctorId: doctorA.doctorId,
           serviceId: physioId,
+          type: 'SESSION',
           startAt: '2026-11-04T10:00:00+02:00',
           ...body,
         });
@@ -746,11 +751,13 @@ describe('Packages (e2e)', () => {
 
     it('a walk-in uses a session too', async () => {
       const sold = await sell((await createPackage()).id);
+      await completeCheckInDetails(ctx.dataSource);
       const res = await as(receptionist)
         .post('/visits/walk-in', {
           patientId: patient.id,
           doctorId: doctorB.doctorId,
           serviceId: physioId,
+          type: 'SESSION',
         })
         .expect(201);
       expect(res.body.package).toMatchObject({

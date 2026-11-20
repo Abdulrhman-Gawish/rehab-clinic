@@ -5,7 +5,6 @@ import { DataSource } from 'typeorm';
 import {
   toPaginated,
   type Paginated,
-  type PaginationQueryDto,
 } from '../../common/dto/pagination.dto.js';
 import { ErrorCode, unprocessable } from '../../common/errors/app.exception.js';
 import type {
@@ -27,6 +26,7 @@ import { Visit } from '../visits/entities/visit.entity.js';
 import { ClinicalAccessService } from './clinical-access.service.js';
 import { toAttachment } from './clinical.mapper.js';
 import type {
+  AttachmentListQueryDto,
   AttachmentResponseDto,
   AttachmentUploadDto,
 } from './dto/clinical.dto.js';
@@ -126,17 +126,20 @@ export class PatientAttachmentsService {
     });
   }
 
-  /** Newest first; the id breaks ties so pages never repeat or skip a row. */
+  /**
+   * Newest first; the id breaks ties so pages never repeat or skip a row.
+   * With visitId: only the attachments linked to that visit.
+   */
   async list(
     patientId: string,
-    query: PaginationQueryDto,
+    query: AttachmentListQueryDto,
     user: AuthenticatedUser,
   ): Promise<Paginated<AttachmentResponseDto>> {
     await this.access.assertCanAccessPatient(user, patientId);
     const [rows, total] = await this.dataSource
       .getRepository(PatientAttachment)
       .findAndCount({
-        where: { patientId },
+        where: { patientId, ...(query.visitId && { visitId: query.visitId }) },
         relations: { uploadedBy: true },
         order: { createdAt: 'DESC', id: 'DESC' },
         skip: query.skip,

@@ -19,6 +19,7 @@ import {
   ACTIVE_STATUSES,
   AppointmentSource,
   AppointmentStatus,
+  AppointmentType,
 } from '../appointment.enums.js';
 
 export const APPOINTMENT_REFERENCE_UNIQUE = 'uq_appointments_reference_code';
@@ -92,6 +93,17 @@ export class Appointment extends BaseEntity {
     enumName: 'appointment_source',
   })
   source: AppointmentSource;
+
+  // Required on every new booking (and copied by a reschedule). NULL = not
+  // set: only appointments booked before types existed, until reception
+  // sets it. Reception may change it in any status.
+  @Column({
+    type: 'enum',
+    enum: AppointmentType,
+    enumName: 'appointment_type',
+    nullable: true,
+  })
+  type: AppointmentType | null;
 
   // The name typed at booking time (may differ from the patient's name).
   @Column({ type: 'varchar', length: 120 })

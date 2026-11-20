@@ -73,3 +73,28 @@
 @media (min-width: 768px) { .owner-values { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .owner-values > div { min-width: 0; overflow-wrap: anywhere; padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-surface); border: var(--border-width) solid var(--color-border); }
 .owner-values h3 { font-size: var(--text-caption); font-weight: var(--font-weight-semibold); color: var(--color-text-muted); margin-block-end: var(--space-1); }
+
+/* Doctor salaries (pages/Salaries.tsx). */
+.salary-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-4); }
+.salary-toolbar > .field:first-child { flex: 0 1 420px; }
+.salary-toolbar__doctor { flex: 1 1 240px; max-width: 360px; }
+.salary-history { margin: var(--space-2) 0 0; padding-inline-start: var(--space-5); display: grid; gap: var(--space-1); font-size: var(--text-body-sm); }
+.salary-rates { list-style: none; margin: 0; padding: 0; display: grid; }
+.salary-rates > li {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4);
+  padding-block: var(--space-2); border-block-end: var(--border-width) solid var(--color-border);
+}
+.salary-rates > li:last-child { border-block-end: 0; }
+
+/* Outstanding balances (daily summary, reports): a short lead under a section title, a sub-heading inside a card. */
+.owner-lead { margin-block-start: calc(-1 * var(--space-2)); font-size: var(--text-body-sm); }
+.owner-subhead { font-size: var(--text-body); font-weight: var(--font-weight-semibold); margin-block-end: var(--space-2); }
+/* Totals above a flush table (transactions), and the "of which" parts under a total. */
+.owner-card-head { padding: var(--space-4); border-block-end: var(--border-width) solid var(--color-border); }
+.owner-methods dd.owner-part { font-weight: var(--font-weight-regular); font-size: var(--text-caption); color: var(--color-text-muted); }
+.owner-advance { display: inline-flex; align-items: center; gap: var(--space-1); white-space: nowrap; }
+/* A patient's unpaid invoices, one per line. */
+.owner-invoices { display: grid; gap: var(--space-1); font-size: var(--text-body-sm); }
+.owner-invoices li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); }
+/* Flow ledgers: an amount never wraps (a browser may break "-EGP 30.00" after the minus). */
+.owner-flow .totals__row > :last-child { white-space: nowrap; }

@@ -228,9 +228,10 @@ function Sources({ patientId, role, active, tick, onChange }: {
   );
 }
 
-interface TermsInit { commission: RateForm; discount: RateForm; applicability: { type: string; maxSessions: string; validFrom: string; validTo: string }; overrideReason: string }
+export interface TermsInit { commission: RateForm; discount: RateForm; applicability: { type: string; maxSessions: string; validFrom: string; validTo: string }; overrideReason: string }
+export type TermsDefaults = { commission: Rate; discount: Rate; agreementVersion: number };
 
-const termsFrom = (terms: any | null, defaults: { commission: Rate; discount: Rate }): TermsInit => ({
+export const termsFrom = (terms: any | null, defaults: { commission: Rate; discount: Rate }): TermsInit => ({
   commission: toForm(terms?.commission ?? defaults.commission),
   discount: toForm(terms?.discount ?? defaults.discount),
   applicability: {
@@ -242,47 +243,44 @@ const termsFrom = (terms: any | null, defaults: { commission: Rate; discount: Ra
   overrideReason: terms?.isOverride ? terms.overrideReason ?? '' : '',
 });
 
+/** The commission or the discount differs from the doctor's default: a reason is required. */
+export const termsOverridden = (f: TermsInit, defaults: TermsDefaults) =>
+  !sameRate(f.commission, defaults.commission) || !sameRate(f.discount, defaults.discount);
+
+/** The terms can be sent: an applicability, and a reason (3+ characters) for an override. */
+export const termsReady = (f: TermsInit, defaults: TermsDefaults) =>
+  !!f.applicability.type && (!termsOverridden(f, defaults) || f.overrideReason.trim().length >= 3);
+
+/** The body of the terms (POST /patients/:id/referrals, terms versions, check-in `referral`). */
+export function termsBody(f: TermsInit, defaults: TermsDefaults) {
+  const a = f.applicability;
+  return {
+    commission: toBody(f.commission),
+    discount: toBody(f.discount),
+    applicability: {
+      type: a.type,
+      ...(a.type === 'SESSION_COUNT' && { maxSessions: Number(a.maxSessions) }),
+      ...(a.type === 'DATE_RANGE' && { validFrom: a.validFrom, validTo: a.validTo }),
+    },
+    overrideReason: termsOverridden(f, defaults) ? f.overrideReason.trim() : undefined,
+  };
+}
+
 /**
- * The doctor's default next to the applied values. Changing a value marks it as overridden (a reason is required
- * and the save asks for confirmation); "use default" puts the doctor's value back.
+ * The terms fields (controlled, no button): the doctor's default next to the applied values, which sessions are
+ * covered, and the reason for an override. Changing a value marks it as overridden; "use default" puts it back.
+ * Used by TermsForm (patient page) and the check-in details (a doctor referral recorded at the desk).
  */
-function TermsForm({ defaults, initial, submitLabel, onSubmit }: {
-  defaults: { commission: Rate; discount: Rate; agreementVersion: number };
-  initial: TermsInit;
-  submitLabel: string;
-  onSubmit: (body: object) => Promise<boolean>;
+export function TermsFields({ defaults, value: f, onChange: setF }: {
+  defaults: TermsDefaults; value: TermsInit; onChange: (terms: TermsInit) => void;
 }) {
   const { t } = useI18n();
-  const [f, setF] = useState<TermsInit>(initial);
-  const [busy, setBusy] = useState(false);
   const tr = t.referrals;
   const commissionChanged = !sameRate(f.commission, defaults.commission);
   const discountChanged = !sameRate(f.discount, defaults.discount);
   const overridden = commissionChanged || discountChanged;
   const a = f.applicability;
   const missingReason = overridden && f.overrideReason.trim().length < 3;
-
-  const save = async () => {
-    if (overridden) {
-      const lines = [
-        commissionChanged && `${tr.commission}: ${rateText(t, defaults.commission)} → ${rateText(t, f.commission)}`,
-        discountChanged && `${tr.discount}: ${rateText(t, defaults.discount)} → ${rateText(t, f.discount)}`,
-      ].filter(Boolean).join('\n');
-      if (!(await confirmAction({ title: tr.overrideTitle, message: tr.confirmOverride(lines), tone: 'warning', confirmLabel: submitLabel }))) return;
-    }
-    setBusy(true);
-    await onSubmit({
-      commission: toBody(f.commission),
-      discount: toBody(f.discount),
-      applicability: {
-        type: a.type,
-        ...(a.type === 'SESSION_COUNT' && { maxSessions: Number(a.maxSessions) }),
-        ...(a.type === 'DATE_RANGE' && { validFrom: a.validFrom, validTo: a.validTo }),
-      },
-      overrideReason: overridden ? f.overrideReason.trim() : undefined,
-    });
-    setBusy(false);
-  };
 
   // A plain function, not a component: a component declared here would remount (and lose input focus) on each key.
   const line = (name: string, which: 'commission' | 'discount', changed: boolean) => (
@@ -332,20 +330,54 @@ function TermsForm({ defaults, initial, submitLabel, onSubmit }: {
           <Input value={f.overrideReason} aria-invalid={missingReason || undefined} onChange={(e) => setF({ ...f, overrideReason: e.target.value })} />
         </Field>
       </>}
+    </div>
+  );
+}
+
+/** TermsFields with its save button; an override asks for confirmation first. */
+function TermsForm({ defaults, initial, submitLabel, onSubmit }: {
+  defaults: TermsDefaults;
+  initial: TermsInit;
+  submitLabel: string;
+  onSubmit: (body: object) => Promise<boolean>;
+}) {
+  const { t } = useI18n();
+  const [f, setF] = useState<TermsInit>(initial);
+  const [busy, setBusy] = useState(false);
+  const tr = t.referrals;
+  const commissionChanged = !sameRate(f.commission, defaults.commission);
+  const discountChanged = !sameRate(f.discount, defaults.discount);
+
+  const save = async () => {
+    if (commissionChanged || discountChanged) {
+      const lines = [
+        commissionChanged && `${tr.commission}: ${rateText(t, defaults.commission)} → ${rateText(t, f.commission)}`,
+        discountChanged && `${tr.discount}: ${rateText(t, defaults.discount)} → ${rateText(t, f.discount)}`,
+      ].filter(Boolean).join('\n');
+      if (!(await confirmAction({ title: tr.overrideTitle, message: tr.confirmOverride(lines), tone: 'warning', confirmLabel: submitLabel }))) return;
+    }
+    setBusy(true);
+    await onSubmit(termsBody(f, defaults));
+    setBusy(false);
+  };
+
+  return (
+    <div className="stack">
+      <TermsFields defaults={defaults} value={f} onChange={setF} />
       <div className="form-actions form-actions--end">
-        <Button variant="primary" icon="check" loading={busy} disabled={busy || !a.type || missingReason} onClick={() => { void save(); }}>{submitLabel}</Button>
+        <Button variant="primary" icon="check" loading={busy} disabled={busy || !termsReady(f, defaults)} onClick={() => { void save(); }}>{submitLabel}</Button>
       </div>
     </div>
   );
 }
 
 // "Dr. Hany Samir (Orthopedics · Kasr Al Ainy)": enough to tell two doctors apart in the list.
-const doctorLabel = (d: { name: string; specialty: string | null; workplace: string | null }) => {
+export const doctorLabel = (d: { name: string; specialty: string | null; workplace: string | null }) => {
   const extra = [d.specialty, d.workplace].filter(Boolean).join(' · ');
   return extra ? `${d.name} (${extra})` : d.name;
 };
 
-const defaultsOf = (agreement: any) =>
+export const defaultsOf = (agreement: any): TermsDefaults =>
   ({ commission: agreement.commission, discount: agreement.discount, agreementVersion: agreement.version });
 
 /**

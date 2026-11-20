@@ -2,10 +2,18 @@ import { applyDecorators } from '@nestjs/common';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEnum, IsOptional, IsUUID } from 'class-validator';
 import { IsLocalDate } from '../../../common/decorators/date-time.decorators.js';
-import { PaginationQueryDto } from '../../../common/dto/pagination.dto.js';
+import {
+  PaginationMetaDto,
+  PaginationQueryDto,
+} from '../../../common/dto/pagination.dto.js';
 import { UserRefDto } from '../../../common/dto/user-ref.dto.js';
 import { MethodBreakdownDto } from '../../billing/dto/payment.dto.js';
-import { RevenueGroupBy } from '../reports.enums.js';
+import { OutstandingFlowDto } from '../../outstanding/dto/outstanding.dto.js';
+import {
+  ExpenseOrigin,
+  RevenueGroupBy,
+  TransactionKind,
+} from '../reports.enums.js';
 
 const MONEY = (example: string, description?: string) => ({
   example,
@@ -40,12 +48,17 @@ export class AttendanceQueryDto extends ReportRangeQueryDto {
   doctorId?: string;
 }
 
-export class OutstandingQueryDto extends PaginationQueryDto {
-  @ReportDate('2026-11-01', 'Invoices issued on or after this local date')
+export class TransactionsQueryDto extends PaginationQueryDto {
+  @ReportDate('2026-11-01', 'First clinic local date (inclusive)')
   from: string;
 
-  @ReportDate('2026-11-30', 'Invoices issued on or before this local date')
+  @ReportDate('2026-11-30', 'Last clinic local date (inclusive)')
   to: string;
+
+  @ApiPropertyOptional({ enum: TransactionKind, description: 'Only this kind' })
+  @IsOptional()
+  @IsEnum(TransactionKind)
+  kind?: TransactionKind;
 }
 
 // ---------- Outputs ----------
@@ -84,6 +97,14 @@ export class SummaryReportDto extends ReportRangeDto {
   )
   commissionPayouts: string;
 
+  @ApiProperty(
+    MONEY(
+      '4000.00',
+      'Of `expenses`: salary payments to the clinic’s doctors (never added again)',
+    ),
+  )
+  salaryPayments: string;
+
   @ApiProperty(MONEY('10700.00', 'netCollected - expenses'))
   netAfterExpenses: string;
 
@@ -95,10 +116,18 @@ export class SummaryReportDto extends ReportRangeDto {
   @ApiProperty(
     MONEY(
       '1800.00',
-      'Unpaid balance (today) of the invoices counted in invoiced',
+      'What patients still owed at the end of `to`, on every invoice issued by then (= the daily summary of `to`)',
     ),
   )
-  outstanding: string;
+  patientsOwe: string;
+
+  @ApiProperty(
+    MONEY(
+      '5300.00',
+      'What the clinic owed its doctors at the end of `to`: salaries and referral commissions earned and not paid (= the daily summary of `to`)',
+    ),
+  )
+  clinicOwes: string;
 
   @ApiProperty(
     MONEY(
@@ -308,6 +337,11 @@ export class ExpensesReportDto extends ReportRangeDto {
   @ApiProperty(MONEY('350.00', 'Of `total`: payouts to referring doctors'))
   commissionPayouts: string;
 
+  @ApiProperty(
+    MONEY('4000.00', 'Of `total`: salary payments to the clinic’s doctors'),
+  )
+  salaryPayments: string;
+
   @ApiProperty({ type: [ExpenseByCategoryDto] })
   byCategory: ExpenseByCategoryDto[];
 
@@ -315,27 +349,138 @@ export class ExpensesReportDto extends ReportRangeDto {
   byMethod: MethodBreakdownDto;
 }
 
-export class OutstandingPatientDto {
+export class MoneyFlowReportDto extends OutstandingFlowDto {
+  @ApiProperty({ example: '2026-11-01' })
+  from: string;
+
+  @ApiProperty({ example: '2026-11-30' })
+  to: string;
+}
+
+export class TransactionInvoiceDto {
   @ApiProperty({ format: 'uuid' })
   id: string;
 
-  @ApiProperty({ example: 'Ahmed Hassan' })
-  name: string;
-
-  @ApiProperty({ example: '+201012345678' })
-  phone: string;
+  @ApiProperty({ example: 'INV-2026-000123' })
+  invoiceNumber: string;
 }
 
-export class OutstandingRowDto {
-  @ApiProperty({ type: OutstandingPatientDto })
-  patient: OutstandingPatientDto;
+export class TransactionRowDto {
+  @ApiProperty({ enum: TransactionKind })
+  kind: TransactionKind;
 
-  @ApiProperty(MONEY('450.00'))
-  balance: string;
+  @ApiProperty({ format: 'uuid', description: 'The payment or expense id' })
+  id: string;
 
   @ApiProperty({
-    example: '2026-11-03',
-    description: 'Clinic local date of the oldest unpaid invoice',
+    example: 'RCPT-2026-000045',
+    description: 'Receipt number (payment, refund) or expense number',
   })
-  oldestUnpaidInvoiceDate: string;
+  number: string;
+
+  @ApiProperty({
+    example: '2026-11-05',
+    description:
+      'Clinic local date it counts on: received (payment, refund) or the expense date',
+  })
+  date: string;
+
+  @ApiProperty({
+    example: '2026-11-05T10:15:00+02:00',
+    description: 'When it was recorded',
+  })
+  recordedAt: string;
+
+  @ApiProperty({ enum: ['CASH', 'CARD', 'WALLET', 'INSTAPAY'] })
+  method: string;
+
+  @ApiProperty(MONEY('300.00', 'Always positive; `kind` gives the direction'))
+  amount: string;
+
+  @ApiPropertyOptional({ type: NamedRefDto, nullable: true })
+  patient: NamedRefDto | null;
+
+  @ApiPropertyOptional({ type: TransactionInvoiceDto, nullable: true })
+  invoice: TransactionInvoiceDto | null;
+
+  @ApiPropertyOptional({
+    enum: ExpenseOrigin,
+    nullable: true,
+    description: 'EXPENSE only: what it pays for',
+  })
+  expenseOrigin: ExpenseOrigin | null;
+
+  @ApiPropertyOptional({ type: NamedRefDto, nullable: true })
+  category: NamedRefDto | null;
+
+  @ApiPropertyOptional({ example: 'Salary 2026-10: Dr. Mona', nullable: true })
+  description: string | null;
+
+  @ApiPropertyOptional({
+    example: 'Dr. Mona Adel',
+    nullable: true,
+    description: 'EXPENSE only: who was paid',
+  })
+  payee: string | null;
+
+  @ApiPropertyOptional({
+    example: 'Partial refund',
+    nullable: true,
+    description: 'REFUND only',
+  })
+  reason: string | null;
+
+  @ApiProperty({ type: NamedRefDto })
+  recordedBy: NamedRefDto;
+}
+
+export class CountTotalDto {
+  @ApiProperty({ example: 3 })
+  count: number;
+
+  @ApiProperty(MONEY('750.00'))
+  total: string;
+}
+
+export class TransactionTotalsDto {
+  @ApiProperty({ type: CountTotalDto })
+  payments: CountTotalDto;
+
+  @ApiProperty({ type: CountTotalDto })
+  refunds: CountTotalDto;
+
+  @ApiProperty({
+    type: CountTotalDto,
+    description: 'Every expense, salary payments and referral payouts included',
+  })
+  expenses: CountTotalDto;
+
+  @ApiProperty({ type: CountTotalDto, description: 'Of `expenses`' })
+  salaryPayments: CountTotalDto;
+
+  @ApiProperty({ type: CountTotalDto, description: 'Of `expenses`' })
+  commissionPayouts: CountTotalDto;
+
+  @ApiProperty(MONEY('2100.00', 'payments - refunds - expenses'))
+  net: string;
+}
+
+export class TransactionListDto {
+  @ApiProperty({ type: [TransactionRowDto] })
+  items: TransactionRowDto[];
+
+  @ApiProperty({ type: PaginationMetaDto })
+  meta: PaginationMetaDto;
+
+  @ApiProperty({ example: '2026-11-01' })
+  from: string;
+
+  @ApiProperty({ example: '2026-11-30' })
+  to: string;
+
+  @ApiProperty({
+    type: TransactionTotalsDto,
+    description: 'The whole range, every kind (all pages)',
+  })
+  totals: TransactionTotalsDto;
 }

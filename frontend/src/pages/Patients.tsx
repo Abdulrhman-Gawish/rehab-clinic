@@ -39,7 +39,7 @@ export function Patients() {
       <div className="stack-lg">
         <Card>
           <form className="input-group" role="search" onSubmit={submit}>
-            <SearchInput placeholder={t.patients.searchPh} aria-label={t.patients.searchPh} value={search} onChange={(e) => setSearch(e.target.value)} />
+            <SearchInput placeholder={t.checkIn.searchPh} aria-label={t.checkIn.searchPh} value={search} onChange={(e) => setSearch(e.target.value)} />
             <Button type="submit" variant="primary" icon="search">{t.common.search}</Button>
           </form>
         </Card>
@@ -53,7 +53,7 @@ export function Patients() {
               >
                 {res?.items.map((p: any) => (
                   <tr key={p.id}>
-                    <td><Person name={p.name} to={`/patients/${p.id}`} size={32} /></td>
+                    <td><Person name={p.name} meta={p.patientCode && <Ltr>{p.patientCode}</Ltr>} to={`/patients/${p.id}`} size={32} /></td>
                     <td className="nowrap"><Ltr>{p.phone}</Ltr></td>
                     <td><StatusBadge kind="PatientSource" value={p.createdSource} /></td>
                     <td className="nowrap tabular">{fmtDateTime(p.createdAt)}</td>

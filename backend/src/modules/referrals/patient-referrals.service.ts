@@ -100,68 +100,11 @@ export class PatientReferralsService {
     dto: AssignReferralDto,
     actor: Actor,
   ): Promise<PatientReferralDto> {
-    const input = this.normalize(dto);
     let id: string;
     try {
-      id = await this.dataSource.transaction(async (manager) => {
-        if (!(await manager.existsBy(Patient, { id: patientId }))) {
-          throw new NotFoundException('Patient not found');
-        }
-        const doctor = await manager.findOneBy(ReferringDoctor, {
-          id: dto.referringDoctorId,
-        });
-        if (!doctor) throw new NotFoundException('Referring doctor not found');
-        if (!doctor.isActive) {
-          throw unprocessable(
-            ErrorCode.REFERRING_DOCTOR_INACTIVE,
-            'This referring doctor is inactive',
-          );
-        }
-        const repository = manager.getRepository(PatientReferral);
-        // uq_patient_referrals_active: one active referral per patient.
-        const referral = await repository.save(
-          repository.create({
-            patientId,
-            referringDoctorId: doctor.id,
-            status: PatientReferralStatus.ACTIVE,
-            assignedById: actor.userId as string,
-            assignedAt: this.time.now(),
-            endedAt: null,
-            endedById: null,
-            endReason: null,
-          }),
-        );
-        const terms = await this.insertTerms(
-          manager,
-          referral,
-          1,
-          input,
-          actor,
-        );
-        await this.sources.ensureChannel(
-          manager,
-          patientId,
-          AcquisitionChannel.DOCTOR_REFERRAL,
-          doctor.name,
-          dto.primarySource ?? false,
-          actor,
-        );
-        await this.audit(
-          manager,
-          actor,
-          AuditAction.PATIENT_REFERRAL_ASSIGNED,
-          referral.id,
-          {
-            newValues: {
-              patientId,
-              referringDoctorId: doctor.id,
-              referringDoctor: doctor.name,
-              ...this.termsValues(terms),
-            },
-          },
-        );
-        return referral.id;
-      });
+      id = await this.dataSource.transaction((manager) =>
+        this.assignWith(manager, patientId, dto, actor),
+      );
     } catch (error) {
       if (isUniqueViolation(error, ACTIVE_REFERRAL_UNIQUE)) {
         throw conflict(
@@ -172,6 +115,83 @@ export class PatientReferralsService {
       throw error;
     }
     return this.findOne(id);
+  }
+
+  /**
+   * The referral, its first terms version and the DOCTOR_REFERRAL source,
+   * in the caller's transaction (assign above; check-in, before the visit's
+   * invoice, so that invoice is covered). Returns the referral id.
+   */
+  async assignWith(
+    manager: EntityManager,
+    patientId: string,
+    dto: AssignReferralDto,
+    actor: Actor,
+  ): Promise<string> {
+    const input = this.normalize(dto);
+    if (!(await manager.existsBy(Patient, { id: patientId }))) {
+      throw new NotFoundException('Patient not found');
+    }
+    // Friendly answer; uq_patient_referrals_active is the guarantee.
+    if (
+      await manager.existsBy(PatientReferral, {
+        patientId,
+        status: PatientReferralStatus.ACTIVE,
+      })
+    ) {
+      throw conflict(
+        ErrorCode.REFERRAL_ALREADY_ACTIVE,
+        'The patient already has an active referral; end it first',
+      );
+    }
+    const doctor = await manager.findOneBy(ReferringDoctor, {
+      id: dto.referringDoctorId,
+    });
+    if (!doctor) throw new NotFoundException('Referring doctor not found');
+    if (!doctor.isActive) {
+      throw unprocessable(
+        ErrorCode.REFERRING_DOCTOR_INACTIVE,
+        'This referring doctor is inactive',
+      );
+    }
+    const repository = manager.getRepository(PatientReferral);
+    // uq_patient_referrals_active: one active referral per patient.
+    const referral = await repository.save(
+      repository.create({
+        patientId,
+        referringDoctorId: doctor.id,
+        status: PatientReferralStatus.ACTIVE,
+        assignedById: actor.userId as string,
+        assignedAt: this.time.now(),
+        endedAt: null,
+        endedById: null,
+        endReason: null,
+      }),
+    );
+    const terms = await this.insertTerms(manager, referral, 1, input, actor);
+    await this.sources.ensureChannel(
+      manager,
+      patientId,
+      AcquisitionChannel.DOCTOR_REFERRAL,
+      doctor.name,
+      dto.primarySource ?? false,
+      actor,
+    );
+    await this.audit(
+      manager,
+      actor,
+      AuditAction.PATIENT_REFERRAL_ASSIGNED,
+      referral.id,
+      {
+        newValues: {
+          patientId,
+          referringDoctorId: doctor.id,
+          referringDoctor: doctor.name,
+          ...this.termsValues(terms),
+        },
+      },
+    );
+    return referral.id;
   }
 
   /**

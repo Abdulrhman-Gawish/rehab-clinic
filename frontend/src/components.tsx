@@ -1,13 +1,14 @@
 // Domain pickers shared by several areas (desk booking, day list, owner services and packages), the paged-list hook,
 // and the invoice replacement (correct / create invoice) used by the invoice page and the day list.
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { act, get, notify, post, qs } from './api';
 import { fmtDate, fmtMoney, fmtNumber, fmtPercent, fmtTime, fmtWeekday } from './format';
 import { label, msg, useI18n } from './i18n';
-import { addDays, dayOfWeek, todayCairo } from './time';
+import { addDays, cairoWall, dayOfWeek, todayCairo } from './time';
+import { APPOINTMENT_TYPES, type AppointmentType } from './noteFields';
 import {
   Alert, askReason, Badge, Card, Checkbox, confirmAction, EmptyState, Field, FilterChip, IconButton, Input, Pagination, Select,
-  Button, Loading, Totals, TotalsRow,
+  Button, Loading, Segmented, StatusBadge, Totals, TotalsRow,
 } from './ui';
 import { Ltr, useLoad } from './util';
 
@@ -18,6 +19,31 @@ export interface Doctor {
 
 export function useDoctors(activeOnly = true) {
   return useLoad(() => get<{ items: Doctor[] }>(`/doctors${qs({ limit: 100, isActive: activeOnly ? true : undefined })}`).then((r) => r.items), []);
+}
+
+/**
+ * The appointment type (examination / follow-up / session): required, with no default ('' = nothing chosen yet).
+ * Used by the public booking, the desk booking and walk-in forms, and the change-type dialog.
+ */
+export function AppointmentTypePicker({ value, onChange, label: fieldLabel, hint }: {
+  value: string; onChange: (type: AppointmentType) => void; label?: string; hint?: ReactNode;
+}) {
+  const { t } = useI18n();
+  return (
+    <Field group label={fieldLabel ?? t.apptType.label} hint={hint}>
+      <Segmented
+        block label={fieldLabel ?? t.apptType.label} value={value as AppointmentType} onChange={onChange}
+        options={APPOINTMENT_TYPES.map((type) => ({ value: type, label: label(t.enums.AppointmentType, type) }))}
+      />
+    </Field>
+  );
+}
+
+/** The type as a badge; "Type not set" for appointments booked before types existed. */
+export function TypeBadge({ type }: { type: string | null | undefined }) {
+  const { t } = useI18n();
+  if (!type) return <Badge tone="outline">{t.apptType.notSet}</Badge>;
+  return <StatusBadge kind="AppointmentType" value={type} dot={false} />;
 }
 
 /** Doctor select + service select (services of that doctor), side by side from sm. */
@@ -69,12 +95,20 @@ export function DoctorPicker({ value, onChange, allLabel }: { value: DoctorChoic
   );
 }
 
-/** Staff slot picker. With `outside`, the whole day is listed, past dates and times included (back to BACKDATE_MAX_DAYS). */
-export function SlotPicker({ doctorId, serviceId, outside, value, onPick }: {
+/**
+ * Staff slot picker. With `outside`, the whole day is listed, past dates and times included (back to BACKDATE_MAX_DAYS).
+ * `initialDate` / `preferTime` (HH:MM, from a free slot clicked on the desk calendar): that day is shown, and that
+ * time is picked once it is listed as free, unless the user has picked or changed the day first.
+ */
+export function SlotPicker({ doctorId, serviceId, outside, value, onPick, initialDate, preferTime }: {
   doctorId: string; serviceId: string; outside: boolean; value: string; onPick: (startAt: string) => void;
+  initialDate?: string; preferTime?: string;
 }) {
   const { t } = useI18n();
-  const [date, setDate] = useState(todayCairo());
+  const [date, setDateState] = useState(initialDate || todayCairo());
+  const preferred = useRef(preferTime);
+  const setDate = (d: string) => { preferred.current = undefined; setDateState(d); };
+  const pick = (startAt: string) => { preferred.current = undefined; onPick(startAt); };
   const ready = !!(doctorId && serviceId && date);
   const [slots, , loading] = useLoad(
     () => (ready
@@ -82,6 +116,14 @@ export function SlotPicker({ doctorId, serviceId, outside, value, onPick }: {
       : Promise.resolve([])),
     [doctorId, serviceId, date, outside],
   );
+  useEffect(() => {
+    const want = preferred.current;
+    if (!want || value || !slots?.length) return;
+    const [h, m] = want.split(':').map(Number);
+    const slot = slots.find((s) => { const w = cairoWall(s.startAt); return w.date === date && w.minutes === h * 60 + m; });
+    if (slot) pick(slot.startAt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slots]);
   const move = (days: number) => setDate(addDays(date, days));
   return (
     <div className="stack">
@@ -99,7 +141,7 @@ export function SlotPicker({ doctorId, serviceId, outside, value, onPick }: {
         : (
           <div className="slots" role="group" aria-label={t.common.date}>
             {slots?.map((s) => (
-              <button type="button" key={s.startAt} className="slot" aria-pressed={value === s.startAt} onClick={() => onPick(s.startAt)}>
+              <button type="button" key={s.startAt} className="slot" aria-pressed={value === s.startAt} onClick={() => pick(s.startAt)}>
                 {fmtTime(s.startAt)}
               </button>
             ))}

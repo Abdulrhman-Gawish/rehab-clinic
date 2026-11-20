@@ -18,6 +18,7 @@ import {
 } from '../../common/utils/money.util.js';
 import type { EnvironmentVariables } from '../../config/env.validation.js';
 import { Expense, ExpenseStatus } from '../expenses/entities/expense.entity.js';
+import { OutstandingService } from '../outstanding/outstanding.service.js';
 import { VisitStatus } from '../visits/visit.enums.js';
 import {
   InvoiceStatus,
@@ -39,6 +40,10 @@ import { toInvoiceSummary } from './invoice.mapper.js';
 // The expense `id` records a referral payout.
 export const PAYOUT_EXPENSE = (id: string) =>
   `EXISTS (SELECT 1 FROM referral_payouts rp WHERE rp.expense_id = ${id})`;
+
+// The expense `id` records a salary payment to one of the clinic's doctors.
+export const SALARY_EXPENSE = (id: string) =>
+  `EXISTS (SELECT 1 FROM doctor_salary_payments sp WHERE sp.expense_id = ${id})`;
 
 export interface DayRange {
   date: string;
@@ -74,6 +79,7 @@ export class BillingReportsService {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly time: ClinicTimeService,
+    private readonly outstanding: OutstandingService,
     config: ConfigService<EnvironmentVariables, true>,
   ) {
     this.overdueDays = config.get('BILLING_OVERDUE_DAYS', { infer: true });
@@ -132,9 +138,11 @@ export class BillingReportsService {
   /**
    * Cash-desk totals for one clinic local day (23/24/25 h with DST).
    * expectedCash = cash payments - cash refunds - cash expenses. A payout
-   * to a referring doctor is an expense, so it is in `expenses` (and so in
-   * expectedCash when paid in cash) exactly once; `commissionPayouts`
-   * shows that part.
+   * to a referring doctor or a doctor's salary payment is an expense, so it
+   * is in `expenses` (and so in expectedCash when paid in cash) exactly
+   * once; `commissionPayouts` and `salaryPayments` show those parts.
+   * `outstanding` is what was owed at the start and at the end of the day,
+   * and what moved it (what the clinic owes: OWNER only).
    */
   async dailySummary(
     date: string | undefined,
@@ -153,7 +161,8 @@ export class BillingReportsService {
     const payments = await this.paymentTotals(PaymentType.PAYMENT, range);
     const refunds = await this.paymentTotals(PaymentType.REFUND, range);
     const expenses = await this.expenseTotals(range);
-    const commissionPayouts = await this.expenseTotals(range, true);
+    const commissionPayouts = await this.expenseTotals(range, PAYOUT_EXPENSE);
+    const salaryPayments = await this.expenseTotals(range, SALARY_EXPENSE);
 
     return {
       date: day,
@@ -165,18 +174,24 @@ export class BillingReportsService {
       discounts: await this.discountTotals(range),
       expenses,
       commissionPayouts,
+      salaryPayments,
       expectedCash: subMoney(
         subMoney(payments.byMethod.CASH, refunds.byMethod.CASH),
         expenses.byMethod.CASH,
       ),
+      outstanding: await this.outstanding.flow(
+        day,
+        day,
+        actor.role === UserRole.OWNER,
+      ),
     };
   }
 
-  // Valid expenses dated on that local day (or only the referral payouts'),
-  // by payment method.
+  // Valid expenses dated on that local day (or only those that `part`
+  // matches: PAYOUT_EXPENSE, SALARY_EXPENSE), by payment method.
   private async expenseTotals(
     range: DayRange,
-    payoutsOnly = false,
+    part?: (id: string) => string,
   ): Promise<MoneyTotalsDto> {
     const qb = this.dataSource
       .getRepository(Expense)
@@ -187,7 +202,7 @@ export class BillingReportsService {
       .where('expense.status = :valid', { valid: ExpenseStatus.VALID })
       .andWhere('expense.expenseDate = :date', { date: range.date })
       .groupBy('expense.paymentMethod');
-    if (payoutsOnly) qb.andWhere(PAYOUT_EXPENSE('expense.id'));
+    if (part) qb.andWhere(part('expense.id'));
     return totalsFromRows(await qb.getRawMany<MethodRow>());
   }
 
@@ -234,7 +249,9 @@ export class BillingReportsService {
     };
   }
 
-  // Discounts applied during the day that are still active, on live invoices.
+  // Discounts applied during the day and still in effect at its end, on
+  // invoices not cancelled by then: removing or replacing a discount, or
+  // cancelling its invoice, on a later day never changes this day.
   private async discountTotals(
     range: DayRange,
   ): Promise<DailySummaryDto['discounts']> {
@@ -252,10 +269,13 @@ export class BillingReportsService {
       .addSelect('user.name', 'name')
       .addSelect('COUNT(*)', 'count')
       .addSelect('SUM(discount.amount)', 'amount')
-      .where('discount.removedAt IS NULL')
-      .andWhere('invoice.status <> :cancelled', {
-        cancelled: InvoiceStatus.CANCELLED,
+      .where('(discount.removedAt IS NULL OR discount.removedAt >= :end)', {
+        end: range.end,
       })
+      .andWhere(
+        '(invoice.status <> :cancelled OR invoice.cancelledAt >= :end)',
+        { cancelled: InvoiceStatus.CANCELLED, end: range.end },
+      )
       .andWhere(
         'discount.appliedAt >= :start AND discount.appliedAt < :end',
         range,

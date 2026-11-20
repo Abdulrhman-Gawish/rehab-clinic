@@ -39,6 +39,7 @@ const NAV: { group: Group; items: NavItem[] }[] = [
       { to: '/owner/users', label: (t) => t.nav.users, icon: 'id-card', roles: ['OWNER'] },
       { to: '/owner/doctors', label: (t) => t.nav.doctors, icon: 'stethoscope', roles: ['OWNER'] },
       { to: '/owner/services', label: (t) => t.nav.services, icon: 'package', roles: ['OWNER'] },
+      { to: '/owner/salaries', label: (t) => t.nav.salaries, icon: 'wallet', roles: ['OWNER'] },
       { to: '/owner/referring-doctors', label: (t) => t.nav.referringDoctors, icon: 'share', roles: ['OWNER'] },
     ],
   },
