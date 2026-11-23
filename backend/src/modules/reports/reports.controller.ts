@@ -92,7 +92,7 @@ export class ReportsController {
     summary:
       'What is owed at the start and end of the range, and what moved it',
     description:
-      'Patients owe: opening + invoiced - cancelled - payments + refunds = closing. Clinic owes: opening + salariesEarned + commissionsEarned - salaryPayments - commissionPayouts + advancesChange = closing. One day = that day’s daily summary.',
+      'Patients owe: opening + invoiced - cancelled - payments + refunds = closing. Clinic owes: opening + salariesEarned + salaryAdjustments + employeeSalariesEarned + commissionsEarned - salaryPayments - employeeSalaryPayments - commissionPayouts + advancesChange = closing. One day = that day’s daily summary.',
   })
   @ApiOkResponse({ type: MoneyFlowReportDto })
   moneyFlow(@Query() query: ReportRangeQueryDto): Promise<MoneyFlowReportDto> {
@@ -130,9 +130,10 @@ export class ReportsController {
   @Get('clinic-owes')
   @Auth(UserRole.OWNER)
   @ApiOperation({
-    summary: 'What the clinic owes its doctors at the end of a day',
+    summary:
+      'What the clinic owes its doctors and employees at the end of a day',
     description:
-      'Salaries per doctor and month (fixed salary due on the month’s last day, commissions from the session day) and referral commissions per referring doctor, minus payments dated by then.',
+      'Salaries per doctor and month (fixed salary due on the month’s last day, commissions from the session day), salaries per employee and month (fixed salary due on the month’s last day) and referral commissions per referring doctor, minus payments dated by then.',
   })
   @ApiOkResponse({ type: ClinicOwesReportDto })
   clinicOwes(@Query() query: AsOfQueryDto): Promise<ClinicOwesReportDto> {

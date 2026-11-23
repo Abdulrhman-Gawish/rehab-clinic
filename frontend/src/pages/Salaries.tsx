@@ -1,6 +1,7 @@
-// OWNER: salaries of the clinic's doctors. A month's overview of every doctor; then one doctor (picked from the list
-// or the dropdown): the terms in effect (fixed salary + commission per session or per service, versioned by month),
-// the month's statement (computed by the API from attended sessions) and the payments (each also an expense).
+// OWNER: salaries of the clinic's staff, for a month. Doctors (the default): a month's overview of every doctor; then
+// one doctor (picked from the list or the dropdown): the terms in effect (fixed salary + commission per session or per
+// service, versioned by month), the month's statement (computed by the API from attended sessions) and the payments
+// (each also an expense). Employees (?staff=employees): the same with a fixed monthly salary only.
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { act, get, PAYMENT_METHODS, post, put, qs } from '../api';
@@ -9,13 +10,14 @@ import { fmtDate, fmtDateTime, fmtMoney, fmtMonth, fmtNumber } from '../format';
 import { label, useI18n } from '../i18n';
 import { todayCairo } from '../time';
 import {
-  askReason, Badge, Button, Card, CellText, Dialog, EmptyState, Field, IconButton, Input, Loading, NumberInput, PageHeader,
-  Segmented, Select, StatusBadge, Table, Totals, TotalsRow,
+  askReason, Badge, Button, ButtonLink, Card, CellText, Dialog, EmptyState, Field, IconButton, Input, Loading, NumberInput,
+  PageHeader, Segmented, Select, StatusBadge, Table, Totals, TotalsRow,
 } from '../ui';
 import { Ltr, opt, useLoad } from '../util';
 import { RateInput, rateText, type RateForm } from './PatientReferral';
 import '../styles/areas/owner.css';
 
+type Staff = 'doctors' | 'employees';
 type Mode = 'NONE' | 'PER_SESSION' | 'PER_SERVICE';
 interface Rate { type: 'FIXED' | 'PERCENT'; value: string }
 interface Terms {
@@ -39,6 +41,13 @@ interface OverviewRow {
   doctor: { id: string; name: string }; isActive: boolean; commissionMode: Mode | null; hasTerms: boolean; fixedSalary: string;
   sessionCount: number; commissionTotal: string; earned: string; paid: string; remaining: string;
 }
+interface EmployeeRef { id: string; name: string; jobTitle: string }
+interface EmployeeTerms { id: string; effectiveMonth: string; fixedSalary: string; setBy: { name: string }; setAt: string }
+interface EmployeeStatement {
+  employee: EmployeeRef; month: string; terms: EmployeeTerms | null; fixedSalary: string; paid: string; remaining: string;
+  payments: Payment[];
+}
+interface EmployeeRow { employee: EmployeeRef; isActive: boolean; hasTerms: boolean; fixedSalary: string; paid: string; remaining: string }
 
 const thisMonth = () => todayCairo().slice(0, 7);
 function addMonths(month: string, n: number): string {
@@ -62,18 +71,36 @@ export function Salaries() {
   const { t } = useI18n();
   const ts = t.salaries;
   const [params, setParams] = useSearchParams();
+  const staff: Staff = params.get('staff') === 'employees' ? 'employees' : 'doctors';
   const month = isMonth(params.get('month')) ? params.get('month')! : thisMonth();
   const doctorId = params.get('doctor') ?? '';
-  const go = (next: { month?: string; doctor?: string }) => {
+  const employeeId = params.get('employee') ?? '';
+  // Another month keeps the person; switching staff goes back to its overview.
+  const go = (next: { month?: string; doctor?: string; employee?: string; staff?: Staff }) => {
     const p = new URLSearchParams();
     p.set('month', next.month ?? month);
-    const d = next.doctor ?? doctorId;
-    if (d) p.set('doctor', d);
+    const s = next.staff ?? staff;
+    const switching = next.staff !== undefined && next.staff !== staff;
+    if (s === 'employees') {
+      p.set('staff', 'employees');
+      const e = switching ? '' : (next.employee ?? employeeId);
+      if (e) p.set('employee', e);
+    } else {
+      const d = switching ? '' : (next.doctor ?? doctorId);
+      if (d) p.set('doctor', d);
+    }
     setParams(p);
   };
   const [tick, setTick] = useState(0);
   const refresh = () => setTick((n) => n + 1);
-  const [rows] = useLoad(() => get<OverviewRow[]>(`/doctor-salaries${qs({ month })}`), [month, tick]);
+  const [rows] = useLoad(
+    () => (staff === 'doctors' ? get<OverviewRow[]>(`/doctor-salaries${qs({ month })}`) : Promise.resolve(undefined)),
+    [staff, month, tick],
+  );
+  const [employeeRows] = useLoad(
+    () => (staff === 'employees' ? get<EmployeeRow[]>(`/employee-salaries${qs({ month })}`) : Promise.resolve(undefined)),
+    [staff, month, tick],
+  );
 
   return (
     <>
@@ -89,18 +116,42 @@ export function Salaries() {
                 <Button disabled={month === thisMonth()} onClick={() => go({ month: thisMonth() })}>{ts.thisMonth}</Button>
               </div>
             </Field>
-            <Field label={ts.doctor} className="salary-toolbar__doctor">
-              <Select value={doctorId} onChange={(e) => go({ doctor: e.target.value })}>
-                <option value="">{ts.allDoctors}</option>
-                {rows?.map((r) => <option key={r.doctor.id} value={r.doctor.id}>{r.doctor.name}</option>)}
-              </Select>
+            <Field group label={ts.staffLabel}>
+              <Segmented
+                label={ts.staffLabel} value={staff} onChange={(s) => go({ staff: s })}
+                options={(['doctors', 'employees'] as Staff[]).map((s) => ({
+                  value: s, label: ts.staff[s], icon: s === 'doctors' ? 'stethoscope' : 'briefcase-medical',
+                }))}
+              />
             </Field>
+            {staff === 'doctors' ? (
+              <Field label={ts.doctor} className="salary-toolbar__doctor">
+                <Select value={doctorId} onChange={(e) => go({ doctor: e.target.value })}>
+                  <option value="">{ts.allDoctors}</option>
+                  {rows?.map((r) => <option key={r.doctor.id} value={r.doctor.id}>{r.doctor.name}</option>)}
+                </Select>
+              </Field>
+            ) : (
+              <>
+                <Field label={ts.employee} className="salary-toolbar__doctor">
+                  <Select value={employeeId} onChange={(e) => go({ employee: e.target.value })}>
+                    <option value="">{ts.allEmployees}</option>
+                    {employeeRows?.map((r) => <option key={r.employee.id} value={r.employee.id}>{r.employee.name}</option>)}
+                  </Select>
+                </Field>
+                <ButtonLink to="/owner/employees" icon="briefcase-medical">{ts.manageEmployees}</ButtonLink>
+              </>
+            )}
           </div>
         </Card>
 
-        {doctorId
-          ? <DoctorSalary key={doctorId} doctorId={doctorId} month={month} tick={tick} onChange={refresh} />
-          : <Overview rows={rows} month={month} onOpen={(id) => go({ doctor: id })} />}
+        {staff === 'doctors'
+          ? (doctorId
+            ? <DoctorSalary key={doctorId} doctorId={doctorId} month={month} tick={tick} onChange={refresh} />
+            : <Overview rows={rows} month={month} onOpen={(id) => go({ doctor: id })} />)
+          : (employeeId
+            ? <EmployeeSalary key={employeeId} employeeId={employeeId} month={month} tick={tick} onChange={refresh} />
+            : <EmployeeOverview rows={employeeRows} month={month} onOpen={(id) => go({ employee: id })} />)}
       </div>
     </>
   );
@@ -168,10 +219,6 @@ function DoctorSalary({ doctorId, month, tick, onChange }: { doctorId: string; m
   if (!s || s.doctor.id !== doctorId) return <Loading />;
   const terms = s.terms;
   const canPay = month <= thisMonth();
-  const voidPayment = async (p: Payment) => {
-    const reason = await askReason({ title: ts.voidTitle, label: ts.voidLabel, tone: 'danger', confirmLabel: ts.void, message: `${fmtMoney(p.amount)} · ${fmtDate(p.paymentDate)}` });
-    if (reason && await act(() => post(`/doctor-salaries/payments/${p.id}/void`, { reason }), ts.paymentVoided)) onChange();
-  };
   const older = (versions ?? []).filter((v) => v.id !== terms?.id);
 
   return (
@@ -247,34 +294,7 @@ function DoctorSalary({ doctorId, month, tick, onChange }: { doctorId: string; m
         </Table>
       </Card>
 
-      <Card flush title={ts.payments} icon="banknote">
-        <Table
-          caption={ts.payments}
-          head={<>
-            <th>{c.date}</th><th className="num">{c.amount}</th><th>{c.method}</th><th>{c.expense}</th><th>{c.status}</th>
-            <th className="actions"><span className="visually-hidden">{t.ui.actions}</span></th>
-          </>}
-          isEmpty={s.payments.length === 0}
-          empty={<EmptyState compact icon="banknote" title={ts.noPayments} />}
-        >
-          {s.payments.map((p) => (
-            <tr key={p.id} className={p.status === 'VALID' ? undefined : 'is-muted'}>
-              <td><CellText sub={<>{ts.recorded(fmtDateTime(p.paidAt), p.paidBy.name)}{p.notes && ` · ${p.notes}`}</>}>{fmtDate(p.paymentDate)}</CellText></td>
-              <td className="num"><strong>{fmtMoney(p.amount)}</strong></td>
-              <td><CellText sub={p.reference && <bdi>{p.reference}</bdi>}>{label(t.enums.PaymentMethod, p.method)}</CellText></td>
-              <td><Ltr>{p.expense.expenseNumber}</Ltr></td>
-              <td>
-                <CellText sub={p.voidReason && ts.voidedBy(p.voidedBy?.name ?? '', p.voidReason)}>
-                  <StatusBadge kind="PaymentStatus" value={p.status} />
-                </CellText>
-              </td>
-              <td className="actions">
-                {p.status === 'VALID' && <Button size="sm" variant="danger-outline" icon="ban" onClick={() => voidPayment(p)}>{ts.void}</Button>}
-              </td>
-            </tr>
-          ))}
-        </Table>
-      </Card>
+      <PaymentsCard payments={s.payments} voidBase="/doctor-salaries/payments" onChange={onChange} />
 
       {editing && (
         <TermsDialog
@@ -284,11 +304,52 @@ function DoctorSalary({ doctorId, month, tick, onChange }: { doctorId: string; m
       )}
       {paying && (
         <PaymentDialog
-          doctorId={doctorId} doctorName={s.doctor.name} month={month} remaining={s.remaining}
+          path={`/doctors/${doctorId}/salary/payments`} name={s.doctor.name} month={month} remaining={s.remaining}
           onClose={() => setPaying(false)} onSaved={() => { setPaying(false); onChange(); }}
         />
       )}
     </>
+  );
+}
+
+/** A statement's payments (voided ones too, muted), each with its expense; a valid one can be voided. */
+function PaymentsCard({ payments, voidBase, onChange }: { payments: Payment[]; voidBase: string; onChange: () => void }) {
+  const { t } = useI18n();
+  const ts = t.salaries;
+  const c = ts.col;
+  const voidPayment = async (p: Payment) => {
+    const reason = await askReason({ title: ts.voidTitle, label: ts.voidLabel, tone: 'danger', confirmLabel: ts.void, message: `${fmtMoney(p.amount)} · ${fmtDate(p.paymentDate)}` });
+    if (reason && await act(() => post(`${voidBase}/${p.id}/void`, { reason }), ts.paymentVoided)) onChange();
+  };
+  return (
+    <Card flush title={ts.payments} icon="banknote">
+      <Table
+        caption={ts.payments}
+        head={<>
+          <th>{c.date}</th><th className="num">{c.amount}</th><th>{c.method}</th><th>{c.expense}</th><th>{c.status}</th>
+          <th className="actions"><span className="visually-hidden">{t.ui.actions}</span></th>
+        </>}
+        isEmpty={payments.length === 0}
+        empty={<EmptyState compact icon="banknote" title={ts.noPayments} />}
+      >
+        {payments.map((p) => (
+          <tr key={p.id} className={p.status === 'VALID' ? undefined : 'is-muted'}>
+            <td><CellText sub={<>{ts.recorded(fmtDateTime(p.paidAt), p.paidBy.name)}{p.notes && ` · ${p.notes}`}</>}>{fmtDate(p.paymentDate)}</CellText></td>
+            <td className="num"><strong>{fmtMoney(p.amount)}</strong></td>
+            <td><CellText sub={p.reference && <bdi>{p.reference}</bdi>}>{label(t.enums.PaymentMethod, p.method)}</CellText></td>
+            <td><Ltr>{p.expense.expenseNumber}</Ltr></td>
+            <td>
+              <CellText sub={p.voidReason && ts.voidedBy(p.voidedBy?.name ?? '', p.voidReason)}>
+                <StatusBadge kind="PaymentStatus" value={p.status} />
+              </CellText>
+            </td>
+            <td className="actions">
+              {p.status === 'VALID' && <Button size="sm" variant="danger-outline" icon="ban" onClick={() => voidPayment(p)}>{ts.void}</Button>}
+            </td>
+          </tr>
+        ))}
+      </Table>
+    </Card>
   );
 }
 
@@ -386,9 +447,9 @@ function TermsDialog({ doctorId, doctorName, month, current, onClose, onSaved }:
   );
 }
 
-/** A payment for the month: any amount (advances and parts allowed), also recorded as an expense. */
-function PaymentDialog({ doctorId, doctorName, month, remaining, onClose, onSaved }: {
-  doctorId: string; doctorName: string; month: string; remaining: string; onClose: () => void; onSaved: () => void;
+/** A payment for the month: any amount (advances and parts allowed), also recorded as an expense. POSTed to `path`. */
+function PaymentDialog({ path, name, month, remaining, onClose, onSaved }: {
+  path: string; name: string; month: string; remaining: string; onClose: () => void; onSaved: () => void;
 }) {
   const { t } = useI18n();
   const ts = t.salaries;
@@ -399,7 +460,7 @@ function PaymentDialog({ doctorId, doctorName, month, remaining, onClose, onSave
   const amount = form.amount.trim();
   const valid = amount !== '' && Number(amount) > 0 && !!form.paymentDate && form.paymentDate <= today;
   const save = async () => {
-    const ok = await act(() => post(`/doctors/${doctorId}/salary/payments`, {
+    const ok = await act(() => post(path, {
       month, amount: Number(amount).toFixed(2), paymentDate: form.paymentDate, method: form.method,
       reference: opt(form.reference), notes: opt(form.notes),
     }), ts.paymentRecorded);
@@ -407,7 +468,7 @@ function PaymentDialog({ doctorId, doctorName, month, remaining, onClose, onSave
   };
   return (
     <Dialog
-      open onClose={onClose} title={ts.recordPayment} description={ts.paymentFor(doctorName, fmtMonth(month))}
+      open onClose={onClose} title={ts.recordPayment} description={ts.paymentFor(name, fmtMonth(month))}
       footer={<>
         <Button variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
         <Button variant="primary" icon="banknote" disabled={!valid} onClick={save}>{valid ? ts.pay(fmtMoney(amount)) : ts.recordPayment}</Button>
@@ -428,6 +489,159 @@ function PaymentDialog({ doctorId, doctorName, month, remaining, onClose, onSave
         </div>
         <Field label={ts.reference} optional><Input value={form.reference} onChange={set('reference')} /></Field>
         <Field label={ts.notes} optional><Input value={form.notes} onChange={set('notes')} /></Field>
+      </div>
+    </Dialog>
+  );
+}
+
+// ---------- Employees (fixed monthly salary) ----------
+
+function EmployeeOverview({ rows, month, onOpen }: { rows: EmployeeRow[] | undefined; month: string; onOpen: (id: string) => void }) {
+  const { t } = useI18n();
+  const ts = t.salaries;
+  const c = ts.ecol;
+  if (!rows) return <Loading />;
+  return (
+    <Card flush title={`${ts.overview} · ${fmtMonth(month)}`} icon="briefcase-medical" description={ts.employeeOverviewHint}>
+      <Table
+        caption={ts.overview}
+        head={<>
+          <th>{c.employee}</th><th className="num">{c.salary}</th><th className="num">{c.paid}</th><th className="num">{c.remaining}</th>
+          <th className="actions"><span className="visually-hidden">{t.ui.actions}</span></th>
+        </>}
+        isEmpty={rows.length === 0}
+        empty={
+          <EmptyState
+            compact icon="briefcase-medical" title={ts.noEmployees} text={ts.noEmployeesHint}
+            action={<ButtonLink to="/owner/employees" variant="primary" icon="user-plus">{ts.manageEmployees}</ButtonLink>}
+          />
+        }
+        foot={rows.length > 1 && (
+          <tr>
+            <th scope="row">{ts.total}</th>
+            <td className="num">{fmtMoney(sum(rows.map((r) => r.fixedSalary)))}</td>
+            <td className="num">{fmtMoney(sum(rows.map((r) => r.paid)))}</td>
+            <td className="num">{fmtMoney(sum(rows.map((r) => r.remaining)))}</td>
+            <td />
+          </tr>
+        )}
+      >
+        {rows.map((r) => (
+          <tr key={r.employee.id} className={r.isActive ? undefined : 'is-muted'}>
+            <td>
+              <CellText sub={<>{r.employee.jobTitle}{!r.isActive && <> · {ts.inactive}</>}</>}>
+                <Button variant="link" onClick={() => onOpen(r.employee.id)}>{r.employee.name}</Button>
+              </CellText>
+            </td>
+            <td className="num">{r.hasTerms ? <strong>{fmtMoney(r.fixedSalary)}</strong> : <Badge tone="warning">{ts.noSalary}</Badge>}</td>
+            <td className="num">{fmtMoney(r.paid)}</td>
+            <td className="num"><Remaining value={r.remaining} /></td>
+            <td className="actions"><Button size="sm" variant="outline" iconEnd="chevron-right" onClick={() => onOpen(r.employee.id)}>{ts.open}</Button></td>
+          </tr>
+        ))}
+      </Table>
+    </Card>
+  );
+}
+
+function EmployeeSalary({ employeeId, month, tick, onChange }: { employeeId: string; month: string; tick: number; onChange: () => void }) {
+  const { t } = useI18n();
+  const ts = t.salaries;
+  const [s] = useLoad(() => get<EmployeeStatement>(`/employees/${employeeId}/salary/statement${qs({ month })}`), [employeeId, month, tick]);
+  const [versions] = useLoad(() => get<EmployeeTerms[]>(`/employees/${employeeId}/salary/terms`), [employeeId, tick]);
+  const [editing, setEditing] = useState(false);
+  const [paying, setPaying] = useState(false);
+  if (!s || s.employee.id !== employeeId) return <Loading />;
+  const terms = s.terms;
+  const canPay = month <= thisMonth();
+  const older = (versions ?? []).filter((v) => v.id !== terms?.id);
+
+  return (
+    <>
+      <div className="split split--even">
+        <Card
+          title={ts.salary} icon="id-card" description={`${s.employee.name} · ${s.employee.jobTitle}`}
+          actions={<Button size="sm" variant="outline" icon="pencil" onClick={() => setEditing(true)}>{ts.setSalary}</Button>}
+        >
+          {!terms ? <EmptyState compact icon="alert-circle" title={ts.noSalary} text={ts.noSalaryHint} /> : (
+            <div className="stack">
+              <Totals>
+                <TotalsRow label={ts.salaryFor(fmtMonth(month))} value={fmtMoney(terms.fixedSalary)} strong />
+              </Totals>
+              <p className="text-muted text-body-sm">{ts.termsFrom(fmtMonth(terms.effectiveMonth))} · {ts.recorded(fmtDateTime(terms.setAt), terms.setBy.name)}</p>
+              {older.length > 0 && (
+                <details>
+                  <summary>{ts.history}</summary>
+                  <ul className="salary-history">
+                    {older.map((v) => (
+                      <li key={v.id}><strong>{ts.termsFrom(fmtMonth(v.effectiveMonth))}</strong> {fmtMoney(v.fixedSalary)}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
+        </Card>
+
+        <Card
+          title={`${ts.statement} · ${fmtMonth(month)}`} icon="receipt"
+          actions={canPay && <Button size="sm" variant="primary" icon="banknote" onClick={() => setPaying(true)}>{ts.recordPayment}</Button>}
+        >
+          <Totals>
+            <TotalsRow label={ts.monthSalary} value={fmtMoney(s.fixedSalary)} strong />
+            <TotalsRow label={ts.paid} value={fmtMoney(s.paid, true)} />
+            <TotalsRow label={Number(s.remaining) < 0 ? ts.overpaid : ts.remaining} value={fmtMoney(String(Math.abs(Number(s.remaining))))} strong />
+          </Totals>
+        </Card>
+      </div>
+
+      <PaymentsCard payments={s.payments} voidBase="/employee-salaries/payments" onChange={onChange} />
+
+      {editing && (
+        <EmployeeSalaryDialog
+          employeeId={employeeId} employeeName={s.employee.name} month={month} current={terms}
+          onClose={() => setEditing(false)} onSaved={() => { setEditing(false); onChange(); }}
+        />
+      )}
+      {paying && (
+        <PaymentDialog
+          path={`/employees/${employeeId}/salary/payments`} name={s.employee.name} month={month} remaining={s.remaining}
+          onClose={() => setPaying(false)} onSaved={() => { setPaying(false); onChange(); }}
+        />
+      )}
+    </>
+  );
+}
+
+/** The employee's fixed monthly salary from a month on (a new version; the same month is replaced). */
+function EmployeeSalaryDialog({ employeeId, employeeName, month, current, onClose, onSaved }: {
+  employeeId: string; employeeName: string; month: string; current: EmployeeTerms | null; onClose: () => void; onSaved: () => void;
+}) {
+  const { t } = useI18n();
+  const ts = t.salaries;
+  const [effectiveMonth, setEffectiveMonth] = useState(month);
+  const [fixed, setFixed] = useState(current?.fixedSalary ?? '');
+  const fixedValid = fixed.trim() !== '' && Number(fixed) >= 0;
+  const valid = fixedValid && isMonth(effectiveMonth);
+  const save = async () => {
+    const body = { effectiveMonth, fixedSalary: Number(fixed).toFixed(2) };
+    if (await act(() => put(`/employees/${employeeId}/salary/terms`, body), ts.salarySaved)) onSaved();
+  };
+  return (
+    <Dialog
+      open onClose={onClose} title={ts.setSalary} description={employeeName}
+      footer={<>
+        <Button variant="ghost" onClick={onClose}>{t.common.cancel}</Button>
+        <Button variant="primary" icon="check" disabled={!valid} onClick={save}>{t.common.save}</Button>
+      </>}
+    >
+      <div className="form-grid form-grid--2">
+        <Field label={ts.effectiveMonth} hint={ts.salaryEffectiveHint}>
+          <Input type="month" value={effectiveMonth} onChange={(e) => setEffectiveMonth(e.target.value)} />
+        </Field>
+        <Field label={ts.salary} hint={ts.salaryZeroHint}>
+          <NumberInput autoFocus value={fixed} onChange={(e) => setFixed(e.target.value)} />
+        </Field>
       </div>
     </Dialog>
   );

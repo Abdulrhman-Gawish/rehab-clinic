@@ -12,6 +12,7 @@ const MINUTE_MS = 60_000;
  *   (old receipts are kept on purpose, so they always count as referenced).
  * - Blog covers: the post (deleted ones too), and every replaced one through
  *   the BLOG_POST_UPDATED audit entry (same rule as receipts).
+ * - Client review attachments: their rows (removed ones too: the files stay).
  */
 const REFERENCES: { prefix: string; sql: string }[] = [
   {
@@ -34,6 +35,10 @@ const REFERENCES: { prefix: string; sql: string }[] = [
           UNION
           SELECT old_values->>'coverImageKey' FROM audit_logs
            WHERE action = 'BLOG_POST_UPDATED' AND old_values ? 'coverImageKey'`,
+  },
+  {
+    prefix: 'client-reviews/',
+    sql: 'SELECT file_key AS key FROM client_review_attachments',
   },
 ];
 

@@ -45,6 +45,7 @@ export const billingAr: typeof billingEn = {
     viaPayout: 'تُعدَّل من دفعتها',
     fromPayoutHint: 'سجّلتها دفعة لطبيب مُحيل: أبطل الدفعة من صفحة الطبيب.',
     salaryBadge: 'راتب طبيب',
+    employeeSalaryBadge: 'راتب موظف',
     salaryFor: 'راتب:',
     fromSalaryHint: 'سجّلتها دفعة راتب: أبطل الدفعة من صفحة الرواتب.',
     commissionTotalLabel: 'المدفوع عمولاتٍ للأطباء',

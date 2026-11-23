@@ -97,6 +97,7 @@ export const deskEn = {
     weekRange: (from: string, to: string) => `${from} – ${to}`,
     doctors: 'Doctors', showAll: 'Show all',
     doctorsHint: 'Tap a doctor to hide or show their column.',
+    typesHint: 'Nothing selected shows every type. The counts above follow the types chosen.',
     walkIns: 'Walk-ins',
     noWalkIns: 'No walk-ins',
     noDoctors: 'No doctors shown',

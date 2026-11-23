@@ -10,12 +10,26 @@ export enum ExpenseCategoryKey {
   REFERRAL_COMMISSION = 'REFERRAL_COMMISSION',
   // Salary payments to the clinic's doctors (one expense per payment).
   DOCTOR_SALARY = 'DOCTOR_SALARY',
+  // Salary payments to the clinic's employees (one expense per payment).
+  EMPLOYEE_SALARY = 'EMPLOYEE_SALARY',
 }
+
+// Categories only the OWNER sees, with their expenses: salaries (doctors'
+// and employees'). For every other role they don't exist (not listed, not
+// in any total, 404).
+export const OWNER_ONLY_CATEGORY_KEYS: readonly ExpenseCategoryKey[] = [
+  ExpenseCategoryKey.DOCTOR_SALARY,
+  ExpenseCategoryKey.EMPLOYEE_SALARY,
+];
+
+export const isOwnerOnlyCategory = (key: ExpenseCategoryKey | null) =>
+  key !== null && OWNER_ONLY_CATEGORY_KEYS.includes(key);
 
 // Created by the migration (and on demand, for a database emptied by tests).
 export const SYSTEM_CATEGORY_NAMES: Record<ExpenseCategoryKey, string> = {
   [ExpenseCategoryKey.REFERRAL_COMMISSION]: 'عمولات الأطباء المحيلين',
   [ExpenseCategoryKey.DOCTOR_SALARY]: 'رواتب وعمولات الأطباء',
+  [ExpenseCategoryKey.EMPLOYEE_SALARY]: 'رواتب الموظفين',
 };
 
 // What the clinic spends on (hospitality, supplies...). Seeded by migration.

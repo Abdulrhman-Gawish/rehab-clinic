@@ -521,12 +521,52 @@ const MATRIX: { method: Method; path: string; allowed: Who[] }[] = [
   { method: 'get', path: `/reports/acquisition${RANGE}`, allowed: [OWNER] },
   { method: 'get', path: `/reports/campaigns${RANGE}`, allowed: [OWNER] },
   { method: 'get', path: `/reports/referrals${RANGE}`, allowed: [OWNER] },
+  // employees and their salaries: OWNER only
+  { method: 'get', path: '/employees', allowed: [OWNER] },
+  { method: 'post', path: '/employees', allowed: [OWNER] },
+  { method: 'get', path: `/employees/${id}`, allowed: [OWNER] },
+  { method: 'patch', path: `/employees/${id}`, allowed: [OWNER] },
+  { method: 'patch', path: `/employees/${id}/activate`, allowed: [OWNER] },
+  { method: 'patch', path: `/employees/${id}/deactivate`, allowed: [OWNER] },
+  {
+    method: 'get',
+    path: '/employee-salaries?month=2026-11',
+    allowed: [OWNER],
+  },
+  { method: 'get', path: `/employees/${id}/salary/terms`, allowed: [OWNER] },
+  { method: 'put', path: `/employees/${id}/salary/terms`, allowed: [OWNER] },
+  {
+    method: 'get',
+    path: `/employees/${id}/salary/statement?month=2026-11`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'post',
+    path: `/employees/${id}/salary/payments`,
+    allowed: [OWNER],
+  },
+  {
+    method: 'post',
+    path: `/employee-salaries/payments/${id}/void`,
+    allowed: [OWNER],
+  },
   // blog: the OWNER writes posts (the website reads them below)
   { method: 'get', path: '/blog-posts', allowed: [OWNER] },
   { method: 'post', path: '/blog-posts', allowed: [OWNER] },
   { method: 'get', path: `/blog-posts/${id}`, allowed: [OWNER] },
   { method: 'patch', path: `/blog-posts/${id}`, allowed: [OWNER] },
   { method: 'delete', path: `/blog-posts/${id}`, allowed: [OWNER] },
+  // client reviews: OWNER only (attachment files too)
+  { method: 'get', path: '/client-reviews', allowed: [OWNER] },
+  { method: 'post', path: '/client-reviews', allowed: [OWNER] },
+  { method: 'get', path: `/client-reviews/${id}`, allowed: [OWNER] },
+  { method: 'patch', path: `/client-reviews/${id}`, allowed: [OWNER] },
+  { method: 'delete', path: `/client-reviews/${id}`, allowed: [OWNER] },
+  {
+    method: 'get',
+    path: `/client-reviews/${id}/attachments/${otherId}`,
+    allowed: [OWNER],
+  },
   // public: anyone
   { method: 'get', path: '/public/packages', allowed: EVERYONE },
   { method: 'get', path: '/public/doctors', allowed: EVERYONE },

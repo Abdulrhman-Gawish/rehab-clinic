@@ -1,0 +1,99 @@
+/* Client reviews (OWNER): list, view dialog and the add / edit form. Tokens and logical properties only, so the same
+   rules serve Arabic (RTL) and English (LTR). */
+
+/* ---------- list ---------- */
+
+.review-filters { display: grid; gap: var(--space-3); grid-template-columns: minmax(0, 1fr); align-items: center; }
+@media (min-width: 640px) { .review-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } .review-filters > form { grid-column: 1 / -1; } }
+@media (min-width: 1024px) {
+  .review-filters { grid-template-columns: minmax(0, 1fr) minmax(10rem, 13rem) minmax(10rem, 13rem) auto; }
+  .review-filters > form { grid-column: auto; }
+}
+
+/* The table fits a 1366 px laptop beside the sidebar; narrower screens scroll it sideways. Names stay readable and the
+   four actions form a 2 x 2 grid. */
+.review-client { min-width: 10rem; }
+.review-client .person__meta { white-space: nowrap; }
+.table .actions > .review-row-actions { display: grid; grid-template-columns: repeat(2, auto); gap: 4px; justify-content: end; }
+
+/* Two lines of the review in the table; the whole text is in the view dialog. */
+.review-excerpt {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+  margin: 0; min-width: 11rem; max-width: 26rem; color: var(--color-text-secondary); font-size: var(--text-body-sm);
+  overflow-wrap: anywhere;
+}
+.review-keywords { display: flex; flex-wrap: wrap; gap: var(--space-1); min-width: 8rem; max-width: 18rem; }
+.review-files { display: inline-flex; align-items: center; gap: var(--space-1); font-variant-numeric: tabular-nums; }
+.review-files .icon { --icon-size: 16px; color: var(--color-text-muted); }
+
+/* ---------- view dialog ---------- */
+
+.review-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.9; }
+.review-section-title {
+  margin: 0 0 var(--space-2); font-size: var(--text-label); font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+/* ---------- add / edit: one centred column, like the reference layout ---------- */
+
+.review-editor { max-width: 760px; margin-inline: auto; }
+.review-editor .page-header { justify-content: center; text-align: center; }
+.review-editor .page-header__main { justify-items: center; }
+.review-form { display: grid; gap: var(--space-6); padding: var(--space-5); }
+@media (min-width: 640px) { .review-form { padding: var(--space-8); } }
+
+/* The upload area: a real label for the file input, so it is keyboard reachable. */
+.review-drop {
+  position: relative; display: grid; justify-items: center; align-content: center; gap: var(--space-2);
+  min-height: 200px; padding: var(--space-6); text-align: center; cursor: pointer;
+  border: var(--border-width-strong) dashed var(--color-neutral-300); border-radius: var(--radius-lg); background: var(--color-bg-subtle);
+  transition: border-color var(--duration-fast) var(--ease-standard), background-color var(--duration-fast) var(--ease-standard);
+}
+@media (min-width: 640px) { .review-drop { min-height: 240px; } }
+.review-drop:hover, .review-drop.is-over { border-color: var(--color-brand); background: var(--color-primary-subtle); }
+.review-drop:has(input:focus-visible) { outline: var(--focus-ring); outline-offset: 2px; }
+.review-drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.review-drop.is-disabled { cursor: not-allowed; border-style: solid; }
+.review-drop.is-disabled:hover { border-color: var(--color-neutral-300); background: var(--color-bg-subtle); }
+.review-drop.is-disabled .review-drop__plus { background: var(--color-surface-muted); color: var(--color-text-muted); }
+.review-drop__plus { --circle: 64px; }
+.review-drop__title { font-weight: var(--font-weight-semibold); }
+.review-drop__text { font-size: var(--text-body-sm); color: var(--color-text-muted); }
+.review-file-errors { margin-block-start: var(--space-3); }
+
+/* Attachment tiles (form and view dialog). */
+.file-tiles {
+  list-style: none; margin: var(--space-3) 0 0; padding: 0;
+  display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+}
+.file-tile { position: relative; min-width: 0; }
+.file-tile__open {
+  display: grid; gap: var(--space-1); width: 100%; padding: 0 0 var(--space-2); overflow: hidden; cursor: pointer;
+  border: var(--border-width) solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface);
+  color: inherit; font: inherit; text-align: start;
+}
+.file-tile__open:hover { border-color: var(--color-brand); }
+.file-tile__open:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+.file-tile__media {
+  position: relative; display: grid; place-items: center; aspect-ratio: 4 / 3; overflow: hidden;
+  background: var(--color-neutral-100); color: var(--color-brand);
+}
+.file-tile__media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.file-tile__media .icon { --icon-size: 32px; }
+.file-tile__name {
+  padding-inline: var(--space-2); font-size: var(--text-body-sm); font-weight: var(--font-weight-semibold);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.file-tile__meta { display: flex; flex-wrap: wrap; gap: var(--space-1); align-items: center; padding-inline: var(--space-2); font-size: var(--text-caption); color: var(--color-text-muted); }
+/* A visible remove button (never click-to-delete on the picture). */
+.file-tile__remove {
+  position: absolute; inset-block-start: 6px; inset-inline-end: 6px; display: grid; place-items: center;
+  width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; cursor: pointer;
+  background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-sm);
+}
+.file-tile__remove:hover { color: var(--color-error-text); }
+.file-tile__remove:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
+.file-tile__remove .icon { --icon-size: 16px; }
+
+.review-publish { display: grid; gap: var(--space-1); }
+.review-form__actions { display: grid; gap: var(--space-2); }

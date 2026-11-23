@@ -12,11 +12,14 @@ import {
   ZERO,
 } from '../../common/utils/money.util.js';
 import { monthDates } from '../salaries/salary-math.js';
+import { SalaryCommissionMode } from '../salaries/salaries.enums.js';
 import { DoctorSalaryTerms } from '../salaries/entities/doctor-salary-terms.entity.js';
+import { EmployeeSalaryTerms } from '../salaries/entities/employee-salary-terms.entity.js';
 import type {
   ClinicOwesFlowDto,
   ClinicOwesReportDto,
   ClinicOwesTotalsDto,
+  EmployeeSalaryBalanceRowDto,
   OutstandingFlowDto,
   PatientsOweFlowDto,
   PatientsOweListDto,
@@ -52,6 +55,17 @@ interface SalaryData {
   payments: SalaryPaymentRow[];
 }
 
+/**
+ * Employees' salaries, in the shape of the doctors' (outstanding-math): each
+ * employee is a payee whose terms are a fixed salary without commission, so
+ * the same rules apply with no sessions. `SalaryPaymentRow.doctorId` holds
+ * the employee's id.
+ */
+interface EmployeeSalaryData {
+  employees: (SalaryDoctor & { name: string })[];
+  payments: SalaryPaymentRow[];
+}
+
 interface ReferralBalance {
   id: string;
   name: string;
@@ -64,13 +78,14 @@ interface ReferralBalance {
 interface ClinicOwesAt {
   totals: ClinicOwesTotalsDto;
   salaryLines: (SalaryBalanceLine & { doctorName: string })[];
+  employeeLines: (SalaryBalanceLine & { employeeName: string })[];
   referrals: ReferralBalance[];
 }
 
 /**
  * Outstanding money at the end of any clinic local day, in both directions:
  * what patients owe the clinic (invoice balances) and what the clinic owes
- * its doctors (salaries, referral commissions). Everything is computed from
+ * its doctors and employees (salaries, referral commissions). Everything is computed from
  * the dated rows, so a past day shows what was still unpaid then, even if
  * it was paid later. The daily summary and the reports read only this.
  */
@@ -102,6 +117,7 @@ export class OutstandingService {
     const patients = await this.patientsOweAt(cut);
     const clinic = await this.clinicOwesAt(
       await this.salaryData(date),
+      await this.employeeSalaryData(date),
       cut,
       date,
     );
@@ -257,7 +273,8 @@ export class OutstandingService {
 
   /**
    * closing.owed = opening.owed + salariesEarned + salaryAdjustments +
-   * commissionsEarned - salaryPayments - commissionPayouts + advancesChange.
+   * employeeSalariesEarned + commissionsEarned - salaryPayments -
+   * employeeSalaryPayments - commissionPayouts + advancesChange.
    * Sessions are valued at each end (their invoice total then), so an
    * earlier session whose invoice changed in the period moves the balance
    * by salaryAdjustments, on the day it changed.
@@ -266,10 +283,17 @@ export class OutstandingService {
     const before = addDays(from, -1);
     const atOpening = await this.salaryData(before);
     const data = await this.salaryData(to);
+    const employeesAtOpening = await this.employeeSalaryData(before);
+    const employees = await this.employeeSalaryData(to);
     const start = this.time.dayBounds(from).start;
     const end = this.time.dayBounds(to).end;
-    const opening = await this.clinicOwesAt(atOpening, start, before);
-    const closing = await this.clinicOwesAt(data, end, to);
+    const opening = await this.clinicOwesAt(
+      atOpening,
+      employeesAtOpening,
+      start,
+      before,
+    );
+    const closing = await this.clinicOwesAt(data, employees, end, to);
 
     const salariesEarned = addMoney(
       ZERO,
@@ -294,6 +318,17 @@ export class OutstandingService {
         .filter((p) => p.paymentDate >= from && p.paymentDate <= to)
         .map((p) => p.amount),
     );
+    // Fixed salaries only: what falls due in the period, nothing to adjust.
+    const employeeSalariesEarned = addMoney(
+      ZERO,
+      ...employees.employees.map((e) => salaryEarnedBetween(e, [], from, to)),
+    );
+    const employeeSalaryPayments = addMoney(
+      ZERO,
+      ...employees.payments
+        .filter((p) => p.paymentDate >= from && p.paymentDate <= to)
+        .map((p) => p.amount),
+    );
     const [referral]: { earned: string; paid: string }[] =
       await this.dataSource.query(
         `SELECT
@@ -307,8 +342,10 @@ export class OutstandingService {
       opening: opening.totals,
       salariesEarned,
       salaryAdjustments,
+      employeeSalariesEarned,
       commissionsEarned: toMoney(referral.earned),
       salaryPayments,
+      employeeSalaryPayments,
       commissionPayouts: toMoney(referral.paid),
       advancesChange: subMoney(
         closing.totals.advances,
@@ -319,14 +356,15 @@ export class OutstandingService {
   }
 
   /**
-   * Who the clinic owes at the end of `asOf`: each doctor-month with a
-   * balance (salaries), each referring doctor with a balance or pending
-   * commission.
+   * Who the clinic owes at the end of `asOf`: each doctor-month and each
+   * employee-month with a balance (salaries), each referring doctor with a
+   * balance or pending commission.
    */
   async clinicOwes(asOf: string): Promise<ClinicOwesReportDto> {
     const data = await this.salaryData(asOf);
     const at = await this.clinicOwesAt(
       data,
+      await this.employeeSalaryData(asOf),
       this.time.dayBounds(asOf).end,
       asOf,
     );
@@ -343,6 +381,16 @@ export class OutstandingService {
         paid: l.paid,
         balance: l.balance,
       }));
+    const employeeRows: EmployeeSalaryBalanceRowDto[] = at.employeeLines
+      .filter((l) => !isZeroMoney(l.balance))
+      .map((l) => ({
+        employee: { id: l.doctorId, name: l.employeeName },
+        month: l.month,
+        fixedSalary: l.fixedSalary,
+        fixedDue: l.fixedDue,
+        paid: l.paid,
+        balance: l.balance,
+      }));
     const referralRows: ReferralBalanceRowDto[] = at.referrals
       .filter((r) => !isZeroMoney(r.balance) || !isZeroMoney(r.pending))
       .map((r) => ({
@@ -353,12 +401,14 @@ export class OutstandingService {
         pending: r.pending,
       }));
     const salaries = splitBalances(salaryRows.map((r) => r.balance));
+    const employeeSalaries = splitBalances(employeeRows.map((r) => r.balance));
     const referrals = splitBalances(referralRows.map((r) => r.balance));
     return {
       asOf,
       owed: at.totals.owed,
       advances: at.totals.advances,
       doctorSalaries: { ...salaries, rows: salaryRows },
+      employeeSalaries: { ...employeeSalaries, rows: employeeRows },
       referralCommissions: {
         ...referrals,
         pending: at.totals.pendingCommissions,
@@ -370,6 +420,7 @@ export class OutstandingService {
   // At the instant `cut`, the end of the local day `date`.
   private async clinicOwesAt(
     data: SalaryData,
+    employeeData: EmployeeSalaryData,
     cut: Date,
     date: string,
   ): Promise<ClinicOwesAt> {
@@ -379,19 +430,90 @@ export class OutstandingService {
         doctorName: d.name,
       })),
     );
+    const employeeLines = employeeData.employees.flatMap((e) =>
+      salaryBalances(e, [], employeeData.payments, date).map((l) => ({
+        ...l,
+        employeeName: e.name,
+      })),
+    );
     const referrals = await this.referralBalances(cut, date);
     const salaries = splitBalances(salaryLines.map((l) => l.balance));
+    const employees = splitBalances(employeeLines.map((l) => l.balance));
     const commissions = splitBalances(referrals.map((r) => r.balance));
     return {
       totals: {
-        owed: addMoney(salaries.owed, commissions.owed),
+        owed: addMoney(salaries.owed, employees.owed, commissions.owed),
         doctorSalaries: salaries.owed,
+        employeeSalaries: employees.owed,
         referralCommissions: commissions.owed,
-        advances: addMoney(salaries.advances, commissions.advances),
+        advances: addMoney(
+          salaries.advances,
+          employees.advances,
+          commissions.advances,
+        ),
         pendingCommissions: addMoney(ZERO, ...referrals.map((r) => r.pending)),
       },
       salaryLines,
+      employeeLines,
       referrals,
+    };
+  }
+
+  /**
+   * The employees' side of the salary balances at the end of `lastDate`:
+   * every salary version (a version set later for a month applies to that
+   * whole month, as in the statement) and the valid payments dated by then.
+   */
+  private async employeeSalaryData(
+    lastDate: string,
+  ): Promise<EmployeeSalaryData> {
+    const versions = await this.dataSource
+      .getRepository(EmployeeSalaryTerms)
+      .find();
+    const payments: {
+      employee_id: string;
+      month: string;
+      amount: string;
+      payment_date: string;
+    }[] = await this.dataSource.query(
+      `SELECT employee_id, month, amount, payment_date::text AS payment_date
+         FROM employee_salary_payments
+        WHERE status = 'VALID' AND payment_date <= $1`,
+      [lastDate],
+    );
+    const ids = [
+      ...new Set([
+        ...versions.map((v) => v.employeeId),
+        ...payments.map((p) => p.employee_id),
+      ]),
+    ];
+    if (ids.length === 0) return { employees: [], payments: [] };
+    const people: { id: string; name: string }[] = await this.dataSource.query(
+      `SELECT id, name FROM employees WHERE id = ANY($1) ORDER BY name, id`,
+      [ids],
+    );
+    return {
+      employees: people.map((p) => ({
+        id: p.id,
+        name: p.name,
+        // Employees are never deleted: the salary versions decide.
+        deletedOn: null,
+        terms: versions
+          .filter((v) => v.employeeId === p.id)
+          .map((v) => ({
+            effectiveMonth: v.effectiveMonth,
+            fixedSalary: v.fixedSalary,
+            commissionMode: SalaryCommissionMode.NONE,
+            sessionRateType: null,
+            sessionRateValue: null,
+          })),
+      })),
+      payments: payments.map((p) => ({
+        doctorId: p.employee_id,
+        month: p.month,
+        amount: toMoney(p.amount),
+        paymentDate: p.payment_date,
+      })),
     };
   }
 

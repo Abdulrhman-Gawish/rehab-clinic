@@ -39,6 +39,27 @@ export function AppointmentTypePicker({ value, onChange, label: fieldLabel, hint
   );
 }
 
+/** In type filters: appointments and walk-ins without a type (booked before types existed). */
+export const NO_TYPE = 'NONE';
+
+/** True when a row's type passes a type filter; an empty filter passes every row. */
+export const matchesType = (type: string | null | undefined, types: readonly string[]) =>
+  types.length === 0 || types.includes(type ?? NO_TYPE);
+
+/** Appointment type filter chips (several can be on; none = every type), with "Type not set" last. */
+export function TypeFilterChips({ value, onToggle }: { value: readonly string[]; onToggle: (type: string) => void }) {
+  const { t } = useI18n();
+  return (
+    <div className="filter-chips">
+      {[...APPOINTMENT_TYPES, NO_TYPE].map((type) => (
+        <FilterChip key={type} pressed={value.includes(type)} onClick={() => onToggle(type)}>
+          {type === NO_TYPE ? t.apptType.notSet : label(t.enums.AppointmentType, type)}
+        </FilterChip>
+      ))}
+    </div>
+  );
+}
+
 /** The type as a badge; "Type not set" for appointments booked before types existed. */
 export function TypeBadge({ type }: { type: string | null | undefined }) {
   const { t } = useI18n();

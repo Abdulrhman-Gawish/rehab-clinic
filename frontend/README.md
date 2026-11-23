@@ -6,7 +6,7 @@ The clinic's web UI: React 19 + TypeScript + Vite, Arabic first (RTL) with Engli
 - **Public website** (no login): home (`/`), online booking (`/book`), blog (`/blog`, `/blog/:id`).
 - **Staff app** (`/login`, then by role): reception desk (day list, booking and walk-ins, patients, invoices, expenses,
   daily summary), doctors (my day, notes), and the owner (staff, doctors, services and packages, salaries, referring doctors,
-  reports, marketing, audit log, blog).
+  reports, marketing, audit log, blog, client reviews).
 
 API problems found while building the first version are in [FINDINGS.md](FINDINGS.md).
 
@@ -271,6 +271,12 @@ npm run start:dev
       value (invoice or package session), rate and commission. Undo a visit and it drops out.
     - **Record payment** (advances and parts allowed) and **Void**; each payment is also an expense (Expenses shows it
       locked as "Doctor salary").
+    - **Staff → Employees** (`?staff=employees`): the same month overview and statement for employees, with a fixed
+      monthly salary only (**Set salary**: from a month, 0 = not paid from then), payments and voids; their expenses
+      show as "Employee salary".
+    - **Owner → Employees** (`/owner/employees`): the staff directory (name, job title with suggestions, phone, notes,
+      an optional login account that is never a doctor's, an optional first salary). **Deactivate** can also stop the
+      salary from a chosen month (a 0 salary version; earlier months stay owed).
 13. **Owner → Referring doctors** and **Marketing**: referring doctors with their agreements, ledger and payouts; new
     patients by source, online campaigns (utm) and referrals over a date range, with CSV export.
 14. **Blog**:
@@ -283,6 +289,17 @@ npm run start:dev
       `javascript:` link.
     - The website's blog (`/blog`): filter by category, newest first, **Load more** adds the next 6. A post opens at
       `/blog/:id` with its date, category, cover, content and keywords. The home page shows the latest 3.
+
+15. **Client reviews** (OWNER only):
+    - Owner → **Client reviews** (`/owner/reviews`, in the Website group). Other roles never see it, are sent back to
+      their own home from `/owner/reviews...`, and the API answers 403 to them.
+    - The list: search (client, text, keyword; Arabic spelling variants match), type and status filters (kept in the
+      URL), 20 per page from the server. Each row has **view** (dialog with the whole text, the keywords and the files,
+      pictures previewed), **edit**, **publish / unpublish** and **delete** (red confirm).
+    - The form (`/owner/reviews/new`, `/owner/reviews/:id/edit`): review type (Text, Image, Gallery), client name, the
+      review, keywords (Enter or a comma adds one), the attachments (click or drop on the box; JPG, PNG, WEBP or PDF,
+      5 MB each, 10 per review; × removes one) and **Published**. One save sends everything; **Cancel** asks first when
+      something changed.
 
 Times are shown in Africa/Cairo, with Western digits in both languages. API errors appear as an error toast (top end
 of the screen) in the UI language, with the technical details (status, `code`, message) folded underneath. When a

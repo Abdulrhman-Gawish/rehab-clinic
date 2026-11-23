@@ -58,7 +58,7 @@ const VALUE_ENUMS: Record<string, keyof Messages['enums']> = {
   method: 'PaymentMethod', paymentMethod: 'PaymentMethod', source: 'AppointmentSource', paymentType: 'PaymentType',
   status: 'AppointmentStatus', role: 'UserRole', gender: 'Gender', createdSource: 'PatientSource',
   channel: 'AcquisitionChannel', applicability: 'ReferralApplicability', kind: 'CommissionKind',
-  commissionType: 'ReferralRateType', category: 'BlogCategory',
+  commissionType: 'ReferralRateType', category: 'BlogCategory', reviewType: 'ClientReviewType',
 };
 const MONEY_KEYS = new Set(['amount', 'total', 'price', 'listPrice', 'offerAmount', 'basePrice', 'priceOverride', 'unitPrice', 'subtotal', 'discountTotal', 'amountPaid', 'balance', 'lineTotal', 'invoiceAmountPaid', 'baseAmount', 'invoiceTotal', 'outstandingBefore']);
 

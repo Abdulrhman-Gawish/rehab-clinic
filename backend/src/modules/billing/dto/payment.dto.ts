@@ -377,7 +377,7 @@ export class DailySummaryDto {
   @ApiProperty({
     type: MoneyTotalsDto,
     description:
-      'Valid expenses dated that day, referral commission payouts and doctor salary payments included',
+      'Valid expenses dated that day, referral commission payouts and doctor / employee salary payments included (salaries: OWNER only; a receptionist’s total leaves them out)',
   })
   expenses: MoneyTotalsDto;
 
@@ -390,15 +390,24 @@ export class DailySummaryDto {
 
   @ApiProperty({
     type: MoneyTotalsDto,
+    nullable: true,
     description:
-      'Of `expenses`: salary payments to the clinic’s doctors (already in expenses, never added again)',
+      'Of `expenses`: salary payments to the clinic’s doctors (already in expenses, never added again). OWNER only: null for a receptionist, whose `expenses` and `expectedCash` leave them out.',
   })
-  salaryPayments: MoneyTotalsDto;
+  salaryPayments: MoneyTotalsDto | null;
+
+  @ApiProperty({
+    type: MoneyTotalsDto,
+    nullable: true,
+    description:
+      'Of `expenses`: salary payments to the clinic’s employees (already in expenses, never added again). OWNER only: null for a receptionist, whose `expenses` and `expectedCash` leave them out.',
+  })
+  employeeSalaryPayments: MoneyTotalsDto | null;
 
   @ApiProperty(
     MONEY(
       '420.00',
-      'cash payments - cash refunds - cash expenses (cash commission payouts and salary payments included)',
+      'cash payments - cash refunds - cash expenses (cash commission payouts and salary payments included; for a receptionist, without any salary)',
     ),
   )
   expectedCash: string;
@@ -406,7 +415,7 @@ export class DailySummaryDto {
   @ApiProperty({
     type: OutstandingFlowDto,
     description:
-      'Owed at the start and at the end of the day (unpaid then, even if paid later), and what moved it: patients’ invoice balances, and what the clinic owes its doctors (OWNER only)',
+      'Owed at the start and at the end of the day (unpaid then, even if paid later), and what moved it: patients’ invoice balances, and what the clinic owes its doctors and employees (OWNER only)',
   })
   outstanding: OutstandingFlowDto;
 }

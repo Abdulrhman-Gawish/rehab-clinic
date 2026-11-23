@@ -17,6 +17,7 @@ import {
   ZERO,
 } from '../../common/utils/money.util.js';
 import type { EnvironmentVariables } from '../../config/env.validation.js';
+import { OWNER_ONLY_CATEGORY_KEYS } from '../expenses/entities/expense-category.entity.js';
 import { Expense, ExpenseStatus } from '../expenses/entities/expense.entity.js';
 import { OutstandingService } from '../outstanding/outstanding.service.js';
 import { VisitStatus } from '../visits/visit.enums.js';
@@ -44,6 +45,17 @@ export const PAYOUT_EXPENSE = (id: string) =>
 // The expense `id` records a salary payment to one of the clinic's doctors.
 export const SALARY_EXPENSE = (id: string) =>
   `EXISTS (SELECT 1 FROM doctor_salary_payments sp WHERE sp.expense_id = ${id})`;
+
+// The expense `id` records a salary payment to one of the clinic's employees.
+export const EMPLOYEE_SALARY_EXPENSE = (id: string) =>
+  `EXISTS (SELECT 1 FROM employee_salary_payments esp WHERE esp.expense_id = ${id})`;
+
+// The expense `id` is in a category only the OWNER sees (salaries, see
+// OWNER_ONLY_CATEGORY_KEYS). The keys are constants, inlined as literals.
+export const OWNER_ONLY_EXPENSE = (id: string) =>
+  `EXISTS (SELECT 1 FROM expenses ox JOIN expense_categories oc ON oc.id = ox.category_id
+            WHERE ox.id = ${id}
+              AND oc.system_key IN (${OWNER_ONLY_CATEGORY_KEYS.map((k) => `'${k}'`).join(', ')}))`;
 
 export interface DayRange {
   date: string;
@@ -138,11 +150,15 @@ export class BillingReportsService {
   /**
    * Cash-desk totals for one clinic local day (23/24/25 h with DST).
    * expectedCash = cash payments - cash refunds - cash expenses. A payout
-   * to a referring doctor or a doctor's salary payment is an expense, so it
-   * is in `expenses` (and so in expectedCash when paid in cash) exactly
-   * once; `commissionPayouts` and `salaryPayments` show those parts.
+   * to a referring doctor or a doctor's or employee's salary payment is an
+   * expense, so it is in `expenses` (and so in expectedCash when paid in
+   * cash) exactly once; `commissionPayouts`, `salaryPayments` and
+   * `employeeSalaryPayments` show those parts.
    * `outstanding` is what was owed at the start and at the end of the day,
-   * and what moved it (what the clinic owes: OWNER only).
+   * and what moved it (what the clinic owes: OWNER only). Salaries
+   * (doctors' and employees') are the OWNER's only: for a receptionist they
+   * are not in `expenses` nor `expectedCash`, and `salaryPayments` and
+   * `employeeSalaryPayments` are null.
    */
   async dailySummary(
     date: string | undefined,
@@ -157,12 +173,22 @@ export class BillingReportsService {
     }
     const { start, end } = this.time.dayBounds(day);
     const range: DayRange = { date: day, start, end };
+    const isOwner = actor.role === UserRole.OWNER;
+    // Salaries (doctors' and employees') are the OWNER's only: anyone
+    // else's totals (and expected cash) leave them out, so no figure gives
+    // them away.
+    const hidden = isOwner ? undefined : OWNER_ONLY_EXPENSE;
 
     const payments = await this.paymentTotals(PaymentType.PAYMENT, range);
     const refunds = await this.paymentTotals(PaymentType.REFUND, range);
-    const expenses = await this.expenseTotals(range);
+    const expenses = await this.expenseTotals(range, undefined, hidden);
     const commissionPayouts = await this.expenseTotals(range, PAYOUT_EXPENSE);
-    const salaryPayments = await this.expenseTotals(range, SALARY_EXPENSE);
+    const salaryPayments = isOwner
+      ? await this.expenseTotals(range, SALARY_EXPENSE)
+      : null;
+    const employeeSalaryPayments = isOwner
+      ? await this.expenseTotals(range, EMPLOYEE_SALARY_EXPENSE)
+      : null;
 
     return {
       date: day,
@@ -175,6 +201,7 @@ export class BillingReportsService {
       expenses,
       commissionPayouts,
       salaryPayments,
+      employeeSalaryPayments,
       expectedCash: subMoney(
         subMoney(payments.byMethod.CASH, refunds.byMethod.CASH),
         expenses.byMethod.CASH,
@@ -188,10 +215,12 @@ export class BillingReportsService {
   }
 
   // Valid expenses dated on that local day (or only those that `part`
-  // matches: PAYOUT_EXPENSE, SALARY_EXPENSE), by payment method.
+  // matches: PAYOUT_EXPENSE, SALARY_EXPENSE, EMPLOYEE_SALARY_EXPENSE; never
+  // those that `exclude` matches), by payment method.
   private async expenseTotals(
     range: DayRange,
     part?: (id: string) => string,
+    exclude?: (id: string) => string,
   ): Promise<MoneyTotalsDto> {
     const qb = this.dataSource
       .getRepository(Expense)
@@ -203,6 +232,7 @@ export class BillingReportsService {
       .andWhere('expense.expenseDate = :date', { date: range.date })
       .groupBy('expense.paymentMethod');
     if (part) qb.andWhere(part('expense.id'));
+    if (exclude) qb.andWhere(`NOT ${exclude('expense.id')}`);
     return totalsFromRows(await qb.getRawMany<MethodRow>());
   }
 

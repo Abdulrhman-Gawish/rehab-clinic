@@ -40,6 +40,7 @@ const NAV: { group: Group; items: NavItem[] }[] = [
       { to: '/owner/doctors', label: (t) => t.nav.doctors, icon: 'stethoscope', roles: ['OWNER'] },
       { to: '/owner/services', label: (t) => t.nav.services, icon: 'package', roles: ['OWNER'] },
       { to: '/owner/salaries', label: (t) => t.nav.salaries, icon: 'wallet', roles: ['OWNER'] },
+      { to: '/owner/employees', label: (t) => t.nav.employees, icon: 'briefcase-medical', roles: ['OWNER'] },
       { to: '/owner/referring-doctors', label: (t) => t.nav.referringDoctors, icon: 'share', roles: ['OWNER'] },
     ],
   },
@@ -54,7 +55,10 @@ const NAV: { group: Group; items: NavItem[] }[] = [
   },
   {
     group: 'website',
-    items: [{ to: '/owner/blog', label: (t) => t.nav.blog, icon: 'file-text', roles: ['OWNER'] }],
+    items: [
+      { to: '/owner/blog', label: (t) => t.nav.blog, icon: 'file-text', roles: ['OWNER'] },
+      { to: '/owner/reviews', label: (t) => t.nav.clientReviews, icon: 'message', roles: ['OWNER'] },
+    ],
   },
 ];
 

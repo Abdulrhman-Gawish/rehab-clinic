@@ -5,7 +5,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { act, get, getSession, patch, qs } from '../api';
-import { AppointmentTypePicker, TypeBadge, useDoctors } from '../components';
+import { AppointmentTypePicker, matchesType, TypeBadge, TypeFilterChips, useDoctors } from '../components';
 import { fmtDate, fmtMoney, fmtNumber, fmtTime, fmtWallTime, fmtWeekday } from '../format';
 import { label, useI18n } from '../i18n';
 import { addDays, cairoWall, dayOfWeek, todayCairo } from '../time';
@@ -149,16 +149,19 @@ function DeskCalendar() {
   const date = params.get('date') ?? today;
   const view: View = params.get('view') === 'week' ? 'week' : 'day';
   const status = params.getAll('status');
+  // Appointment types shown (NO_TYPE = not set); none = every type.
+  const types = params.getAll('type');
   const [doctors] = useDoctors();
   // An older link's ?doctorId= shows that doctor only (it becomes ?hide= on the next change).
   const only = params.get('doctorId');
   const hidden = only ? (doctors ?? []).map((d) => d.id).filter((id) => id !== only) : params.getAll('hide');
-  const setFilter = (next: { date?: string; view?: View; status?: readonly string[]; hidden?: string[] }) => {
+  const setFilter = (next: { date?: string; view?: View; status?: readonly string[]; hidden?: string[]; types?: string[] }) => {
     const p = new URLSearchParams();
     p.set('date', next.date ?? date);
     if ((next.view ?? view) === 'week') p.set('view', 'week');
     (next.status ?? status).forEach((s) => p.append('status', s));
     (next.hidden ?? hidden).forEach((id) => p.append('hide', id));
+    (next.types ?? types).forEach((type) => p.append('type', type));
     setParams(p);
   };
 
@@ -201,16 +204,18 @@ function DeskCalendar() {
   const allDoctors: Doc[] = [...columns.values()].map((d, i) => ({ ...d, color: `var(--cal-doc-${(i % DOC_COLORS) + 1})` }));
   const shown = allDoctors.filter((d) => !hidden.includes(d.id));
   const shownIds = shown.map((d) => d.id);
-  const ofShown = all.filter((r) => !hidden.includes(r.doctor.id));
+  // The type filter, like the doctors, narrows what is counted; the status filter only what is drawn.
+  const ofShown = all.filter((r) => !hidden.includes(r.doctor.id) && matchesType(r.type, types));
   const visible = ofShown.filter((r) => hasStatus(r, status));
   const toggleDoctor = (id: string) => setFilter({ hidden: hidden.includes(id) ? hidden.filter((x) => x !== id) : [...hidden, id] });
   const toggleStatus = (s: string) => setFilter({ status: status.includes(s) ? status.filter((x) => x !== s) : [...status, s] });
+  const toggleType = (type: string) => setFilter({ types: types.includes(type) ? types.filter((x) => x !== type) : [...types, type] });
 
-  // The counts cover the shown doctors and every status, so they stay put while a status filter is on.
+  // The counts cover the shown doctors and types and every status, so they stay put while a status filter is on.
   const counts = Object.fromEntries(QUICK.map((q) => [q.key, ofShown.filter((r) => hasStatus(r, q.statuses)).length]));
   const quick = QUICK.find((q) => sameSet(q.statuses, status));
-  // Filters the count pills do not show: hidden doctors, or a mix of statuses no pill stands for.
-  const extraFilters = hidden.length + (quick ? 0 : status.length);
+  // Filters the count pills do not show: hidden doctors, chosen types, or a mix of statuses no pill stands for.
+  const extraFilters = hidden.length + types.length + (quick ? 0 : status.length);
   const [filtersOpen, setFiltersOpen] = useState(extraFilters > 0);
 
   const selectedRow = selected ? all.find((r) => keyOf(r) === selected) : undefined;
@@ -277,8 +282,8 @@ function DeskCalendar() {
             ))}
           </div>
           <div className="cal-filterbar__end">
-            {(status.length > 0 || hidden.length > 0) && (
-              <Button size="sm" variant="ghost" icon="x" onClick={() => setFilter({ status: [], hidden: [] })}>{t.ui.clearFilters}</Button>
+            {(status.length > 0 || hidden.length > 0 || types.length > 0) && (
+              <Button size="sm" variant="ghost" icon="x" onClick={() => setFilter({ status: [], hidden: [], types: [] })}>{t.ui.clearFilters}</Button>
             )}
             <Button
               size="sm" variant={filtersOpen ? 'secondary' : 'outline'} icon="filter" iconEnd={filtersOpen ? 'chevron-up' : 'chevron-down'}
@@ -297,6 +302,9 @@ function DeskCalendar() {
                 ))}
                 {hidden.length > 0 && <Button size="sm" variant="ghost" icon="eye" onClick={() => setFilter({ hidden: [] })}>{tc.showAll}</Button>}
               </div>
+            </Field>
+            <Field group label={t.apptType.label} hint={tc.typesHint}>
+              <TypeFilterChips value={types} onToggle={toggleType} />
             </Field>
             <Field group label={dl.status} hint={dl.statusHint}>
               <div className="filter-chips">

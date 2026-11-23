@@ -14,6 +14,7 @@ import { AppointmentsModule } from './modules/appointments/appointments.module.j
 import { AuditModule } from './modules/audit/audit.module.js';
 import { BillingModule } from './modules/billing/billing.module.js';
 import { BlogModule } from './modules/blog/blog.module.js';
+import { ClientReviewsModule } from './modules/client-reviews/client-reviews.module.js';
 import { ClinicalModule } from './modules/clinical/clinical.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { ClinicServicesModule } from './modules/clinic-services/clinic-services.module.js';
@@ -75,6 +76,7 @@ import { VisitsModule } from './modules/visits/visits.module.js';
     ReferralsModule,
     SalariesModule,
     BlogModule,
+    ClientReviewsModule,
   ],
 })
 export class AppModule {}

@@ -1,4 +1,4 @@
-import { lazy, useEffect, type ComponentType } from 'react';
+import { lazy, useEffect, type ComponentType, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { getSession, showError, syncLanguageFromAccount } from './api';
 import { useI18n } from './i18n';
@@ -36,6 +36,9 @@ const MarketingReports = lazyPage(() => import('./pages/Referrals'), 'MarketingR
 const ReferringDoctorPage = lazyPage(() => import('./pages/Referrals'), 'ReferringDoctorPage');
 const ReferringDoctors = lazyPage(() => import('./pages/Referrals'), 'ReferringDoctors');
 const Salaries = lazyPage(() => import('./pages/Salaries'), 'Salaries');
+const Employees = lazyPage(() => import('./pages/Employees'), 'Employees');
+const ClientReviews = lazyPage(() => import('./pages/ClientReviews'), 'ClientReviews');
+const ClientReviewForm = lazyPage(() => import('./pages/ClientReviews'), 'ClientReviewForm');
 
 export { homeFor };
 
@@ -43,6 +46,15 @@ export { homeFor };
 function Staff() {
   const loc = useLocation();
   return getSession() ? <StaffLayout /> : <Navigate to="/login" replace state={{ from: loc.pathname + loc.search }} />;
+}
+
+/**
+ * Pages about salaries (doctors' and employees') and the client reviews: the OWNER only. The API refuses everyone else
+ * anyway; this only keeps another role from landing on an empty page: they go to their own home.
+ */
+function OwnerOnly({ children }: { children: ReactNode }) {
+  const session = getSession();
+  return session?.user.role === 'OWNER' ? children : <Navigate to={session ? homeFor(session.user.role) : '/login'} replace />;
 }
 
 function NotFound() {
@@ -100,11 +112,15 @@ export function App() {
           <Route path="/owner/reports" element={<OwnerReports />} />
           <Route path="/owner/referring-doctors" element={<ReferringDoctors />} />
           <Route path="/owner/referring-doctors/:id" element={<ReferringDoctorPage />} />
-          <Route path="/owner/salaries" element={<Salaries />} />
+          <Route path="/owner/salaries" element={<OwnerOnly><Salaries /></OwnerOnly>} />
+          <Route path="/owner/employees" element={<OwnerOnly><Employees /></OwnerOnly>} />
           <Route path="/owner/marketing" element={<MarketingReports />} />
           <Route path="/owner/attention" element={<Attention />} />
           <Route path="/owner/audit" element={<AuditLog />} />
           <Route path="/owner/blog" element={<BlogAdmin />} />
+          <Route path="/owner/reviews" element={<OwnerOnly><ClientReviews /></OwnerOnly>} />
+          <Route path="/owner/reviews/new" element={<OwnerOnly><ClientReviewForm /></OwnerOnly>} />
+          <Route path="/owner/reviews/:id/edit" element={<OwnerOnly><ClientReviewForm /></OwnerOnly>} />
         </Route>
 
         <Route element={getSession() ? <StaffLayout /> : <PublicLayout />}>

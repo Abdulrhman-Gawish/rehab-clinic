@@ -18,6 +18,7 @@ import {
 } from 'class-validator';
 import {
   OptionalNotNull,
+  ToTrimmedList,
   Trim,
   TrimAndCollapse,
 } from '../../../common/decorators/transform.decorators.js';
@@ -34,17 +35,9 @@ import {
 } from '../blog.constants.js';
 import { BlogCategory } from '../blog.enums.js';
 
-// Multipart sends one `keywords` field per keyword (or `keywords[]`); a
-// single one arrives as a plain string. Each keyword is trimmed.
-const ToKeywordList = () =>
-  Transform(({ value }: { value: unknown }) => {
-    const list = typeof value === 'string' ? [value] : value;
-    return Array.isArray(list)
-      ? list.map((item: unknown) =>
-          typeof item === 'string' ? item.trim() : item,
-        )
-      : list;
-  });
+// Multipart sends one `keywords` field per keyword (or `keywords[]`); each
+// keyword is trimmed.
+const ToKeywordList = () => ToTrimmedList();
 
 // Sanitized before validation, so "required" and the length apply to what
 // is stored. Nothing readable left becomes '' (rejected as empty).

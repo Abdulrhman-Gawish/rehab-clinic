@@ -76,6 +76,9 @@
 
 /* Doctor salaries (pages/Salaries.tsx). */
 .salary-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-4); }
+.staff-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-4) var(--space-6); border-block-end: var(--border-width) solid var(--color-border); }
+.staff-toolbar form { flex: 1 1 320px; max-width: 520px; }
+@media (max-width: 639.98px) { .staff-toolbar { padding: var(--space-3) var(--space-4); } }
 .salary-toolbar > .field:first-child { flex: 0 1 420px; }
 .salary-toolbar__doctor { flex: 1 1 240px; max-width: 360px; }
 .salary-history { margin: var(--space-2) 0 0; padding-inline-start: var(--space-5); display: grid; gap: var(--space-1); font-size: var(--text-body-sm); }
