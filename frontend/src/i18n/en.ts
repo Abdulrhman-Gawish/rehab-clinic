@@ -6,6 +6,7 @@ import { checkinEn } from './areas/checkin.en';
 import { ownerEn } from './areas/owner.en';
 import { referralEn } from './areas/referral.en';
 import { siteEn } from './areas/site.en';
+import { reviewsEn } from './areas/reviews.en';
 
 export const en = {
   app: { title: 'Rehab Center for Physical Therapy and Rehabilitation', short: 'Rehab Clinic' },
@@ -65,9 +66,11 @@ export const en = {
     audit: 'Audit log',
     referringDoctors: 'Referring doctors',
     salaries: 'Salaries',
+    employees: 'Employees',
     marketing: 'Marketing & referrals',
     blog: 'Blog',
     publicBlog: 'Our blogs',
+    clientReviews: 'Client reviews',
     home: 'Home',
   },
 
@@ -211,6 +214,8 @@ export const en = {
       PAYOUT_VOIDED: 'This payout is already voided.',
       SALARY_TERMS_INVALID: 'These salary terms are not valid. Check the commission rates.',
       SALARY_MONTH_PAID: 'That month (or a later one) already has a salary payment. New terms can only start after the last paid month.',
+      EMPLOYEE_USER_TAKEN: 'Another employee is already linked to this login account.',
+      EMPLOYEE_USER_INVALID: "A doctor's account can't be linked to an employee: doctors are paid through their own salary terms.",
       PATIENT_DETAILS_REQUIRED: "Complete the patient's details (identity document, gender, date of birth, referral source) before they enter the doctor.",
       NATIONAL_ID_INVALID: 'This is not a valid Egyptian National ID (check the century and the birth date).',
       NATIONAL_ID_MISMATCH: 'The date of birth or gender does not match the National ID.',
@@ -295,6 +300,8 @@ export const en = {
     replacementInvoiceId: 'Replacement invoice', replacementInvoiceNumber: 'Replacement invoice',
     keywords: 'Keywords', category: 'Category', image: 'Cover image', coverImageKey: 'Cover file',
     coverImageMimeType: 'Cover type', deleted: 'Deleted',
+    clientName: 'Client name', reviewType: 'Review type', isPublished: 'Published', attachments: 'Attachments',
+    attachmentsAdded: 'Files added', attachmentsRemoved: 'Files removed', removeAttachmentIds: 'Files to remove',
   } as Record<string, string>,
 
   // Page text, one file per area (src/i18n/areas).
@@ -304,6 +311,7 @@ export const en = {
   ...ownerEn,
   ...referralEn,
   ...siteEn,
+  ...reviewsEn,
 
   enums: {
     BlogCategory: {
@@ -334,6 +342,7 @@ export const en = {
     PatientSource: { ONLINE: 'Online', RECEPTION: 'Reception' },
     Gender: { MALE: 'Male', FEMALE: 'Female' },
     UserRole: { OWNER: 'Owner', DOCTOR: 'Doctor', RECEPTIONIST: 'Receptionist' },
+    ClientReviewType: { TEXT: 'Text', IMAGE: 'Image', GALLERY: 'Gallery' },
     AcquisitionChannel: {
       FACEBOOK: 'Facebook', INSTAGRAM: 'Instagram', OTHER_SOCIAL_MEDIA: 'Other social media', GOOGLE: 'Google search / Maps',
       GOOGLE_ADS: 'Google Ads', ADVERTISEMENT: 'Advertisement (print, outdoor, radio)', FRIENDS_FAMILY: 'Friends and family',
@@ -368,7 +377,9 @@ export const en = {
       PATIENT_ATTACHMENT: 'Patient attachment', PACKAGE: 'Package', PATIENT_PACKAGE: 'Patient package',
       ACQUISITION_SOURCE: 'Acquisition source', REFERRING_DOCTOR: 'Referring doctor', PATIENT_REFERRAL: 'Patient referral',
       REFERRAL_COMMISSION: 'Referral commission', REFERRAL_PAYOUT: 'Commission payout', BLOG_POST: 'Blog post',
+      CLIENT_REVIEW: 'Client review',
       DOCTOR_SALARY_TERMS: 'Doctor salary terms', DOCTOR_SALARY_PAYMENT: 'Doctor salary payment',
+      EMPLOYEE: 'Employee', EMPLOYEE_SALARY_TERMS: 'Employee salary', EMPLOYEE_SALARY_PAYMENT: 'Employee salary payment',
     },
     AuditAction: {
       LOGIN: 'Logged in', LOGIN_FAILED: 'Login failed', LOGOUT: 'Logged out',
@@ -417,7 +428,12 @@ export const en = {
       REFERRAL_COMMISSION_RECORDED: 'Commission recorded', REFERRAL_COMMISSION_ADJUSTED: 'Commission adjusted',
       REFERRAL_PAYOUT_RECORDED: 'Commission paid to doctor', REFERRAL_PAYOUT_VOIDED: 'Commission payout voided',
       DOCTOR_SALARY_TERMS_SET: 'Salary terms set', DOCTOR_SALARY_PAID: 'Salary paid', DOCTOR_SALARY_PAYMENT_VOIDED: 'Salary payment voided',
+      EMPLOYEE_CREATED: 'Employee added', EMPLOYEE_UPDATED: 'Employee edited', EMPLOYEE_ACTIVATED: 'Employee activated',
+      EMPLOYEE_DEACTIVATED: 'Employee deactivated', EMPLOYEE_SALARY_SET: 'Employee salary set',
+      EMPLOYEE_SALARY_PAID: 'Employee salary paid', EMPLOYEE_SALARY_PAYMENT_VOIDED: 'Employee salary payment voided',
       BLOG_POST_CREATED: 'Blog post published', BLOG_POST_UPDATED: 'Blog post edited', BLOG_POST_DELETED: 'Blog post deleted',
+      CLIENT_REVIEW_CREATED: 'Client review added', CLIENT_REVIEW_UPDATED: 'Client review edited',
+      CLIENT_REVIEW_DELETED: 'Client review deleted',
     },
     TimelineEventType: {
       PATIENT_CREATED: 'Patient registered', PATIENT_UPDATED: 'Patient details changed',

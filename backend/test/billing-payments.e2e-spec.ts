@@ -766,16 +766,9 @@ describe('Billing: payments (e2e)', () => {
             INSTAPAY: '0.00',
           },
         },
-        salaryPayments: {
-          count: 0,
-          total: '0.00',
-          byMethod: {
-            CASH: '0.00',
-            CARD: '0.00',
-            WALLET: '0.00',
-            INSTAPAY: '0.00',
-          },
-        },
+        // Salaries (doctors' and employees') are the OWNER's only.
+        salaryPayments: null,
+        employeeSalaryPayments: null,
         expectedCash: '320.00',
         outstanding: {
           // A 500 + B 360 issued today (B's discount at the same instant

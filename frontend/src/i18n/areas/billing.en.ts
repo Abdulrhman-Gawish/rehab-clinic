@@ -44,6 +44,7 @@ export const billingEn = {
     viaPayout: 'Via its payout',
     fromPayoutHint: "Recorded by a payout to a referring doctor: void the payout on the doctor's page.",
     salaryBadge: 'Doctor salary',
+    employeeSalaryBadge: 'Employee salary',
     salaryFor: 'Salary:',
     fromSalaryHint: 'Recorded by a salary payment: void the payment in Owner → Salaries.',
     commissionTotalLabel: 'Paid in doctor commissions',

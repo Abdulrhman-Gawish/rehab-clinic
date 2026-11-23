@@ -20,6 +20,8 @@ export enum ExpenseOrigin {
   MANUAL = 'MANUAL',
   // A salary payment to one of the clinic's doctors.
   DOCTOR_SALARY = 'DOCTOR_SALARY',
+  // A salary payment to one of the clinic's employees.
+  EMPLOYEE_SALARY = 'EMPLOYEE_SALARY',
   // A payout to a referring doctor.
   REFERRAL_PAYOUT = 'REFERRAL_PAYOUT',
 }

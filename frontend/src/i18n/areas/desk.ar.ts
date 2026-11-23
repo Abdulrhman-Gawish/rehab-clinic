@@ -98,6 +98,7 @@ export const deskAr: typeof deskEn = {
     weekRange: (from: string, to: string) => `${from} – ${to}`,
     doctors: 'الأطباء', showAll: 'عرض الكل',
     doctorsHint: 'اضغط على اسم الطبيب لإخفاء عموده أو إظهاره.',
+    typesHint: 'بدون اختيار تظهر كل الأنواع. الأعداد بالأعلى تتبع الأنواع المختارة.',
     walkIns: 'بدون موعد',
     noWalkIns: 'لا يوجد حضور بدون موعد',
     noDoctors: 'لا يوجد أطباء معروضون',

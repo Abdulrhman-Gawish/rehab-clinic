@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import {
+  DataSource,
+  EntityManager,
+  Repository,
+  type ObjectLiteral,
+  type SelectQueryBuilder,
+} from 'typeorm';
 import { toPaginated } from '../../common/dto/pagination.dto.js';
 import { UserRefDto } from '../../common/dto/user-ref.dto.js';
 import { UserRole } from '../../common/enums/user-role.enum.js';
@@ -38,6 +44,8 @@ import {
 import {
   ExpenseCategory,
   ExpenseCategoryKey,
+  isOwnerOnlyCategory,
+  OWNER_ONLY_CATEGORY_KEYS,
   SYSTEM_CATEGORY_NAMES,
 } from './entities/expense-category.entity.js';
 import { Expense, ExpenseStatus } from './entities/expense.entity.js';
@@ -72,6 +80,18 @@ export interface PayoutExpenseInput {
 export interface SalaryExpenseInput {
   salaryPaymentId: string;
   doctorName: string;
+  // 'YYYY-MM' the payment is for.
+  month: string;
+  amount: string;
+  date: string;
+  method: PaymentMethod;
+  reference: string | null;
+}
+
+// The expense of a salary payment to one of the clinic's employees.
+export interface EmployeeSalaryExpenseInput {
+  salaryPaymentId: string;
+  employeeName: string;
   // 'YYYY-MM' the payment is for.
   month: string;
   amount: string;
@@ -142,7 +162,7 @@ export class ExpensesService {
       });
       return expense.id;
     });
-    return this.findOne(id);
+    return this.findOne(id, actor);
   }
 
   // Creator on the same local day, or OWNER any time.
@@ -188,7 +208,7 @@ export class ExpensesService {
         changes,
       );
     });
-    return this.findOne(id);
+    return this.findOne(id, actor);
   }
 
   async void(
@@ -200,7 +220,7 @@ export class ExpensesService {
       const expense = await this.lockModifiable(id, actor, manager);
       await this.markVoided(manager, expense, reason, actor);
     });
-    return this.findOne(id);
+    return this.findOne(id, actor);
   }
 
   /**
@@ -250,6 +270,31 @@ export class ExpensesService {
         method: input.method,
         reference: input.reference,
         auditLink: { salaryPaymentId: input.salaryPaymentId },
+      },
+      actor,
+    );
+  }
+
+  /**
+   * The expense of an employee's salary payment, in the payment's
+   * transaction, in the EMPLOYEE_SALARY category (same rules as a doctor's).
+   */
+  createForEmployeeSalaryPayment(
+    manager: EntityManager,
+    input: EmployeeSalaryExpenseInput,
+    actor: Actor,
+  ): Promise<Expense> {
+    return this.createSystemExpense(
+      manager,
+      ExpenseCategoryKey.EMPLOYEE_SALARY,
+      {
+        description: `Salary ${input.month}: ${input.employeeName}`,
+        payee: input.employeeName,
+        amount: input.amount,
+        date: input.date,
+        method: input.method,
+        reference: input.reference,
+        auditLink: { employeeSalaryPaymentId: input.salaryPaymentId },
       },
       actor,
     );
@@ -306,7 +351,8 @@ export class ExpensesService {
     return expense;
   }
 
-  // A voided payout (or salary payment) voids its expense, in its transaction.
+  // A voided payout (or doctor / employee salary payment) voids its expense,
+  // in its transaction.
   async voidForPayout(
     manager: EntityManager,
     expenseId: string,
@@ -365,12 +411,17 @@ export class ExpensesService {
         await this.storage.discard(key);
         throw error;
       });
-    return this.findOne(id);
+    return this.findOne(id, actor);
   }
 
-  async receipt(id: string): Promise<ReceiptFile> {
-    const expense = await this.expenses.findOneBy({ id });
-    if (!expense) throw new NotFoundException('Expense not found');
+  async receipt(id: string, actor: Actor): Promise<ReceiptFile> {
+    const expense = await this.expenses.findOne({
+      where: { id },
+      relations: { category: true },
+    });
+    if (!expense || !this.canSee(actor, expense.category?.systemKey ?? null)) {
+      throw new NotFoundException('Expense not found');
+    }
     if (!expense.receiptFileKey)
       throw new NotFoundException('This expense has no receipt');
     const extension = expense.receiptFileKey.slice(
@@ -383,16 +434,20 @@ export class ExpensesService {
     };
   }
 
-  async findOne(id: string): Promise<ExpenseResponseDto> {
-    const expense = await this.query()
-      .where('expense.id = :id', { id })
+  async findOne(id: string, actor: Actor): Promise<ExpenseResponseDto> {
+    const expense = await this.visibleTo(this.query(), actor)
+      .andWhere('expense.id = :id', { id })
       .getOne();
     if (!expense) throw new NotFoundException('Expense not found');
     return this.toDto(expense);
   }
 
-  async list(query: ListExpensesQueryDto): Promise<ExpenseListDto> {
-    const qb = this.query();
+  async list(
+    query: ListExpensesQueryDto,
+    actor: Actor,
+  ): Promise<ExpenseListDto> {
+    // Before the totals query is cloned from it: hidden rows never count.
+    const qb = this.visibleTo(this.query(), actor);
     if (query.from)
       qb.andWhere('expense.expenseDate >= :from', { from: query.from });
     if (query.to) qb.andWhere('expense.expenseDate <= :to', { to: query.to });
@@ -442,6 +497,27 @@ export class ExpensesService {
   }
 
   // ---------- Internals ----------
+
+  /**
+   * Salaries (doctors' and employees') are the OWNER's only
+   * (OWNER_ONLY_CATEGORY_KEYS): for any other role their expenses don't
+   * exist.
+   */
+  private canSee(actor: Actor, key: ExpenseCategoryKey | null): boolean {
+    return actor.role === UserRole.OWNER || !isOwnerOnlyCategory(key);
+  }
+
+  // `qb` joins the category as `category` (query()).
+  private visibleTo<T extends ObjectLiteral>(
+    qb: SelectQueryBuilder<T>,
+    actor: Actor,
+  ): SelectQueryBuilder<T> {
+    if (actor.role === UserRole.OWNER) return qb;
+    return qb.andWhere(
+      '(category.systemKey IS NULL OR category.systemKey NOT IN (:...ownerOnly))',
+      { ownerOnly: OWNER_ONLY_CATEGORY_KEYS },
+    );
+  }
 
   // An expense with its category, people and payout (if any).
   private query() {
@@ -513,19 +589,24 @@ export class ExpensesService {
       where: { id },
       lock: { mode: 'pessimistic_write' },
     });
-    if (!expense) throw new NotFoundException('Expense not found');
+    const category = expense
+      ? await manager.findOneByOrFail(ExpenseCategory, {
+          id: expense.categoryId,
+        })
+      : null;
+    // A salary payment is not even there for anyone but the OWNER.
+    if (!expense || !category || !this.canSee(actor, category.systemKey)) {
+      throw new NotFoundException('Expense not found');
+    }
 
     const refuse = (message: string) =>
       unprocessable(ErrorCode.EXPENSE_EDIT_NOT_ALLOWED, message);
     if (expense.status === ExpenseStatus.VOIDED)
       throw refuse('The expense is voided');
     if (!receiptOnly) {
-      const category = await manager.findOneByOrFail(ExpenseCategory, {
-        id: expense.categoryId,
-      });
       if (category.systemKey) {
         throw refuse(
-          'This expense records a payout (referral commission or doctor salary): void the payout instead',
+          'This expense records a payout (referral commission or salary): void the payout instead',
         );
       }
     }

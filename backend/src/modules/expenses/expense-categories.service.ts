@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
+import { UserRole } from '../../common/enums/user-role.enum.js';
 import {
   conflict,
   ErrorCode,
@@ -14,6 +15,7 @@ import type { ExpenseCategoryDto } from './dto/expense.dto.js';
 import {
   EXPENSE_CATEGORY_NAME_UNIQUE,
   ExpenseCategory,
+  isOwnerOnlyCategory,
 } from './entities/expense-category.entity.js';
 
 const toDto = (category: ExpenseCategory): ExpenseCategoryDto => ({
@@ -44,12 +46,21 @@ export class ExpenseCategoriesService {
     private readonly auditService: AuditService,
   ) {}
 
-  async list(includeInactive: boolean): Promise<ExpenseCategoryDto[]> {
+  // Salaries are the OWNER's only: their categories too.
+  async list(
+    includeInactive: boolean,
+    actor: Actor,
+  ): Promise<ExpenseCategoryDto[]> {
     const rows = await this.categories.find({
       where: includeInactive ? {} : { isActive: true },
       order: { name: 'ASC' },
     });
-    return rows.map(toDto);
+    return rows
+      .filter(
+        (c) =>
+          actor.role === UserRole.OWNER || !isOwnerOnlyCategory(c.systemKey),
+      )
+      .map(toDto);
   }
 
   async create(name: string, actor: Actor): Promise<ExpenseCategoryDto> {

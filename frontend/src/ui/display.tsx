@@ -93,6 +93,7 @@ export const STATUS_TONES: Partial<Record<EnumName, Record<string, Tone>>> = {
   CommissionStatus: { PENDING: 'neutral', ELIGIBLE: 'warning', PAID: 'success' },
   PatientReferralStatus: { ACTIVE: 'success', ENDED: 'neutral' },
   UserRole: { OWNER: 'brand', DOCTOR: 'info', RECEPTIONIST: 'neutral' },
+  ClientReviewType: { TEXT: 'neutral', IMAGE: 'info', GALLERY: 'accent' },
   AppointmentSource: { ONLINE: 'info', RECEPTION: 'neutral' },
   AppointmentType: { EXAMINATION: 'accent', FOLLOW_UP: 'info', SESSION: 'brand' },
   PatientSource: { ONLINE: 'info', RECEPTION: 'neutral' },

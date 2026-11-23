@@ -357,6 +357,7 @@ describe('Reports (e2e)', () => {
       expenses: '280.00', // 80 + 200 (voided 999 and Nov 1 excluded)
       commissionPayouts: '0.00',
       salaryPayments: '0.00',
+      employeeSalaryPayments: '0.00',
       netAfterExpenses: '720.00',
       invoiced: '1740.00', // I2 500 + I3 300 + I4 270 + I6 130 + I7 270 + I8 270
       // Still owed at the end of Oct 31 (I1 was paid on the 28th):
@@ -634,6 +635,7 @@ describe('Reports (e2e)', () => {
       total: '280.00',
       commissionPayouts: '0.00',
       salaryPayments: '0.00',
+      employeeSalaryPayments: '0.00',
       byCategory: [
         {
           category: { id: ids.supplies, name: 'Supplies' },
@@ -787,6 +789,7 @@ describe('Reports (e2e)', () => {
       refunds: { count: 1, total: '70.00' },
       expenses: { count: 2, total: '280.00' }, // nor the voided 999
       salaryPayments: { count: 0, total: '0.00' },
+      employeeSalaryPayments: { count: 0, total: '0.00' },
       commissionPayouts: { count: 0, total: '0.00' },
       net: '720.00', // = summary.netAfterExpenses
     });

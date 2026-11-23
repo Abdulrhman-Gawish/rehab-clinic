@@ -6,6 +6,7 @@ import { checkinAr } from './areas/checkin.ar';
 import { ownerAr } from './areas/owner.ar';
 import { referralAr } from './areas/referral.ar';
 import { siteAr } from './areas/site.ar';
+import { reviewsAr } from './areas/reviews.ar';
 import type { Messages } from './en';
 
 export const ar: Messages = {
@@ -66,9 +67,11 @@ export const ar: Messages = {
     audit: 'سجل التدقيق',
     referringDoctors: 'الأطباء المُحيلون',
     salaries: 'الرواتب',
+    employees: 'الموظفون',
     marketing: 'التسويق والإحالات',
     blog: 'المدونة',
     publicBlog: 'مدوناتنا',
+    clientReviews: 'آراء العملاء',
     home: 'الرئيسية',
   },
 
@@ -209,6 +212,8 @@ export const ar: Messages = {
       PAYOUT_VOIDED: 'هذه الدفعة للطبيب مُبطلة بالفعل.',
       SALARY_TERMS_INVALID: 'شروط الراتب غير صحيحة. راجع نسب أو مبالغ العمولة.',
       SALARY_MONTH_PAID: 'هذا الشهر (أو شهر بعده) له دفعة راتب بالفعل. الشروط الجديدة تبدأ بعد آخر شهر مدفوع.',
+      EMPLOYEE_USER_TAKEN: 'هذا الحساب مربوط بموظف آخر بالفعل.',
+      EMPLOYEE_USER_INVALID: 'لا يمكن ربط حساب طبيب بموظف: الأطباء يتقاضون رواتبهم من شروط رواتب الأطباء.',
       PATIENT_DETAILS_REQUIRED: 'أكمل بيانات المريض (وثيقة الهوية، النوع، تاريخ الميلاد، مصدر الإحالة) قبل دخوله إلى الطبيب.',
       NATIONAL_ID_INVALID: 'رقم قومي مصري غير صحيح (راجع القرن وتاريخ الميلاد).',
       NATIONAL_ID_MISMATCH: 'تاريخ الميلاد أو النوع لا يطابق الرقم القومي.',
@@ -292,6 +297,8 @@ export const ar: Messages = {
     replacementInvoiceId: 'الفاتورة البديلة', replacementInvoiceNumber: 'الفاتورة البديلة',
     keywords: 'الكلمات المفتاحية', category: 'الفئة', image: 'صورة الغلاف', coverImageKey: 'ملف الغلاف',
     coverImageMimeType: 'نوع الغلاف', deleted: 'محذوف',
+    clientName: 'اسم العميل', reviewType: 'نوع الرأي', isPublished: 'منشور', attachments: 'المرفقات',
+    attachmentsAdded: 'ملفات مضافة', attachmentsRemoved: 'ملفات محذوفة', removeAttachmentIds: 'ملفات للحذف',
   },
 
   // Page text, one file per area (src/i18n/areas).
@@ -301,6 +308,7 @@ export const ar: Messages = {
   ...ownerAr,
   ...referralAr,
   ...siteAr,
+  ...reviewsAr,
 
   enums: {
     BlogCategory: {
@@ -331,6 +339,7 @@ export const ar: Messages = {
     PatientSource: { ONLINE: 'عبر الإنترنت', RECEPTION: 'الاستقبال' },
     Gender: { MALE: 'ذكر', FEMALE: 'أنثى' },
     UserRole: { OWNER: 'المالك', DOCTOR: 'طبيب', RECEPTIONIST: 'موظف استقبال' },
+    ClientReviewType: { TEXT: 'نص', IMAGE: 'صورة', GALLERY: 'معرض صور' },
     AcquisitionChannel: {
       FACEBOOK: 'فيسبوك', INSTAGRAM: 'إنستجرام', OTHER_SOCIAL_MEDIA: 'وسائل تواصل أخرى', GOOGLE: 'بحث جوجل / الخرائط',
       GOOGLE_ADS: 'إعلانات جوجل', ADVERTISEMENT: 'إعلان (مطبوع، لافتات، راديو)', FRIENDS_FAMILY: 'الأصدقاء والعائلة',
@@ -364,7 +373,9 @@ export const ar: Messages = {
       PATIENT_ATTACHMENT: 'مرفق مريض', PACKAGE: 'باقة', PATIENT_PACKAGE: 'باقة مريض',
       ACQUISITION_SOURCE: 'مصدر المريض', REFERRING_DOCTOR: 'طبيب مُحيل', PATIENT_REFERRAL: 'إحالة مريض',
       REFERRAL_COMMISSION: 'عمولة إحالة', REFERRAL_PAYOUT: 'دفعة عمولة لطبيب', BLOG_POST: 'مدونة',
+      CLIENT_REVIEW: 'رأي عميل',
       DOCTOR_SALARY_TERMS: 'شروط راتب طبيب', DOCTOR_SALARY_PAYMENT: 'دفعة راتب طبيب',
+      EMPLOYEE: 'موظف', EMPLOYEE_SALARY_TERMS: 'راتب موظف', EMPLOYEE_SALARY_PAYMENT: 'دفعة راتب موظف',
     },
     AuditAction: {
       LOGIN: 'تسجيل دخول', LOGIN_FAILED: 'فشل تسجيل الدخول', LOGOUT: 'تسجيل خروج',
@@ -413,7 +424,12 @@ export const ar: Messages = {
       REFERRAL_COMMISSION_RECORDED: 'تسجيل عمولة', REFERRAL_COMMISSION_ADJUSTED: 'تسوية عمولة',
       REFERRAL_PAYOUT_RECORDED: 'دفع عمولة للطبيب', REFERRAL_PAYOUT_VOIDED: 'إبطال دفعة عمولة',
       DOCTOR_SALARY_TERMS_SET: 'تحديد شروط الراتب', DOCTOR_SALARY_PAID: 'دفع راتب', DOCTOR_SALARY_PAYMENT_VOIDED: 'إبطال دفعة راتب',
+      EMPLOYEE_CREATED: 'إضافة موظف', EMPLOYEE_UPDATED: 'تعديل موظف', EMPLOYEE_ACTIVATED: 'تفعيل موظف',
+      EMPLOYEE_DEACTIVATED: 'إيقاف موظف', EMPLOYEE_SALARY_SET: 'تحديد راتب موظف',
+      EMPLOYEE_SALARY_PAID: 'دفع راتب موظف', EMPLOYEE_SALARY_PAYMENT_VOIDED: 'إبطال دفعة راتب موظف',
       BLOG_POST_CREATED: 'نشر مدونة', BLOG_POST_UPDATED: 'تعديل مدونة', BLOG_POST_DELETED: 'حذف مدونة',
+      CLIENT_REVIEW_CREATED: 'إضافة رأي عميل', CLIENT_REVIEW_UPDATED: 'تعديل رأي عميل',
+      CLIENT_REVIEW_DELETED: 'حذف رأي عميل',
     },
     TimelineEventType: {
       PATIENT_CREATED: 'تسجيل المريض', PATIENT_UPDATED: 'تغيير بيانات المريض',

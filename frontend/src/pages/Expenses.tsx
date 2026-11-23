@@ -128,8 +128,9 @@ export function Expenses() {
               {items.map((x) => {
                 const voided = x.status === 'VOIDED';
                 const payout = x.referralPayout;
-                // A doctor's salary payment: changed only through the payment (Owner -> Salaries).
-                const salary = x.category.systemKey === 'DOCTOR_SALARY';
+                // A doctor's or employee's salary payment: changed only through the payment (Owner -> Salaries).
+                const staffSalary = x.category.systemKey === 'EMPLOYEE_SALARY';
+                const salary = x.category.systemKey === 'DOCTOR_SALARY' || staffSalary;
                 const system = !!payout || salary;
                 const doctor = payout && (isOwner
                   ? <Link to={`/owner/referring-doctors/${payout.referringDoctor.id}`}>{payout.referringDoctor.name}</Link>
@@ -139,7 +140,12 @@ export function Expenses() {
                     <td><Ltr>{x.expenseNumber}</Ltr></td>
                     <td className="nowrap">{fmtDate(x.expenseDate)}</td>
                     <td>
-                      <CellText sub={payout ? <Badge tone="info" icon="users">{te.commissionBadge}</Badge> : salary && <Badge tone="info" icon="stethoscope">{te.salaryBadge}</Badge>}>{x.category.name}</CellText>
+                      <CellText
+                        sub={payout ? <Badge tone="info" icon="users">{te.commissionBadge}</Badge>
+                          : salary && <Badge tone="info" icon={staffSalary ? 'id-card' : 'stethoscope'}>{staffSalary ? te.employeeSalaryBadge : te.salaryBadge}</Badge>}
+                      >
+                        {x.category.name}
+                      </CellText>
                     </td>
                     <td>
                       {/* A payout's expense: labelled in the UI language, with the doctor it was paid to. */}

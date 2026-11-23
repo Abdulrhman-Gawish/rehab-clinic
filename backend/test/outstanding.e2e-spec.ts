@@ -63,8 +63,10 @@ type Flow = {
     opening: Totals;
     salariesEarned: string;
     salaryAdjustments: string;
+    employeeSalariesEarned: string;
     commissionsEarned: string;
     salaryPayments: string;
+    employeeSalaryPayments: string;
     commissionPayouts: string;
     advancesChange: string;
     closing: Totals;
@@ -73,6 +75,7 @@ type Flow = {
 type Totals = {
   owed: string;
   doctorSalaries: string;
+  employeeSalaries: string;
   referralCommissions: string;
   advances: string;
   pendingCommissions: string;
@@ -326,6 +329,7 @@ describe('Outstanding balances (e2e)', () => {
   ) => ({
     owed: addMoney(doctorSalaries, referral),
     doctorSalaries,
+    employeeSalaries: '0.00', // no employees in this story
     referralCommissions: referral,
     advances,
     pendingCommissions: '0.00',
@@ -333,8 +337,10 @@ describe('Outstanding balances (e2e)', () => {
   const noMove = {
     salariesEarned: '0.00',
     salaryAdjustments: '0.00',
+    employeeSalariesEarned: '0.00',
     commissionsEarned: '0.00',
     salaryPayments: '0.00',
+    employeeSalaryPayments: '0.00',
     commissionPayouts: '0.00',
     advancesChange: '0.00',
   };
@@ -513,13 +519,17 @@ describe('Outstanding balances (e2e)', () => {
         addMoney(
           subMoney(
             subMoney(
-              addMoney(
-                c!.opening.owed,
-                c!.salariesEarned,
-                c!.salaryAdjustments,
-                c!.commissionsEarned,
+              subMoney(
+                addMoney(
+                  c!.opening.owed,
+                  c!.salariesEarned,
+                  c!.salaryAdjustments,
+                  c!.employeeSalariesEarned,
+                  c!.commissionsEarned,
+                ),
+                c!.salaryPayments,
               ),
-              c!.salaryPayments,
+              c!.employeeSalaryPayments,
             ),
             c!.commissionPayouts,
           ),
@@ -568,8 +578,10 @@ describe('Outstanding balances (e2e)', () => {
           opening: oct31.outstanding.clinicOwes!.closing,
           salariesEarned: '60.00',
           salaryAdjustments: '-5.00',
+          employeeSalariesEarned: '0.00',
           commissionsEarned: '30.00',
           salaryPayments: '2500.00',
+          employeeSalaryPayments: '0.00',
           commissionPayouts: '30.00',
           advancesChange: '440.00',
           closing: nov6.outstanding.clinicOwes!.closing,
@@ -625,6 +637,7 @@ describe('Outstanding balances (e2e)', () => {
             },
           ],
         },
+        employeeSalaries: { owed: '0.00', advances: '0.00', rows: [] },
         referralCommissions: {
           owed: '30.00',
           advances: '0.00',
@@ -768,6 +781,7 @@ describe('Outstanding balances (e2e)', () => {
         refunds: { count: 0, total: '0.00' },
         expenses: { count: 3, total: '2530.00' },
         salaryPayments: { count: 2, total: '2500.00' },
+        employeeSalaryPayments: { count: 0, total: '0.00' },
         commissionPayouts: { count: 1, total: '30.00' },
         net: '-1080.00',
       });

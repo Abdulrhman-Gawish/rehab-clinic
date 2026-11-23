@@ -49,6 +49,19 @@ export const ToArray = () =>
     ),
   );
 
+// Multipart lists: one field per item (or `name[]`); a single item arrives as
+// a plain string. Each item is trimmed. `dropEmpty` removes blank items, so a
+// single empty field sends an empty list (multipart cannot send `[]`).
+export const ToTrimmedList = ({ dropEmpty = false } = {}) =>
+  Transform(({ value }: { value: unknown }) => {
+    const list = typeof value === 'string' ? [value] : value;
+    if (!Array.isArray(list)) return list;
+    const items = list.map((item: unknown) =>
+      typeof item === 'string' ? item.trim() : item,
+    );
+    return dropEmpty ? items.filter((item) => item !== '') : items;
+  });
+
 // Query strings arrive as "true"/"false"; anything else is left for
 // @IsBoolean() to reject.
 export const ToBoolean = () =>

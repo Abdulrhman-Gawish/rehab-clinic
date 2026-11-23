@@ -80,9 +80,11 @@ export class PatientsOweFlowDto {
   unpaidInvoices: number;
 }
 
-/** What the clinic owes its doctors at one moment. */
+/** What the clinic owes its doctors and employees at one moment. */
 export class ClinicOwesTotalsDto {
-  @ApiProperty(MONEY('5300.00', 'doctorSalaries + referralCommissions'))
+  @ApiProperty(
+    MONEY('7300.00', 'doctorSalaries + employeeSalaries + referralCommissions'),
+  )
   owed: string;
 
   @ApiProperty(
@@ -92,6 +94,14 @@ export class ClinicOwesTotalsDto {
     ),
   )
   doctorSalaries: string;
+
+  @ApiProperty(
+    MONEY(
+      '2000.00',
+      'Earned by the clinic’s employees and not paid: fixed salaries of months that ended',
+    ),
+  )
+  employeeSalaries: string;
 
   @ApiProperty(
     MONEY('500.00', 'Owed to referring doctors and not paid out yet'),
@@ -118,7 +128,8 @@ export class ClinicOwesTotalsDto {
 /**
  * What the clinic owes, from the start of the first day to the end of the
  * last: closing.owed = opening.owed + salariesEarned + salaryAdjustments +
- * commissionsEarned - salaryPayments - commissionPayouts + advancesChange.
+ * employeeSalariesEarned + commissionsEarned - salaryPayments -
+ * employeeSalaryPayments - commissionPayouts + advancesChange.
  */
 export class ClinicOwesFlowDto {
   @ApiProperty({ type: ClinicOwesTotalsDto })
@@ -142,6 +153,14 @@ export class ClinicOwesFlowDto {
 
   @ApiProperty(
     MONEY(
+      '3000.00',
+      'Employees’ fixed salaries falling due in the period (on their month’s last day)',
+    ),
+  )
+  employeeSalariesEarned: string;
+
+  @ApiProperty(
+    MONEY(
       '450.00',
       'Referral commissions that became owed in the period (net of reversals and adjustments)',
     ),
@@ -149,9 +168,20 @@ export class ClinicOwesFlowDto {
   commissionsEarned: string;
 
   @ApiProperty(
-    MONEY('4000.00', 'Valid salary payments dated in the period (expenses)'),
+    MONEY(
+      '4000.00',
+      'Valid doctor salary payments dated in the period (expenses)',
+    ),
   )
   salaryPayments: string;
+
+  @ApiProperty(
+    MONEY(
+      '2500.00',
+      'Valid employee salary payments dated in the period (expenses)',
+    ),
+  )
+  employeeSalaryPayments: string;
 
   @ApiProperty(
     MONEY('300.00', 'Valid referral payouts dated in the period (expenses)'),
@@ -224,6 +254,31 @@ export class SalaryBalanceRowDto {
   balance: string;
 }
 
+export class EmployeeSalaryBalanceRowDto {
+  @ApiProperty({ type: OwedPartyRefDto })
+  employee: OwedPartyRefDto;
+
+  @ApiProperty({ example: '2026-10' })
+  month: string;
+
+  @ApiProperty(MONEY('3000.00', 'Counted once the month’s last day is reached'))
+  fixedSalary: string;
+
+  @ApiProperty({
+    example: true,
+    description: 'The month ended by then, so its fixed salary is owed',
+  })
+  fixedDue: boolean;
+
+  @ApiProperty(MONEY('1000.00', 'Valid payments for the month dated by then'))
+  paid: string;
+
+  @ApiProperty(
+    MONEY('2000.00', 'fixedSalary - paid: > 0 owed, < 0 paid in advance'),
+  )
+  balance: string;
+}
+
 export class ReferralBalanceRowDto {
   @ApiProperty({ type: OwedPartyRefDto })
   referringDoctor: OwedPartyRefDto;
@@ -262,6 +317,20 @@ export class SalaryBalancesDto {
   rows: SalaryBalanceRowDto[];
 }
 
+export class EmployeeSalaryBalancesDto {
+  @ApiProperty(MONEY('2000.00'))
+  owed: string;
+
+  @ApiProperty(MONEY('0.00'))
+  advances: string;
+
+  @ApiProperty({
+    type: [EmployeeSalaryBalanceRowDto],
+    description: 'Employee-months with a balance, by employee then month',
+  })
+  rows: EmployeeSalaryBalanceRowDto[];
+}
+
 export class ReferralBalancesDto {
   @ApiProperty(MONEY('500.00'))
   owed: string;
@@ -284,7 +353,10 @@ export class ClinicOwesReportDto {
   asOf: string;
 
   @ApiProperty(
-    MONEY('5300.00', 'doctorSalaries.owed + referralCommissions.owed'),
+    MONEY(
+      '7300.00',
+      'doctorSalaries.owed + employeeSalaries.owed + referralCommissions.owed',
+    ),
   )
   owed: string;
 
@@ -293,6 +365,9 @@ export class ClinicOwesReportDto {
 
   @ApiProperty({ type: SalaryBalancesDto })
   doctorSalaries: SalaryBalancesDto;
+
+  @ApiProperty({ type: EmployeeSalaryBalancesDto })
+  employeeSalaries: EmployeeSalaryBalancesDto;
 
   @ApiProperty({ type: ReferralBalancesDto })
   referralCommissions: ReferralBalancesDto;

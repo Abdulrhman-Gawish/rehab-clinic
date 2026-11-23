@@ -53,8 +53,9 @@ import { ExpenseCategoriesService } from './expense-categories.service.js';
 import { ExpensesService } from './expenses.service.js';
 
 const DESK = [UserRole.OWNER, UserRole.RECEPTIONIST];
-const EDIT_RULE =
-  'RECEPTIONIST: only expenses they recorded, on the same local day. OWNER: any time.';
+const OWNER_ONLY_RULE =
+  "Salary payments (categories DOCTOR_SALARY and EMPLOYEE_SALARY) are the OWNER's only: for any other role they are not listed, not in totalAmount, and 404.";
+const EDIT_RULE = `RECEPTIONIST: only expenses they recorded, on the same local day. OWNER: any time. ${OWNER_ONLY_RULE}`;
 
 @ApiTags('Expenses')
 @Controller('expenses')
@@ -85,17 +86,25 @@ export class ExpensesController {
   @Get()
   @ApiOperation({
     summary: 'Search expenses, with the total of the valid ones',
+    description: OWNER_ONLY_RULE,
   })
   @ApiOkResponse({ type: ExpenseListDto })
-  list(@Query() query: ListExpensesQueryDto): Promise<ExpenseListDto> {
-    return this.expenses.list(query);
+  list(
+    @Query() query: ListExpensesQueryDto,
+    @CurrentActor() actor: Actor,
+  ): Promise<ExpenseListDto> {
+    return this.expenses.list(query, actor);
   }
 
   @Get(':id')
+  @ApiOperation({ description: OWNER_ONLY_RULE })
   @ApiOkResponse({ type: ExpenseResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
-  findOne(@Param('id', ParseUUIDPipe) id: string): Promise<ExpenseResponseDto> {
-    return this.expenses.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentActor() actor: Actor,
+  ): Promise<ExpenseResponseDto> {
+    return this.expenses.findOne(id, actor);
   }
 
   @Patch(':id')
@@ -172,14 +181,16 @@ export class ExpensesController {
   @Get(':id/receipt')
   @ApiOperation({
     summary: 'Download the receipt file (authorized users only)',
+    description: OWNER_ONLY_RULE,
   })
   @ApiProduces('image/jpeg', 'image/png', 'image/webp', 'application/pdf')
   @ApiOkResponse({ schema: { type: 'string', format: 'binary' } })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
   async receipt(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentActor() actor: Actor,
   ): Promise<StreamableFile> {
-    const file = await this.expenses.receipt(id);
+    const file = await this.expenses.receipt(id, actor);
     return new StreamableFile(file.stream, {
       type: file.mimeType,
       length: file.size,
@@ -196,9 +207,16 @@ export class ExpenseCategoriesController {
 
   @Get()
   @Auth(...DESK)
+  @ApiOperation({
+    description:
+      'The DOCTOR_SALARY and EMPLOYEE_SALARY categories are listed for the OWNER only.',
+  })
   @ApiOkResponse({ type: [ExpenseCategoryDto] })
-  list(@Query() query: ListCategoriesQueryDto): Promise<ExpenseCategoryDto[]> {
-    return this.categories.list(query.includeInactive ?? false);
+  list(
+    @Query() query: ListCategoriesQueryDto,
+    @CurrentActor() actor: Actor,
+  ): Promise<ExpenseCategoryDto[]> {
+    return this.categories.list(query.includeInactive ?? false, actor);
   }
 
   @Post()

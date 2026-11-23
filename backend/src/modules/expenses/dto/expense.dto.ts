@@ -202,7 +202,7 @@ export class ExpenseCategoryDto {
     enum: ExpenseCategoryKey,
     nullable: true,
     description:
-      'Set on system categories: their expenses are written by the system (REFERRAL_COMMISSION: referral payouts), never by hand',
+      'Set on system categories: their expenses are written by the system (REFERRAL_COMMISSION: referral payouts; DOCTOR_SALARY / EMPLOYEE_SALARY: salary payments), never by hand',
   })
   systemKey: ExpenseCategoryKey | null;
 }

@@ -12,6 +12,7 @@ import {
   ZERO,
 } from '../../common/utils/money.util.js';
 import {
+  EMPLOYEE_SALARY_EXPENSE,
   PAYOUT_EXPENSE,
   SALARY_EXPENSE,
   totalsFromRows,
@@ -118,6 +119,9 @@ export class ReportsService {
          (SELECT COALESCE(SUM(amount), 0) FROM expenses e
            WHERE e.status = 'VALID' AND e.expense_date BETWEEN $3 AND $4
              AND ${SALARY_EXPENSE('e.id')}) AS salary_payments,
+         (SELECT COALESCE(SUM(amount), 0) FROM expenses e
+           WHERE e.status = 'VALID' AND e.expense_date BETWEEN $3 AND $4
+             AND ${EMPLOYEE_SALARY_EXPENSE('e.id')}) AS employee_salary_payments,
          (SELECT COALESCE(SUM(${TOTAL_AT('$2')}), 0) FROM invoices i
            WHERE ${NOT_CANCELLED_AT('$2')} AND i.issued_at >= $1 AND i.issued_at < $2) AS invoiced,
          (SELECT COALESCE(SUM(d.amount), 0) FROM invoice_discounts d JOIN invoices i ON i.id = d.invoice_id
@@ -151,6 +155,7 @@ export class ReportsService {
       expenses,
       commissionPayouts: toMoney(row.commission_payouts),
       salaryPayments: toMoney(row.salary_payments),
+      employeeSalaryPayments: toMoney(row.employee_salary_payments),
       netAfterExpenses: subMoney(netCollected, expenses),
       invoiced: toMoney(row.invoiced),
       patientsOwe: owed.patientsOwe,
@@ -386,8 +391,9 @@ export class ReportsService {
     };
   }
 
-  // Valid expenses dated in the range (referral payouts included: their
-  // category is one row of byCategory, and commissionPayouts their total).
+  // Valid expenses dated in the range (referral payouts and salary payments
+  // included: their category is one row of byCategory, and
+  // commissionPayouts / salaryPayments / employeeSalaryPayments their total).
   async expenses(query: ReportRangeQueryDto): Promise<ExpensesReportDto> {
     const range = this.range(query);
     const params = [range.from, range.to];
@@ -413,15 +419,19 @@ export class ReportsService {
         params,
       );
     const totals = totalsFromRows(byMethod);
-    const [parts]: { payouts: string; salaries: string }[] =
-      await this.dataSource.query(
-        `SELECT
+    const [parts]: {
+      payouts: string;
+      salaries: string;
+      employee_salaries: string;
+    }[] = await this.dataSource.query(
+      `SELECT
            COALESCE(SUM(e.amount) FILTER (WHERE ${PAYOUT_EXPENSE('e.id')}), 0) AS payouts,
-           COALESCE(SUM(e.amount) FILTER (WHERE ${SALARY_EXPENSE('e.id')}), 0) AS salaries
+           COALESCE(SUM(e.amount) FILTER (WHERE ${SALARY_EXPENSE('e.id')}), 0) AS salaries,
+           COALESCE(SUM(e.amount) FILTER (WHERE ${EMPLOYEE_SALARY_EXPENSE('e.id')}), 0) AS employee_salaries
          FROM expenses e
         WHERE e.status = 'VALID' AND e.expense_date BETWEEN $1 AND $2`,
-        params,
-      );
+      params,
+    );
     return {
       from: range.from,
       to: range.to,
@@ -429,6 +439,7 @@ export class ReportsService {
       total: totals.total,
       commissionPayouts: toMoney(parts.payouts),
       salaryPayments: toMoney(parts.salaries),
+      employeeSalaryPayments: toMoney(parts.employee_salaries),
       byCategory: byCategory.map((row) => ({
         category: { id: row.id, name: row.name },
         count: Number(row.count),
@@ -479,6 +490,7 @@ export class ReportsService {
              e.created_at, e.payment_method::text, e.amount,
              NULL, NULL, NULL, NULL,
              CASE WHEN ${SALARY_EXPENSE('e.id')} THEN 'DOCTOR_SALARY'
+                  WHEN ${EMPLOYEE_SALARY_EXPENSE('e.id')} THEN 'EMPLOYEE_SALARY'
                   WHEN ${PAYOUT_EXPENSE('e.id')} THEN 'REFERRAL_PAYOUT'
                   ELSE 'MANUAL' END,
              c.id::text, c.name, e.description, e.vendor_name, NULL,
@@ -589,6 +601,9 @@ export class ReportsService {
         refunds,
         expenses,
         salaryPayments: sum((s) => s.origin === ExpenseOrigin.DOCTOR_SALARY),
+        employeeSalaryPayments: sum(
+          (s) => s.origin === ExpenseOrigin.EMPLOYEE_SALARY,
+        ),
         commissionPayouts: sum(
           (s) => s.origin === ExpenseOrigin.REFERRAL_PAYOUT,
         ),

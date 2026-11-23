@@ -27,15 +27,21 @@ function DayPicker({ date, onChange }: { date: string; onChange: (date: string) 
 
 // ---------- Outstanding (daily summary and reports) ----------
 
-type ClinicOwesTotals = { owed: string; doctorSalaries: string; referralCommissions: string; advances: string; pendingCommissions: string };
+type ClinicOwesTotals = {
+  owed: string; doctorSalaries: string; employeeSalaries: string; referralCommissions: string; advances: string; pendingCommissions: string;
+};
 /** GET /billing/daily-summary `outstanding`, GET /reports/money-flow: owed at the start, what moved it, owed at the end. */
 interface OutstandingFlow {
   patientsOwe: { opening: string; invoiced: string; adjustments: string; cancelled: string; payments: string; refunds: string; closing: string; unpaidInvoices: number };
   clinicOwes: {
-    opening: ClinicOwesTotals; salariesEarned: string; salaryAdjustments: string; commissionsEarned: string; salaryPayments: string; commissionPayouts: string;
-    advancesChange: string; closing: ClinicOwesTotals;
+    opening: ClinicOwesTotals; salariesEarned: string; salaryAdjustments: string; employeeSalariesEarned: string; commissionsEarned: string;
+    salaryPayments: string; employeeSalaryPayments: string; commissionPayouts: string; advancesChange: string; closing: ClinicOwesTotals;
   } | null;
 }
+
+/** "Doctors 3,000 · employees 2,000 · referral commissions 30" under what the clinic owes. */
+const owesHint = (t: ReturnType<typeof useI18n>['t'], c: ClinicOwesTotals) =>
+  t.summary.clinicOwesHint(fmtMoney(c.doctorSalaries), fmtMoney(c.employeeSalaries), fmtMoney(c.referralCommissions));
 
 const isZero = (amount: string) => Number(amount) === 0;
 
@@ -73,13 +79,15 @@ function FlowCards({ flow, from, to }: { flow: OutstandingFlow; from: string; to
             <TotalsRow label={f.start(fmtDate(from))} value={fmtMoney(c.opening.owed)} />
             {move(f.salariesEarned, c.salariesEarned, false, true)}
             {move(f.salaryAdjustments, c.salaryAdjustments)}
+            {move(f.employeeSalariesEarned, c.employeeSalariesEarned)}
             {move(f.commissionsEarned, c.commissionsEarned, false, true)}
             {move(f.salaryPayments, c.salaryPayments, true, true)}
+            {move(f.employeeSalaryPayments, c.employeeSalaryPayments, true)}
             {move(f.commissionPayouts, c.commissionPayouts, true, true)}
             {move(f.advancesChange, c.advancesChange)}
             <div className="totals__divider" />
             <TotalsRow label={f.end(fmtDate(to))} value={fmtMoney(c.closing.owed)} strong />
-            <TotalsRow label={ts.clinicOwesHint(fmtMoney(c.closing.doctorSalaries), fmtMoney(c.closing.referralCommissions))} value="" muted />
+            <TotalsRow label={owesHint(t, c.closing)} value="" muted />
             {!isZero(c.closing.advances) && <TotalsRow label={ts.advances} value={fmtMoney(c.closing.advances)} muted />}
           </Totals>
           {!isZero(c.advancesChange) && <p className="owner-note"><Icon name="info" />{f.advancesChangeHint}</p>}
@@ -115,7 +123,7 @@ function DayOutstanding({ o, date, showDetails }: { o: OutstandingFlow; date: st
         {c && (
           <Stat
             icon="stethoscope" tone="warning" label={ts.clinicOwes} value={fmtMoney(c.closing.owed)}
-            hint={ts.clinicOwesHint(fmtMoney(c.closing.doctorSalaries), fmtMoney(c.closing.referralCommissions))}
+            hint={owesHint(t, c.closing)}
           />
         )}
         {c && !isZero(c.closing.advances) && (
@@ -159,7 +167,7 @@ export function Summary() {
             <Stat icon="banknote" label={ts.payments} value={fmtMoney(s.payments.total)} hint={ts.transactions(fmtNumber(s.payments.count))} />
             <Stat icon="undo" tone="warning" label={ts.refunds} value={fmtMoney(s.refunds.total)} hint={ts.transactions(fmtNumber(s.refunds.count))} />
             <Stat icon="wallet" tone="neutral" label={ts.expenses} value={fmtMoney(s.expenses.total)} hint={ts.transactions(fmtNumber(s.expenses.count))} />
-            <Stat icon="check-circle" tone="highlight" label={ts.expectedCashLabel} value={fmtMoney(s.expectedCash)} hint={ts.expectedCashHint} />
+            <Stat icon="check-circle" tone="highlight" label={ts.expectedCashLabel} value={fmtMoney(s.expectedCash)} hint={isReceptionist ? ts.expectedCashHintDesk : ts.expectedCashHint} />
           </Stats>
 
           <DayOutstanding o={s.outstanding} date={s.date} showDetails={!isReceptionist} />
@@ -174,7 +182,9 @@ export function Summary() {
               <MoneyRow name={ts.payments} m={s.payments} />
               <MoneyRow name={ts.refunds} m={s.refunds} />
               <MoneyRow name={ts.expenses} m={s.expenses} />
-              {s.salaryPayments.count > 0 && <MoneyRow name={ts.salaryPayments} m={s.salaryPayments} part />}
+              {/* Salaries (doctors' and employees'): the owner's only (null for a receptionist, left out of their totals). */}
+              {s.salaryPayments?.count > 0 && <MoneyRow name={ts.salaryPayments} m={s.salaryPayments} part />}
+              {s.employeeSalaryPayments?.count > 0 && <MoneyRow name={ts.employeeSalaryPayments} m={s.employeeSalaryPayments} part />}
               {s.commissionPayouts.count > 0 && <MoneyRow name={ts.commissionPayouts} m={s.commissionPayouts} part />}
             </Table>
             <div className="cluster owner-card-foot">
@@ -317,17 +327,19 @@ const useReport = (path: string, range: Range, extra: Record<string, string | nu
 
 // Summary fields that are EGP amounts (the others are counts).
 const MONEY_FIELDS = new Set([
-  'collected', 'refunded', 'netCollected', 'expenses', 'commissionPayouts', 'salaryPayments', 'netAfterExpenses', 'invoiced',
-  'patientsOwe', 'clinicOwes', 'discountsGiven',
+  'collected', 'refunded', 'netCollected', 'expenses', 'commissionPayouts', 'salaryPayments', 'employeeSalaryPayments',
+  'netAfterExpenses', 'invoiced', 'patientsOwe', 'clinicOwes', 'discountsGiven',
 ]);
 const FIELD_ICON: Record<string, IconName> = {
   collected: 'banknote', refunded: 'undo', netCollected: 'trending-up', expenses: 'wallet', commissionPayouts: 'users',
-  salaryPayments: 'stethoscope', netAfterExpenses: 'chart', invoiced: 'receipt', patientsOwe: 'alert-circle', clinicOwes: 'clock',
+  salaryPayments: 'stethoscope', employeeSalaryPayments: 'briefcase-medical', netAfterExpenses: 'chart', invoiced: 'receipt',
+  patientsOwe: 'alert-circle', clinicOwes: 'clock',
   discountsGiven: 'percent', attendedVisits: 'user-check', noShows: 'user-x', cancellations: 'ban', newPatients: 'user-plus',
   unsignedNotes: 'note-pen',
 };
 const FIELD_TONE: Record<string, 'warning' | 'error' | 'info' | 'neutral' | 'highlight'> = {
   netAfterExpenses: 'highlight', refunded: 'neutral', expenses: 'neutral', commissionPayouts: 'neutral', salaryPayments: 'neutral',
+  employeeSalaryPayments: 'neutral',
   patientsOwe: 'warning', clinicOwes: 'warning', discountsGiven: 'info',
   noShows: 'error', cancellations: 'neutral', unsignedNotes: 'warning', newPatients: 'info',
 };
@@ -516,6 +528,7 @@ function ExpensesReport({ range }: { range: Range }) {
       title={tr.expenses} icon="wallet"
       description={e && tr.expensesLine(fmtNumber(e.count), fmtMoney(e.total))
         + (Number(e.salaryPayments) > 0 ? ` · ${tr.salaryPart(fmtMoney(e.salaryPayments))}` : '')
+        + (Number(e.employeeSalaryPayments) > 0 ? ` · ${tr.employeeSalaryPart(fmtMoney(e.employeeSalaryPayments))}` : '')
         + (Number(e.commissionPayouts) > 0 ? ` · ${tr.commissionPart(fmtMoney(e.commissionPayouts))}` : '')}
     >
       {!e ? <Loading /> : e.count === 0 ? <EmptyState compact icon="wallet" title={tr.noData} /> : (
@@ -566,7 +579,10 @@ interface TransactionRow {
   payee: string | null; reason: string | null; recordedBy: { id: string; name: string };
 }
 type TransactionPage = Page<TransactionRow> & {
-  totals: { payments: CountTotal; refunds: CountTotal; expenses: CountTotal; salaryPayments: CountTotal; commissionPayouts: CountTotal; net: string };
+  totals: {
+    payments: CountTotal; refunds: CountTotal; expenses: CountTotal; salaryPayments: CountTotal; employeeSalaryPayments: CountTotal;
+    commissionPayouts: CountTotal; net: string;
+  };
 };
 
 const TX_KINDS = ['', 'PAYMENT', 'REFUND', 'EXPENSE'];
@@ -594,6 +610,9 @@ function TransactionsReport({ range }: { range: Range }) {
             <div>
               <dt>{`${tr.kinds.EXPENSE} (${fmtNumber(totals.expenses.count)})`}</dt><dd>{fmtMoney(totals.expenses.total, true)}</dd>
               {totals.salaryPayments.count > 0 && <dd className="owner-part">{tr.ofSalaries} {fmtMoney(totals.salaryPayments.total)}</dd>}
+              {totals.employeeSalaryPayments.count > 0 && (
+                <dd className="owner-part">{tr.ofEmployeeSalaries} {fmtMoney(totals.employeeSalaryPayments.total)}</dd>
+              )}
               {totals.commissionPayouts.count > 0 && <dd className="owner-part">{tr.ofCommissions} {fmtMoney(totals.commissionPayouts.total)}</dd>}
             </div>
             <div><dt>{tr.net}</dt><dd>{fmtMoney(totals.net)}</dd></div>
@@ -634,18 +653,23 @@ interface SalaryRow {
   doctor: { id: string; name: string }; month: string; fixedSalary: string; fixedDue: boolean; sessionCount: number;
   commissions: string; earned: string; paid: string; balance: string;
 }
+interface EmployeeSalaryRow {
+  employee: { id: string; name: string }; month: string; fixedSalary: string; fixedDue: boolean; paid: string; balance: string;
+}
 interface ReferralRow { referringDoctor: { id: string; name: string }; earned: string; paid: string; balance: string; pending: string }
 interface ClinicOwesReport {
   asOf: string; owed: string; advances: string;
   doctorSalaries: { owed: string; advances: string; rows: SalaryRow[] };
+  employeeSalaries: { owed: string; advances: string; rows: EmployeeSalaryRow[] };
   referralCommissions: { owed: string; advances: string; pending: string; rows: ReferralRow[] };
 }
 
-/** Who the clinic owes at the end of `asOf`: each doctor-month of salary, each referring doctor. */
+/** Who the clinic owes at the end of `asOf`: each doctor-month and employee-month of salary, each referring doctor. */
 function ClinicOwesReport({ asOf }: { asOf: string }) {
   const { t } = useI18n();
   const tr = t.reports;
   const s = tr.scol;
+  const ec = tr.ecol;
   const r = tr.rcol;
   const [o] = useLoad(() => get<ClinicOwesReport>(`/reports/clinic-owes${qs({ asOf })}`), [asOf]);
   // A negative balance was paid ahead (an advance): shown as a positive amount with a badge.
@@ -659,11 +683,12 @@ function ClinicOwesReport({ asOf }: { asOf: string }) {
           <dl className="owner-methods">
             <div><dt>{tr.owedTotal}</dt><dd>{fmtMoney(o.owed)}</dd></div>
             <div><dt>{tr.salaries}</dt><dd>{fmtMoney(o.doctorSalaries.owed)}</dd></div>
+            <div><dt>{tr.employeeSalaries}</dt><dd>{fmtMoney(o.employeeSalaries.owed)}</dd></div>
             <div><dt>{tr.referralCommissions}</dt><dd>{fmtMoney(o.referralCommissions.owed)}</dd></div>
             {!isZero(o.advances) && <div><dt>{tr.advances}</dt><dd>{fmtMoney(o.advances)}</dd></div>}
             {!isZero(o.referralCommissions.pending) && <div><dt>{tr.pendingTotal}</dt><dd>{fmtMoney(o.referralCommissions.pending)}</dd></div>}
           </dl>
-          {o.doctorSalaries.rows.length === 0 && o.referralCommissions.rows.length === 0 && (
+          {o.doctorSalaries.rows.length === 0 && o.employeeSalaries.rows.length === 0 && o.referralCommissions.rows.length === 0 && (
             <EmptyState compact icon="check-circle" title={tr.noClinicOwes} />
           )}
           {o.doctorSalaries.rows.length > 0 && (
@@ -686,6 +711,32 @@ function ClinicOwesReport({ asOf }: { asOf: string }) {
                       <td className="num">{fmtNumber(row.sessionCount)}</td>
                       <td className="num">{fmtMoney(row.commissions)}</td>
                       <td className="num">{fmtMoney(row.earned)}</td>
+                      <td className="num">{fmtMoney(row.paid)}</td>
+                      <td className="num">{balance(row.balance)}</td>
+                    </tr>
+                  ))}
+                </Table>
+              </div>
+            </div>
+          )}
+          {o.employeeSalaries.rows.length > 0 && (
+            <div>
+              <h3 className="owner-subhead">{tr.employeeSalaries}</h3>
+              <div className="table-card">
+                <Table
+                  dense caption={tr.employeeSalaries}
+                  head={<>
+                    <th>{ec.employee}</th><th>{ec.month}</th><th className="num">{ec.fixed}</th><th className="num">{ec.paid}</th>
+                    <th className="num">{ec.balance}</th>
+                  </>}
+                >
+                  {o.employeeSalaries.rows.map((row) => (
+                    <tr key={`${row.employee.id}-${row.month}`}>
+                      <td>
+                        <Link to={`/owner/salaries${qs({ month: row.month, staff: 'employees', employee: row.employee.id })}`}>{row.employee.name}</Link>
+                      </td>
+                      <td className="nowrap">{fmtMonth(row.month)}</td>
+                      <td className="num">{row.fixedDue ? fmtMoney(row.fixedSalary) : <span className="text-muted">{tr.dueAtMonthEnd}</span>}</td>
                       <td className="num">{fmtMoney(row.paid)}</td>
                       <td className="num">{balance(row.balance)}</td>
                     </tr>

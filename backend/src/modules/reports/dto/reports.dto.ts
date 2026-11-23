@@ -105,6 +105,14 @@ export class SummaryReportDto extends ReportRangeDto {
   )
   salaryPayments: string;
 
+  @ApiProperty(
+    MONEY(
+      '1500.00',
+      'Of `expenses`: salary payments to the clinic’s employees (never added again)',
+    ),
+  )
+  employeeSalaryPayments: string;
+
   @ApiProperty(MONEY('10700.00', 'netCollected - expenses'))
   netAfterExpenses: string;
 
@@ -342,6 +350,11 @@ export class ExpensesReportDto extends ReportRangeDto {
   )
   salaryPayments: string;
 
+  @ApiProperty(
+    MONEY('1500.00', 'Of `total`: salary payments to the clinic’s employees'),
+  )
+  employeeSalaryPayments: string;
+
   @ApiProperty({ type: [ExpenseByCategoryDto] })
   byCategory: ExpenseByCategoryDto[];
 
@@ -455,8 +468,17 @@ export class TransactionTotalsDto {
   })
   expenses: CountTotalDto;
 
-  @ApiProperty({ type: CountTotalDto, description: 'Of `expenses`' })
+  @ApiProperty({
+    type: CountTotalDto,
+    description: 'Of `expenses`: doctor salaries',
+  })
   salaryPayments: CountTotalDto;
+
+  @ApiProperty({
+    type: CountTotalDto,
+    description: 'Of `expenses`: employee salaries',
+  })
+  employeeSalaryPayments: CountTotalDto;
 
   @ApiProperty({ type: CountTotalDto, description: 'Of `expenses`' })
   commissionPayouts: CountTotalDto;

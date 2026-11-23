@@ -172,10 +172,10 @@ cookie set by `POST /auth/login` (browsers, together with the `X-Requested-With`
 | payments: void | W | W (own, same day) | – | – |
 | refunds | W | – | – | – |
 | `/billing/attention` | R | R | – | – |
-| `/billing/daily-summary` | R | R (today only; no `clinicOwes`) | – | – |
-| expenses: create / edit / void / receipt upload | W | W (own, same day) | – | – |
-| expenses: view, receipt file | R | R | – | – |
-| `/expense-categories` | RW | R | – | – |
+| `/billing/daily-summary` | R | R (today only; no `clinicOwes`; no salaries: `salaryPayments` and `employeeSalaryPayments` null, left out of `expenses` and `expectedCash`) | – | – |
+| expenses: create / edit / void / receipt upload | W | W (own, same day; never a salary payment: 404) | – | – |
+| expenses: view, receipt file | R | R (doctor and employee salary payments are not listed, not in `totalAmount`, 404) | – | – |
+| `/expense-categories` | RW | R (without `DOCTOR_SALARY` and `EMPLOYEE_SALARY`) | – | – |
 | clinical: medical info, notes, history, attachments (read) | R (drafts too) | – | R (patients they treat; drafts: own only) | – |
 | `/clinical-notes/needs-attention` | R | – | R (own) | – |
 | clinical: `PUT …/medical-info`, notes (write, sign), addenda | – | – | W (notes: own visits) | – |
@@ -191,11 +191,13 @@ cookie set by `POST /auth/login` (browsers, together with the `X-Requested-With`
 | `/referring-doctors` list / view (with the current default agreement) | R | R | – | – |
 | `/referring-doctors` create / edit / (de)activate, agreements, patients, commissions, adjustments, payouts; `/referral-payouts/:id/void` | RW | – | – | – |
 | `/doctor-salaries`, `/doctors/:id/salary/*` (terms, statement, payments), `/doctor-salaries/payments/:id/void` | RW | – | – | – |
+| `/employees` (directory), `/employee-salaries`, `/employees/:id/salary/*` (terms, statement, payments), `/employee-salaries/payments/:id/void` | RW | – | – | – |
 | `/patients/:id/referrals` (assign, change terms, end: `/patient-referrals/:id/…`), `POST /invoices/:id/referral` | RW | RW | – | – |
 | `/patients/:id/referral-statement` | R | – | – | – |
 | `/reports/acquisition`, `/reports/campaigns`, `/reports/referrals` | R | – | – | – |
 | `/blog-posts` (write, edit, delete, list, view) | RW | – | – | – |
 | `/public/blog-posts` (list, view, cover image) | – | – | – | R |
+| `/client-reviews` (add, list, view, edit, publish, delete, attachment files) | RW | – | – | – |
 
 Doctors have no access to billing or expenses. Receptionists have no access to clinical records. The OWNER reads everything about every patient (draft notes included) but never writes clinical documentation (notes, signatures, addenda, medical info); see `clinical`.
 
@@ -615,7 +617,7 @@ A session's invoice can be replaced by a **new invoice of the same visit**: same
 #### Cashier views
 - `GET /appointments/day` rows (OWNER / RECEPTIONIST) include `invoiceId`, `invoiceTotal`, `amountPaid`, `balance` and `paymentStatus` (`NOT_INVOICED | UNPAID | PARTIAL | PAID`).
 - `GET /billing/attention?page=&limit=` lists invoices of voided visits that still hold money (`voidedVisitsWithPayments`, all of them; only data from before undo attend required an unpaid invoice), and invoices with a balance issued before the local day `BILLING_OVERDUE_DAYS` ago. The overdue invoices are paginated, oldest first, as `{ items, meta }` next to `overdueDays` and `voidedVisitsWithPayments` (the same shape as `GET /expenses` with its `totalAmount`).
-- `GET /billing/daily-summary?date=` covers one clinic local day (23, 24 or 25 hours with DST): valid payments and refunds by method, voids made that day, discounts applied that day and still in effect at its end on invoices not cancelled by then (by user; a later removal or cancellation never changes a past day), and valid expenses dated that day by method. The OWNER can query any date; a RECEPTIONIST today only.
+- `GET /billing/daily-summary?date=` covers one clinic local day (23, 24 or 25 hours with DST): valid payments and refunds by method, voids made that day, discounts applied that day and still in effect at its end on invoices not cancelled by then (by user; a later removal or cancellation never changes a past day), and valid expenses dated that day by method. The OWNER can query any date; a RECEPTIONIST today only. Salaries (doctors' and employees') are the OWNER's only: for a RECEPTIONIST they are left out of `expenses` and `expectedCash` (so no figure gives them away) and `salaryPayments` / `employeeSalaryPayments` are `null`; a salary the OWNER pays in cash from the drawer is therefore not in the receptionist's expected cash. Referral commission payouts stay in both.
 
   ```
   expectedCash = cash payments − cash refunds − cash expenses
@@ -631,6 +633,7 @@ A session's invoice can be replaced by a **new invoice of the same visit**: same
 - `POST /expenses`: the date can't be in the future (`EXPENSE_DATE_IN_FUTURE`). A RECEPTIONIST can backdate at most `BACKDATE_MAX_DAYS`.
 - `PATCH /expenses/:id` and `POST /expenses/:id/void { reason }`: allowed for the creator on the same local day, or the OWNER any time (`EXPENSE_EDIT_NOT_ALLOWED`). Old and new values are audited, and there is no hard delete.
 - `GET /expenses` filters by local date range (`from`/`to`), category, method, status, creator, `source` (`MANUAL` or `REFERRAL_PAYOUT`) and `referringDoctorId` (that doctor's payouts). It is paginated and returns `totalAmount`, the sum of VALID expenses across all pages (with `source=REFERRAL_PAYOUT`: what was paid in doctor commissions in the period).
+- **Salaries are the OWNER's only** (doctors' and employees', `OWNER_ONLY_CATEGORY_KEYS`). For any other role, an expense in the `DOCTOR_SALARY` or `EMPLOYEE_SALARY` category does not exist: it is not listed (whatever the filters) nor counted in `totalAmount`, `GET /expenses/:id`, its receipt, `PATCH`, `void` and receipt upload answer 404, and `GET /expense-categories` leaves those categories out. Typed expenses and referral payouts stay visible to the desk. The salary APIs (`/doctor-salaries`, `/doctors/:id/salary/*`, `/employees`, `/employee-salaries`, `/employees/:id/salary/*`), every report and the audit log are OWNER only (403).
 - **Receipt files:**
   - `POST /expenses/:id/receipt` takes a multipart upload in the `file` field: JPG, PNG, WEBP or PDF, at most 5 MB (413 above that).
   - The type is decided by the file's **magic bytes**, and the name's extension must match (`UNSUPPORTED_FILE_TYPE`).
@@ -639,7 +642,7 @@ A session's invoice can be replaced by a **new invoice of the same visit**: same
 - **File storage and failed transactions** (receipts, patient attachments and blog covers):
   - Every upload gets a fresh random key, and the file is written before the transaction that records it. If that transaction fails (row, audit entry, constraint, connection), the service removes **only that new key** (`FileStorage.discard`) and the client gets the original error. A failed cleanup is logged as a warning and never hides the original error.
   - Replaced expense receipts are **kept** on purpose: the expense points to the newest one, and every earlier one is still referenced by its `EXPENSE_RECEIPT_UPLOADED` audit entry. Nothing ever deletes them. Replaced blog covers follow the same rule (`BLOG_POST_UPDATED` keeps the old `coverImageKey`).
-  - A process crash between writing the file and committing can still leave an orphan. `npm run storage:orphans` lists files under `patients/`, `expenses/` and `blog/` that no row points to (attachments: `patient_attachments.file_key`; receipts: the expense or any receipt audit entry; covers: `blog_posts.cover_image_key`, deleted posts included, or a `BLOG_POST_UPDATED` entry) and that are older than 60 minutes (`-- --min-age-minutes=N`, at least 10, so running uploads are never touched). Other folders are ignored. It is a dry run unless you pass `-- --delete`.
+  - A process crash between writing the file and committing can still leave an orphan. `npm run storage:orphans` lists files under `patients/`, `expenses/`, `blog/` and `client-reviews/` that no row points to (attachments: `patient_attachments.file_key`; receipts: the expense or any receipt audit entry; covers: `blog_posts.cover_image_key`, deleted posts included, or a `BLOG_POST_UPDATED` entry; review attachments: `client_review_attachments.file_key`, removed ones included) and that are older than 60 minutes (`-- --min-age-minutes=N`, at least 10, so running uploads are never touched). Other folders are ignored. It is a dry run unless you pass `-- --delete`.
 - Categories: the OWNER creates, renames and (de)activates them; the RECEPTIONIST can read them.
 
 ### `clinical` (clinical records)
@@ -873,6 +876,14 @@ Each doctor is paid a monthly **fixed salary** (0 = commission only) plus a **co
 - **Payments** (`POST /doctors/:id/salary/payments { month, amount, paymentDate?, method, reference?, notes? }`): any amount > 0 for a month up to the current one (advances and parts allowed, never capped). Each one is a clinic **expense** in the reserved `DOCTOR_SALARY` category (same amount, method and date; never in the future), so reports and the cash summary count it once. `POST /doctor-salaries/payments/:id/void { reason }` voids it and its expense; the expense itself can't be changed directly (422 `EXPENSE_EDIT_NOT_ALLOWED`).
 - **Audit**: `DOCTOR_SALARY_TERMS_SET` (old and new terms), `DOCTOR_SALARY_PAID`, `DOCTOR_SALARY_PAYMENT_VOIDED`, and `EXPENSE_CREATED` (with `salaryPaymentId`) / `EXPENSE_VOIDED` on the expense.
 
+**Employees** (also in the `salaries` module, OWNER only): the clinic's other staff (receptionists, office boys, accountants, assistants...), paid a **fixed monthly salary**, never a commission. The same rules as the doctors' salaries, without sessions:
+
+- **Employees** (`/employees`: `POST`, `GET ?search=&isActive=&page=&limit=`, `GET /:id`, `PATCH /:id`, `PATCH /:id/activate|deactivate`): `name`, `jobTitle` (free text), `phone?`, `notes?`, and an optional login account `userId` (an OWNER or RECEPTIONIST user; never a DOCTOR's, 422 `EMPLOYEE_USER_INVALID`; one employee per account, 409 `EMPLOYEE_USER_TAKEN`; `null` unlinks). No login is needed. `POST` can take a first `salary { effectiveMonth, fixedSalary }`. Each employee shows `currentSalary` (in effect this month) and `upcomingSalary`. Never deleted; `isActive` is a status only and does not change what is owed (to stop paying someone who left, set the salary to 0 from the month after).
+- **Salary versions**: `PUT /employees/:id/salary/terms { effectiveMonth, fixedSalary }` (0 = not paid from that month; same month = replaced; 422 `SALARY_MONTH_PAID` when that month or a later one has a valid payment), `GET /employees/:id/salary/terms` newest first.
+- **Statement** (`GET /employees/:id/salary/statement?month=`): the month's `fixedSalary`, its payments (voided ones too), `paid` and `remaining` (negative when overpaid). **Overview** (`GET /employee-salaries?month=`): active employees, and inactive ones with a salary or a payment that month.
+- **Payments** (`POST /employees/:id/salary/payments`, `POST /employee-salaries/payments/:id/void { reason }`): exactly like a doctor's, each one an expense in the reserved `EMPLOYEE_SALARY` category (`vendorName` = the employee).
+- **Audit**: `EMPLOYEE_CREATED` / `UPDATED` / `ACTIVATED` / `DEACTIVATED`, `EMPLOYEE_SALARY_SET`, `EMPLOYEE_SALARY_PAID`, `EMPLOYEE_SALARY_PAYMENT_VOIDED`, and `EXPENSE_CREATED` (with `employeeSalaryPaymentId`) / `EXPENSE_VOIDED` on the expense.
+
 ### `blog` (public website)
 
 Articles the OWNER writes in the staff UI and the public website shows (`blog_posts`). There are no drafts: a post is **published as soon as it is added**.
@@ -896,6 +907,40 @@ Articles the OWNER writes in the staff UI and the public website shows (`blog_po
 - Times are ISO 8601 in clinic time (`createdAt` = published at).
 - Audit: `BLOG_POST_CREATED` / `_UPDATED` (changed fields, old and new) / `_DELETED`, entity type `BLOG_POST`.
 
+### `client-reviews` (OWNER only)
+
+Client reviews (testimonials, "آراء العملاء") with their attachments: `client_reviews` and `client_review_attachments`.
+Every route has `@Auth(OWNER)` on the controller, attachment files included: RECEPTIONIST and DOCTOR get **403**, no
+token 401 (patients never log in). Guards run before the upload interceptor, so a refused upload never reaches memory
+or disk.
+
+- `POST /client-reviews` (multipart): `reviewType` (`TEXT`, `IMAGE` or `GALLERY`, Postgres enum `client_review_type`),
+  `clientName` (2-120, trimmed and collapsed), `content` (1-5000, trimmed), `keywords` (repeat the field; 0-20, each at
+  most 50 characters, unique ignoring case; one empty `keywords` field means none), `isPublished` (default `false`) and
+  the files in the repeated `attachments` field. Returns the review with `attachments` (oldest first) and
+  `createdBy: { id, name }`.
+- `GET /client-reviews?search=&reviewType=&isPublished=&page=&limit=`: newest first, **paged on the server**, with
+  `attachmentCount` per row. `search` matches the client name, the text and the keywords, ignoring case and the Arabic
+  spelling variants of the patients' search (`patient_name_search_key`: diacritics, alef forms, ى/ي, ة/ه).
+- `GET /client-reviews/:id`, and `GET /client-reviews/:id/attachments/:attachmentId` streams a file (its type,
+  `Content-Disposition` with the original name percent-encoded). Files are never public.
+- `PATCH /client-reviews/:id` (multipart, or JSON without files): only the fields sent change; new `attachments` are
+  added and `removeAttachmentIds` (repeat the field) takes attachments off, all in one transaction. An id that is not
+  an active attachment of this review is a 404.
+- `DELETE /client-reviews/:id` (204): `deleted_at` is set; 404 everywhere afterwards. Removed attachments get their
+  own `deleted_at`. Rows and files stay (business data is never hard deleted).
+
+**Rules:**
+- Attachments follow the shared upload rule: JPG, PNG, WEBP or PDF checked by magic bytes (422
+  `UNSUPPORTED_FILE_TYPE`), at most 5 MB each (413), at most 10 per request (400) and **10 active per review** (400 on
+  `attachments`). Every file of a request is checked before any is written; they are stored under
+  `client-reviews/<uuid>.<ext>` before the transaction and discarded if it fails. The displayed `fileName` is cleaned
+  (last path segment, no control or bidi characters, at most 200 characters) and never used as a path. `created_at` is
+  `clock_timestamp()`, so the files of one request keep their upload order.
+- `isPublished` only marks the reviews meant for the website: nothing public reads them yet.
+- Audit: `CLIENT_REVIEW_CREATED` / `_UPDATED` (changed fields, old and new) / `_DELETED`, entity type
+  `CLIENT_REVIEW`. Added and removed attachments are listed by file name (`attachmentsAdded`, `attachmentsRemoved`).
+
 ### `outstanding` (what is owed, at the end of any day)
 
 No routes of its own: `OutstandingService` computes balances from the dated rows for the daily summary and the reports, so both always show the same numbers. "At the end of D" means before the start of the next clinic local day. A past day always shows the state in effect then: **a later discount, item edit, removal or cancellation never changes it** (the shared SQL is in `outstanding/as-of.sql.ts`). Two directions, never netted against each other:
@@ -910,17 +955,20 @@ closing = opening + invoiced + adjustments − cancelled − payments + refunds
 
 - `invoiced`: invoices issued in the period at their total when issued (cancelled later or not); `adjustments`: later changes of totals in the period (discounts, item edits; negative when they lowered what is owed); `cancelled`: invoices cancelled in the period at their total then (nothing is paid on a cancelled invoice); `payments` / `refunds`: valid ones received in the period (= `collected` / `refunded`).
 
-**Clinic owes** (money the clinic owes its doctors and has not paid yet):
+**Clinic owes** (money the clinic owes its doctors and employees and has not paid yet):
 
 - **Doctor salaries**, per doctor and month (the salary statement's rules and terms): a month's **fixed salary is owed on the month's last day**; a session's **commission from the day it was attended**, on the session's value as it was then (visit not voided yet, package session not given back yet, else its invoice live then at its total then: once the month is over and nothing changes, it equals the statement); valid salary payments count from their `paymentDate`, for the month they were recorded for. A doctor deleted before a month started earns no fixed salary that month (as in the overview). Terms are versioned by month: a version set later for a month applies to that whole month, as in the statement.
+- **Employee salaries**, per employee and month (`employeeSalaries`): the month's fixed salary is owed on its last day; valid payments count from their `paymentDate`, for their month. No commission, so nothing to adjust.
 - **Referral commissions**, per referring doctor: the `commission-balance?asOf=` rule (ledger rows owed, i.e. eligible, by then; valid payouts dated by then). `pending` rows (session not attended yet) are not owed yet and are shown apart (`pendingCommissions`).
 - A **negative** balance (a salary advance for a month not earned yet, a payout above what is owed after a refund) is an **advance**: reported in `advances`, never subtracted from what is owed to anyone else (or for another month). `owed` = sum of the positive balances.
 
 ```
-closing.owed = opening.owed + salariesEarned + salaryAdjustments + commissionsEarned − salaryPayments − commissionPayouts + advancesChange
+closing.owed = opening.owed + salariesEarned + salaryAdjustments + employeeSalariesEarned + commissionsEarned
+               − salaryPayments − employeeSalaryPayments − commissionPayouts + advancesChange
 ```
 
-- `salariesEarned`: fixed salaries falling due in the period + commissions of the sessions attended in it; `salaryAdjustments`: commission changes, in the period, of sessions attended before it (e.g. a later discount on their invoice); `commissionsEarned`: referral commissions that became owed in it (net of reversals and adjustments); `salaryPayments` / `commissionPayouts`: valid payments dated in it (the same money as the expenses' `salaryPayments` / `commissionPayouts`); `advancesChange` = `closing.advances − opening.advances` (paying ahead of earnings does not lower what is owed).
+- `employeeSalariesEarned` / `employeeSalaryPayments`: employees' fixed salaries falling due in the period / their valid salary payments dated in it (the same money as the expenses' `employeeSalaryPayments`).
+- `salariesEarned`: doctors' fixed salaries falling due in the period + commissions of the sessions attended in it; `salaryAdjustments`: commission changes, in the period, of sessions attended before it (e.g. a later discount on their invoice); `commissionsEarned`: referral commissions that became owed in it (net of reversals and adjustments); `salaryPayments` / `commissionPayouts`: valid payments dated in it (the same money as the expenses' `salaryPayments` / `commissionPayouts`); `advancesChange` = `closing.advances − opening.advances` (paying ahead of earnings does not lower what is owed).
 
 Corrections are retroactive, like everywhere else: a voided payment, refund, salary payment or payout never counted, and an undone visit never earned a commission.
 
@@ -952,10 +1000,11 @@ Which rows count, everywhere:
 | `expenses` | Sum of valid expenses (referral payouts included: each is an expense) |
 | `commissionPayouts` | The part of `expenses` paid to referring doctors (never subtracted again) |
 | `salaryPayments` | The part of `expenses` paid as salaries to the clinic's doctors (never subtracted again) |
+| `employeeSalaryPayments` | The part of `expenses` paid as salaries to the clinic's employees (never subtracted again) |
 | `netAfterExpenses` | `netCollected − expenses` |
 | `invoiced` | Sum of `total` (after discounts) of the invoices issued in the range |
 | `patientsOwe` | What patients still owed at the **end of `to`**, on every invoice issued by then (see `outstanding`; = the daily summary of `to`) |
-| `clinicOwes` | What the clinic owed its doctors at the **end of `to`** (`owed`, advances apart; = the daily summary of `to`) |
+| `clinicOwes` | What the clinic owed its doctors and employees at the **end of `to`** (`owed`, advances apart; = the daily summary of `to`) |
 | `discountsGiven` | Sum of the discount amounts |
 | `attendedVisits` | Visits, walk-ins included |
 | `noShows` / `cancellations` | Appointments now in NO_SHOW / CANCELLED |
@@ -977,15 +1026,15 @@ Which rows count, everywhere:
 - `byUser`: `{ user, count, amount }`, largest amount first.
 - `byReason`: the top 10 reasons, `{ reason, count, amount }`, most used first. Case and surrounding spaces are ignored ("Student" = " student ").
 
-**`GET /reports/expenses`** returns `count`, `total`, `commissionPayouts` (the part of `total` paid to referring doctors), `salaryPayments` (the part paid as doctor salaries), `byCategory` (`{ category, count, total }`, largest first; the payouts are the referral-commission category's row) and `byMethod` (all four methods).
+**`GET /reports/expenses`** returns `count`, `total`, `commissionPayouts` (the part of `total` paid to referring doctors), `salaryPayments` (the part paid as doctor salaries), `employeeSalaryPayments` (the part paid as employee salaries), `byCategory` (`{ category, count, total }`, largest first; the payouts are the referral-commission category's row) and `byMethod` (all four methods).
 
 **`GET /reports/money-flow`** returns `{ from, to, patientsOwe, clinicOwes }`: owed at the start of `from`, each movement, owed at the end of `to` (the formulas in `outstanding`). A one-day range is exactly that day's daily summary `outstanding`.
 
-**`GET /reports/transactions?kind=PAYMENT|REFUND|EXPENSE&page=&limit=`** lists every row that counts in the range, newest first (local date, then the time it was recorded): valid payments and refunds by `received_at`, valid expenses by `expense_date`. Each row has `kind`, `number` (receipt or expense number), `date`, `recordedAt`, `method`, `amount` (always positive), the `patient` and `invoice` (payments, refunds; `reason` for a refund) or the `category`, `description`, `payee` and `expenseOrigin` (`MANUAL`, `DOCTOR_SALARY`, `REFERRAL_PAYOUT`) of an expense, and `recordedBy`. `totals` cover the whole range whatever `kind`: `payments`, `refunds`, `expenses`, `salaryPayments`, `commissionPayouts` (`{ count, total }`) and `net` (= the summary's `netAfterExpenses`).
+**`GET /reports/transactions?kind=PAYMENT|REFUND|EXPENSE&page=&limit=`** lists every row that counts in the range, newest first (local date, then the time it was recorded): valid payments and refunds by `received_at`, valid expenses by `expense_date`. Each row has `kind`, `number` (receipt or expense number), `date`, `recordedAt`, `method`, `amount` (always positive), the `patient` and `invoice` (payments, refunds; `reason` for a refund) or the `category`, `description`, `payee` and `expenseOrigin` (`MANUAL`, `DOCTOR_SALARY`, `EMPLOYEE_SALARY`, `REFERRAL_PAYOUT`) of an expense, and `recordedBy`. `totals` cover the whole range whatever `kind`: `payments`, `refunds`, `expenses`, `salaryPayments`, `employeeSalaryPayments`, `commissionPayouts` (`{ count, total }`) and `net` (= the summary's `netAfterExpenses`).
 
 **`GET /reports/patients-owe?asOf=&page=&limit=`** lists patients with a balance at the end of `asOf`, largest first: `{ patient: { id, name, phone }, balance, oldestUnpaidInvoiceDate, invoices }`, each invoice `{ id, invoiceNumber, issuedAt, total, paid, balance }` as of then (paid = valid payments − refunds received by then). Next to `items` and `meta`: `asOf`, `totalBalance` (= the daily summary's `patientsOwe.closing`) and `unpaidInvoices`.
 
-**`GET /reports/clinic-owes?asOf=`** returns what the clinic owed at the end of `asOf`: `owed`, `advances`, `doctorSalaries { owed, advances, rows }` (each doctor-month with a balance: `fixedSalary` and `fixedDue`, `sessionCount`, `commissions`, `earned`, `paid`, `balance`; once the month has ended it equals the salary statement's `remaining`) and `referralCommissions { owed, advances, pending, rows }` (each referring doctor with a balance or pending commission: `earned`, `paid`, `balance`, `pending`).
+**`GET /reports/clinic-owes?asOf=`** returns what the clinic owed at the end of `asOf`: `owed`, `advances`, `doctorSalaries { owed, advances, rows }` (each doctor-month with a balance: `fixedSalary` and `fixedDue`, `sessionCount`, `commissions`, `earned`, `paid`, `balance`; once the month has ended it equals the salary statement's `remaining`), `employeeSalaries { owed, advances, rows }` (each employee-month with a balance: `fixedSalary`, `fixedDue`, `paid`, `balance`) and `referralCommissions { owed, advances, pending, rows }` (each referring doctor with a balance or pending commission: `earned`, `paid`, `balance`, `pending`).
 
 **`GET /reports/acquisition?from=&to=&channel=`**: patients **created** in the range by their **primary** source (`patients`), every source they named (`mentions`), and of them how many attended a visit and paid (net of refunds), with the money collected from them so far; `newPatients`, `withoutSource`, `categories` and `byMonth` (clinic local month × primary channel, `null` = no source).
 
@@ -1003,7 +1052,7 @@ src/
   common/      decorators, guards, filters, pipes, dto, errors, utils (money, phone...), time (clinic time zone), storage, base entity, enums
   config/      env validation (Joi), logger config
   database/    data-source.ts (TypeORM CLI), typeorm.options.ts, migrations/, seeds/, storage-orphans.ts, wait-for-db.ts (Docker start-up)
-  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, visits, billing, expenses, clinical, patient-history, outstanding, reports, packages, acquisition, referrals, salaries, blog, health
+  modules/     auth, users, audit, patients, doctors, clinic-services, schedules, appointments, visits, billing, expenses, clinical, patient-history, outstanding, reports, packages, acquisition, referrals, salaries, blog, client-reviews, health
 test/          e2e suites + global setup (test DB reset + migrations) + helpers
 ```
 
